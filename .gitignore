@@ -1,6 +1,9 @@
 .atl
+.env
 output/*
-scripts/__pycache__
+__pycache__/
 .download_transcript.pid
+.uvicorn.pid
+.uvicorn.log
 .idea
 .tmp

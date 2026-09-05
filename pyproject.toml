@@ -3,5 +3,25 @@ name = "technical-meeting-rag"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.110",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    "structlog>=24.0",
+    "uvicorn[standard]>=0.27",
     "yt-dlp>=2026.8.19",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.12.0",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # starlette 1.6.0 (latest available) still type-hints its TestClient with
+    # anyio.abc.BlockingPortal internally; anyio flags that alias as deprecated
+    # on import even though we never reference it ourselves. No newer starlette
+    # fixes this yet — safe to silence until it does.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead:DeprecationWarning",
 ]
