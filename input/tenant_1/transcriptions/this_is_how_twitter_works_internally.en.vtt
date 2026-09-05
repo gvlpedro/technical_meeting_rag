@@ -1,0 +1,1204 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:07.200 align:start position:19%
+So, Elon Musk recently posted that X
+algorithm is now public. It's updated on
+
+00:00:04.760 --> 00:00:10.600 align:start position:19%
+GitHub and there is a lot to break down
+into how this algorithm works and I
+
+00:00:09.080 --> 00:00:14.760 align:start position:19%
+spent a lot of time in order to
+understand what I wanted to show to you
+
+00:00:13.080 --> 00:00:18.880 align:start position:19%
+in this video. All right, so over here
+you can see this tweet which is very
+
+00:00:16.360 --> 00:00:21.880 align:start position:19%
+recent announces that this X algorithm
+is now public and if you open this
+
+00:00:20.640 --> 00:00:26.280 align:start position:19%
+GitHub repository, you're going to see a
+bunch of things including things like
+
+00:00:23.920 --> 00:00:30.480 align:start position:19%
+thunder, phoenix. So, these are all
+parts of the algorithm for X which is
+
+00:00:28.600 --> 00:00:33.560 align:start position:19%
+the social media platform. And you can
+basically look inside this in order to
+
+00:00:32.279 --> 00:00:38.440 align:start position:19%
+understand how the posts are
+recommended, what sort of attributes or
+
+00:00:36.160 --> 00:00:41.760 align:start position:19%
+information is given to the model which
+recommends the post and there are a
+
+00:00:40.240 --> 00:00:45.200 align:start position:19%
+couple of things which are actually not
+covered in this algorithm which I will
+
+00:00:43.720 --> 00:00:49.680 align:start position:19%
+cover about as well. So, I'm going to
+start with basics over here, things that
+
+00:00:47.480 --> 00:00:53.480 align:start position:19%
+I have understood looking at the code
+and talking to large language models and
+
+00:00:51.760 --> 00:00:57.800 align:start position:19%
+seeing like what's going on. I want to
+give you a journey of a post on X.
+
+00:00:56.200 --> 00:01:02.000 align:start position:19%
+Specifically, take a look at this post
+from yesterday which has about a million
+
+00:01:00.080 --> 00:01:05.760 align:start position:19%
+views and about 7,000 likes, right? So,
+it we can say that it falls in the
+
+00:01:03.680 --> 00:01:10.280 align:start position:19%
+category of post going viral. So, I'm
+going to walk you through how a post
+
+00:01:07.520 --> 00:01:13.920 align:start position:19%
+like this works step-by-step based on
+the algorithm information that we have
+
+00:01:12.120 --> 00:01:17.280 align:start position:19%
+from open-source algorithm today. Now,
+first of all, first things first, what
+
+00:01:15.440 --> 00:01:22.880 align:start position:19%
+you have to understand is that the whole
+algorithm works fundamentally on certain
+
+00:01:20.160 --> 00:01:26.880 align:start position:19%
+things like triggers or actions, right?
+So, a lot of these things that you see
+
+00:01:25.080 --> 00:01:30.800 align:start position:19%
+are actions over here. For example, this
+comment box that you see doing a reply
+
+00:01:29.240 --> 00:01:34.280 align:start position:19%
+is an action. You know, doing this
+retweet is an action or a quote tweet.
+
+00:01:32.640 --> 00:01:38.480 align:start position:19%
+Liking a post or marking this as
+favorite, how they use it internally, is
+
+00:01:36.280 --> 00:01:42.600 align:start position:19%
+an action. Bookmarking it is one,
+sharing is one and even some of these
+
+00:01:41.000 --> 00:01:46.120 align:start position:19%
+actions which are not really visible to
+you. When you click on this these three
+
+00:01:44.160 --> 00:01:50.240 align:start position:19%
+dots, you will see that there are things
+like not interested or, you know, just
+
+00:01:48.200 --> 00:01:54.160 align:start position:19%
+muting the user or blocking the user.
+All of these are also actions. So, some
+
+00:01:52.240 --> 00:01:57.320 align:start position:19%
+of them, like these ones, are generally
+positive actions because if you're
+
+00:01:55.560 --> 00:02:00.840 align:start position:19%
+liking or bookmarking, that denotes
+that, you know this is like an important
+
+00:01:59.080 --> 00:02:04.840 align:start position:19%
+post or something that you like and
+these one obviously are negative actions
+
+00:02:02.960 --> 00:02:08.320 align:start position:19%
+if you are suggesting you know that this
+is not a good post or you know not
+
+00:02:06.440 --> 00:02:12.959 align:start position:19%
+interested in this category of post. So
+the algorithm mostly operates on these
+
+00:02:10.399 --> 00:02:16.600 align:start position:19%
+triggers and actions which you as an end
+user take on a post. So let me explain
+
+00:02:15.320 --> 00:02:20.959 align:start position:19%
+you what is the journey of a post,
+right? So let's say this is a post,
+
+00:02:18.640 --> 00:02:25.600 align:start position:19%
+let's say XYZ 1 2 3, whatever you posted
+on Twitter. This is a post that you hit
+
+00:02:23.200 --> 00:02:29.520 align:start position:19%
+and you hit this post button over here.
+Now the moment you post this, the moment
+
+00:02:27.600 --> 00:02:34.160 align:start position:19%
+you hit post over here, this is
+delivered to a Kafka queue which is
+
+00:02:31.720 --> 00:02:37.760 align:start position:19%
+ingested by a component that they call
+as Thunder, right? And all of this is in
+
+00:02:36.240 --> 00:02:41.840 align:start position:19%
+their algorithm. Now I'm going to skip a
+lot of details so that it makes sense to
+
+00:02:39.720 --> 00:02:46.959 align:start position:19%
+you without getting too mathematical or
+technical, but what happens here is that
+
+00:02:44.320 --> 00:02:50.600 align:start position:19%
+Thunder is one system inside X and then
+there is a second system called as
+
+00:02:48.360 --> 00:02:55.000 align:start position:19%
+Phoenix. And this is not the framework
+that we know of Elixir, this is actually
+
+00:02:52.360 --> 00:03:01.440 align:start position:19%
+a system that is named like Phoenix
+inside X. Thunder is a system that is
+
+00:02:57.720 --> 00:03:06.000 align:start position:19%
+responsible for doing in network
+suggestions or work rather I should say.
+
+00:03:04.040 --> 00:03:09.760 align:start position:19%
+What this means is that for example,
+let's say you are following a bunch of
+
+00:03:07.440 --> 00:03:13.400 align:start position:19%
+people, right? So over here you are here
+and you are following let's say this
+
+00:03:11.360 --> 00:03:18.040 align:start position:19%
+person A and you're following this
+person B, right? So let's say if person
+
+00:03:15.519 --> 00:03:22.200 align:start position:19%
+A like me for example made this tweet
+and you're following me, then Thunder
+
+00:03:20.239 --> 00:03:28.000 align:start position:19%
+would be the system that would deliver
+this tweet on your timeline, right?
+
+00:03:24.560 --> 00:03:32.320 align:start position:19%
+Phoenix is a system that works. This is
+in network and this one is out of
+
+00:03:30.600 --> 00:03:36.720 align:start position:19%
+network. So what this means is that if
+you saw this tweet over here yesterday
+
+00:03:34.400 --> 00:03:40.560 align:start position:19%
+and you are not following me on X, then
+this tweet was delivered to you via the
+
+00:03:38.760 --> 00:03:45.680 align:start position:19%
+Phoenix network, not via the Thunder
+network. Now generally speaking a post
+
+00:03:42.720 --> 00:03:49.360 align:start position:19%
+which is as viral as this would not be
+viral only on the basis of Thunder
+
+00:03:47.440 --> 00:03:53.720 align:start position:19%
+network, right? Because obviously like
+most people on X don't have followers in
+
+00:03:51.440 --> 00:03:57.400 align:start position:19%
+millions. So, you cannot feasibly get
+close to million impressions based on
+
+00:03:55.680 --> 00:04:01.360 align:start position:19%
+just your follower network until and
+unless you are somebody like a celebrity
+
+00:03:59.480 --> 00:04:05.160 align:start position:19%
+or Elon Musk or somebody who has
+hundreds, tens of millions of followers
+
+00:04:03.160 --> 00:04:09.400 align:start position:19%
+like a prime minister of a country or
+anyone who has big following. This is
+
+00:04:07.280 --> 00:04:13.880 align:start position:19%
+going to be limited for you. That means
+this is the network that is responsible
+
+00:04:11.480 --> 00:04:17.720 align:start position:19%
+to convert any post into a viral post.
+Now, see the core idea is that all of
+
+00:04:15.680 --> 00:04:21.560 align:start position:19%
+this process is mathematical and
+mechanical, right? There is no human
+
+00:04:19.440 --> 00:04:25.800 align:start position:19%
+involved as such. So, this has to be all
+math and ML and you know, recommendation
+
+00:04:24.000 --> 00:04:29.919 align:start position:19%
+and so on and so forth. Thunder is a
+simple system. The people you follow
+
+00:04:28.280 --> 00:04:34.080 align:start position:19%
+would have a bunch of these posts
+visible to you on their timeline and
+
+00:04:31.840 --> 00:04:37.440 align:start position:19%
+Phoenix is a ML system which is like
+machine learning where it's going to
+
+00:04:35.520 --> 00:04:41.800 align:start position:19%
+recommend people outside of your network
+as well. Now, let's take a look at how
+
+00:04:39.080 --> 00:04:46.120 align:start position:19%
+this happens and what is not exactly
+open source in X algorithm which is
+
+00:04:44.360 --> 00:04:50.440 align:start position:19%
+released on GitHub. So, going back to
+this part where you posted it, it lands
+
+00:04:48.600 --> 00:04:54.320 align:start position:19%
+into a Kafka queue which is then
+ingested by this Thunder network. What's
+
+00:04:52.360 --> 00:04:58.280 align:start position:19%
+going to happen is that this tweet that
+you have would be converted into a
+
+00:04:56.440 --> 00:05:01.280 align:start position:19%
+128-dimension
+vector. Because again, we have to work
+
+00:04:59.960 --> 00:05:05.200 align:start position:19%
+with numbers. We can't work with
+strings. Computer don't make a lot of
+
+00:05:03.000 --> 00:05:10.360 align:start position:19%
+sense working with strings. And this is
+also responsible for delivering this to
+
+00:05:07.280 --> 00:05:14.200 align:start position:19%
+the feeds of your followers. Feeds of
+followers, right? So, anybody who is
+
+00:05:12.280 --> 00:05:17.320 align:start position:19%
+following me would have seen these posts
+for the first time. That is why you
+
+00:05:16.000 --> 00:05:21.640 align:start position:19%
+would have seen that it's basically
+impossible for you to get like instant
+
+00:05:19.919 --> 00:05:26.320 align:start position:19%
+likes on a post that you have made from
+people who are not following you because
+
+00:05:23.360 --> 00:05:30.040 align:start position:19%
+X algorithm does not show your new post
+to people who are not following you
+
+00:05:28.000 --> 00:05:34.040 align:start position:19%
+because Phoenix is not activated right
+away. What happens is that inside these
+
+00:05:32.000 --> 00:05:37.720 align:start position:19%
+feeds of followers that you have, one of
+your post would appear over here, right?
+
+00:05:35.960 --> 00:05:42.480 align:start position:19%
+Let's say this X post that I just posted
+about. Now, as people are liking, you
+
+00:05:40.480 --> 00:05:47.080 align:start position:19%
+know, retweeting it or you know, just
+doing a bunch of more activities, these
+
+00:05:44.720 --> 00:05:50.040 align:start position:19%
+actions are monitored by the algorithm,
+right? So, it's sort of in an explore
+
+00:05:48.520 --> 00:05:53.800 align:start position:19%
+mode. It's giving it to the followers
+that I have and it's exploring like what
+
+00:05:51.840 --> 00:05:58.360 align:start position:19%
+kind of actions are these people taking
+in the first place. And based on these
+
+00:05:56.200 --> 00:06:03.880 align:start position:19%
+interactions that they are making, this
+vector over here, which is generated for
+
+00:06:00.560 --> 00:06:09.160 align:start position:19%
+my post, is updating in real time. This
+vector over here, which is a combination
+
+00:06:06.080 --> 00:06:12.440 align:start position:19%
+of post ID and user ID over here,
+plus all the input that we are getting
+
+00:06:10.960 --> 00:06:16.160 align:start position:19%
+from the engagement. And this could be
+anything like it could be like, you
+
+00:06:14.360 --> 00:06:18.640 align:start position:19%
+know, people recommending, not
+recommending this post that I'm not
+
+00:06:17.440 --> 00:06:22.840 align:start position:19%
+interested in this, people maybe
+blocking me over this post after seeing
+
+00:06:20.600 --> 00:06:27.560 align:start position:19%
+that. So, all the positive and negative
+engagements that are happening that we
+
+00:06:24.240 --> 00:06:32.120 align:start position:19%
+discussed earlier, they would affect the
+embedding vector for this specific post.
+
+00:06:30.400 --> 00:06:35.720 align:start position:19%
+Now, what happens parallelly is that
+this Phoenix network also gets
+
+00:06:33.760 --> 00:06:40.800 align:start position:19%
+activated. Right? So, this network over
+here, what its job is is slightly more
+
+00:06:39.160 --> 00:06:43.880 align:start position:19%
+complex than just delivering to
+followers, right? So, it's supposed to
+
+00:06:42.320 --> 00:06:47.880 align:start position:19%
+do a bunch of things. First thing it's
+supposed to do is that it's supposed to
+
+00:06:45.680 --> 00:06:52.880 align:start position:19%
+create something we call as a candidate
+pool. Now, this candidate pool is
+
+00:06:49.919 --> 00:06:57.640 align:start position:19%
+basically a list of potential posts that
+can come into a user's feed. Again,
+
+00:06:55.520 --> 00:07:02.720 align:start position:19%
+iterating back to the fact that I
+created a post, posted it, it went to
+
+00:06:59.960 --> 00:07:06.040 align:start position:19%
+Thunder system over here, and then
+instead of let's say feed a follower,
+
+00:07:04.040 --> 00:07:11.440 align:start position:19%
+this is one follower that I had, right?
+So, this one follower opened the app in
+
+00:07:09.120 --> 00:07:14.680 align:start position:19%
+like 1 minutes of time. So, it opened
+the app after a minute. This Thunder
+
+00:07:12.919 --> 00:07:18.560 align:start position:19%
+network delivered this post that I just
+made to this follower, and this follower
+
+00:07:16.680 --> 00:07:23.720 align:start position:19%
+liked it, commented on it, whatever like
+he loved the post, right? That feed that
+
+00:07:21.360 --> 00:07:27.919 align:start position:19%
+net that feedback is taken back into the
+network, and this vector gets updated.
+
+00:07:25.960 --> 00:07:31.480 align:start position:19%
+At the same time, let's say a bunch of
+more followers came into play, and they
+
+00:07:29.680 --> 00:07:34.760 align:start position:19%
+are also interacted interacting with my
+post using the Thunder system that is
+
+00:07:33.360 --> 00:07:38.160 align:start position:19%
+there, right? Now, let's say this is
+going on, and you know, it has been
+
+00:07:36.080 --> 00:07:42.080 align:start position:19%
+going on for let's say 5, 10 minutes, or
+whatever. After a few minutes of time,
+
+00:07:40.560 --> 00:07:45.960 align:start position:19%
+what's going to happen is that Phoenix
+is also going to come into picture. It's
+
+00:07:44.080 --> 00:07:50.360 align:start position:19%
+going to create a candidate pool. Now,
+what's a candidate pool? It's basically
+
+00:07:48.080 --> 00:07:56.680 align:start position:19%
+a list of potential posts that can be
+viewed by me. Now, the core idea here is
+
+00:07:53.160 --> 00:08:01.160 align:start position:19%
+that every user on X has a specific user
+ID, which makes them part of a specific
+
+00:07:58.920 --> 00:08:04.720 align:start position:19%
+cohort, right? So, this it's like an
+internal detail, but they use as one of
+
+00:08:03.080 --> 00:08:08.880 align:start position:19%
+the first inputs that that they use in
+Phoenix is two numbers N and M, which
+
+00:08:06.880 --> 00:08:12.760 align:start position:19%
+are part of like big table, right? So,
+these are like hashes. So, this is one
+
+00:08:10.720 --> 00:08:19.120 align:start position:19%
+of the first input in the in the Phoenix
+algorithm. The second input is your last
+
+00:08:15.360 --> 00:08:22.960 align:start position:19%
+127 actions on platform, right? And this
+point over here, this is what makes
+
+00:08:20.880 --> 00:08:27.440 align:start position:19%
+personalization possible. So, whenever,
+let's say this person came on the feed,
+
+00:08:24.760 --> 00:08:31.160 align:start position:19%
+right? They are, you know, just they
+just opened X app. What's going to
+
+00:08:29.280 --> 00:08:34.280 align:start position:19%
+happen is by the time that loader is
+coming on the screen, right? When when
+
+00:08:33.080 --> 00:08:37.360 align:start position:19%
+it shows you like it's loading
+something, what's going to happen is
+
+00:08:35.640 --> 00:08:40.440 align:start position:19%
+that it's going to make a back-end call
+to the algorithm, to the recommendation
+
+00:08:38.919 --> 00:08:45.000 align:start position:19%
+algorithm. It's going to take in that
+user ID, which is waiting for post. It's
+
+00:08:42.159 --> 00:08:48.560 align:start position:19%
+going to take their last 127 actions on
+the platform, and they're going to run
+
+00:08:46.520 --> 00:08:51.960 align:start position:19%
+this through this AI model, this
+artificial intelligence model. This is
+
+00:08:50.160 --> 00:08:56.360 align:start position:19%
+not a large language model, by the way.
+This is just a machine learning model,
+
+00:08:53.880 --> 00:09:00.880 align:start position:19%
+whose sole job is to create, like one of
+the jobs is to create this candidate
+
+00:08:58.000 --> 00:09:05.200 align:start position:19%
+pool of about 200 posts over here,
+right? Now, the way this candidate pool
+
+00:09:02.560 --> 00:09:09.480 align:start position:19%
+is created is with dot product, because
+remember that we have the post ID, user
+
+00:09:07.240 --> 00:09:13.160 align:start position:19%
+ID vectors over here, right? So, we have
+these vectors of posts that are there,
+
+00:09:11.520 --> 00:09:16.640 align:start position:19%
+and based on the interaction and the
+stuff that is happening with every
+
+00:09:14.440 --> 00:09:21.640 align:start position:19%
+single post, you are able to create a
+bunch of 200 posts which are similar to
+
+00:09:19.320 --> 00:09:26.480 align:start position:19%
+things that I like. This This metric
+over here gives a rough idea of who I am
+
+00:09:24.560 --> 00:09:30.600 align:start position:19%
+and which cohort I belong to. This is
+also like something which does not
+
+00:09:28.000 --> 00:09:34.080 align:start position:19%
+personalize properly, because this is,
+um, you know, you can say that this is
+
+00:09:32.320 --> 00:09:37.880 align:start position:19%
+basically, in a way, just to give you an
+idea, let's say you have user ID number
+
+00:09:35.839 --> 00:09:42.320 align:start position:19%
+1,000, right? What's going to happen is
+that X is going to create or give you
+
+00:09:39.800 --> 00:09:46.560 align:start position:19%
+two numbers between zero to 1 million,
+right? So, these would be two numbers
+
+00:09:43.840 --> 00:09:49.960 align:start position:19%
+over here. And these two numbers are
+deterministic. These are static for you
+
+00:09:48.520 --> 00:09:53.680 align:start position:19%
+when you create it. And this is
+basically this collection of two numbers
+
+00:09:51.680 --> 00:09:57.400 align:start position:19%
+is a cohort, which is like a broader
+thing for you. So, for every For
+
+00:09:55.280 --> 00:10:01.120 align:start position:19%
+example, like whenever a new member
+joins the platform, they already are
+
+00:09:59.400 --> 00:10:05.520 align:start position:19%
+part of one of the cohorts which has
+been trained and retrained and you know,
+
+00:10:03.560 --> 00:10:10.080 align:start position:19%
+just influenced by other people on the
+platform. Their 127 history action is
+
+00:10:08.240 --> 00:10:13.000 align:start position:19%
+empty, so their personalization would be
+weak. And that is why like, you know,
+
+00:10:11.520 --> 00:10:16.480 align:start position:19%
+you don't get personalized post if you
+are just signed up. But this part over
+
+00:10:15.040 --> 00:10:19.640 align:start position:19%
+here, this makes it possible to
+personalize your actions because, you
+
+00:10:18.200 --> 00:10:24.000 align:start position:19%
+know, these actions, for example, what
+you have liked, what you have
+
+00:10:21.560 --> 00:10:28.360 align:start position:19%
+bookmarked, what you have retweeted, and
+so on and so forth. So, 127
+
+00:10:26.720 --> 00:10:32.520 align:start position:19%
+recent actions that you have done on the
+platform are fed into this algorithm.
+
+00:10:30.600 --> 00:10:36.440 align:start position:19%
+And based on this algorithm and the
+overall posts that are existing on the X
+
+00:10:34.760 --> 00:10:40.800 align:start position:19%
+network, it's going to give you a
+candidate pool of post to pick from.
+
+00:10:38.960 --> 00:10:45.040 align:start position:19%
+Now, this includes a bunch of interests
+of people. This includes, you know, what
+
+00:10:42.839 --> 00:10:49.560 align:start position:19%
+they have done recently on the platform.
+This is basically a list of personalized
+
+00:10:46.800 --> 00:10:54.120 align:start position:19%
+post. And what we don't have inside the
+open-source algorithm is this box over
+
+00:10:52.360 --> 00:10:58.080 align:start position:19%
+here. So, you see that this box over
+here, this algorithm, this machine
+
+00:10:55.839 --> 00:11:02.760 align:start position:19%
+learning algorithm is a black box for us
+because this has been trained somehow,
+
+00:11:00.360 --> 00:11:06.160 align:start position:19%
+right? This is same for every user. It's
+not like you're going to get a different
+
+00:11:04.320 --> 00:11:10.480 align:start position:19%
+machine learning algorithm per user.
+It's the same algorithm for every single
+
+00:11:08.200 --> 00:11:14.520 align:start position:19%
+user on X. The only thing differs are
+the inputs to this algorithm, which is
+
+00:11:12.440 --> 00:11:18.800 align:start position:19%
+like your activity on the platform and
+your static constant user ID mapping in
+
+00:11:17.080 --> 00:11:23.120 align:start position:19%
+a huge table. Now, because this is a
+black box, you cannot really predict
+
+00:11:21.000 --> 00:11:26.640 align:start position:19%
+what's going on here because this is
+like, you know, just like with large
+
+00:11:24.520 --> 00:11:30.920 align:start position:19%
+language models, we have, um, you know,
+these are effectively black boxes. If
+
+00:11:28.480 --> 00:11:35.000 align:start position:19%
+you look at any open-weight model, you
+can't really tell if they are trained on
+
+00:11:33.200 --> 00:11:38.240 align:start position:19%
+proprietary data or not until and
+unless, you know, they are just spitting
+
+00:11:36.160 --> 00:11:42.240 align:start position:19%
+out some proprietary data directly. It's
+basically impossible to just inspect
+
+00:11:40.080 --> 00:11:45.880 align:start position:19%
+their weights, which are just numbers,
+right? These are like random numbers
+
+00:11:44.360 --> 00:11:49.280 align:start position:19%
+over here, which are the weights that
+you basically download. So, the same
+
+00:11:47.520 --> 00:11:53.200 align:start position:19%
+thing exists here that this thing over
+here is a bunch of collection of
+
+00:11:51.240 --> 00:11:56.520 align:start position:19%
+weights, which is a black box because we
+don't know how it has been trained in
+
+00:11:54.640 --> 00:12:00.360 align:start position:19%
+the first place and what these weights
+are even in the first place because all
+
+00:11:58.560 --> 00:12:03.360 align:start position:19%
+we have is just the code like the open
+source code, right? Not even the weights
+
+00:12:01.880 --> 00:12:07.440 align:start position:19%
+in this case. So, we don't have the
+machine learning algorithm to mimic like
+
+00:12:05.480 --> 00:12:11.760 align:start position:19%
+what's going to happen. And then it just
+creates like a bunch of these candidate
+
+00:12:09.320 --> 00:12:16.120 align:start position:19%
+polls candidate pool, which has a bunch
+of these posts. And now these posts, for
+
+00:12:14.400 --> 00:12:20.160 align:start position:19%
+example, this one that I the post that I
+created over here yesterday, this could
+
+00:12:18.200 --> 00:12:23.560 align:start position:19%
+be part of this one of the 200 posts
+which has which is there. And the more
+
+00:12:21.720 --> 00:12:27.640 align:start position:19%
+people, for example, these set of people
+also interacted with it, right? So, the
+
+00:12:25.440 --> 00:12:31.600 align:start position:19%
+algorithm effectively got it right that
+it knows that it served the right user
+
+00:12:29.680 --> 00:12:36.320 align:start position:19%
+the right post. What's going to happen
+is that the more this positive feedback
+
+00:12:33.640 --> 00:12:39.720 align:start position:19%
+loop gets created, the sharper this
+vector embedding becomes for that
+
+00:12:38.040 --> 00:12:43.600 align:start position:19%
+specific cohort. So, it's going to show
+it to more and more people in that
+
+00:12:41.600 --> 00:12:46.560 align:start position:19%
+specific cohort and that is how posts
+take off. That is how, you know, you end
+
+00:12:45.000 --> 00:12:50.240 align:start position:19%
+up with almost a million views on a
+single post, which is less than 1 day
+
+00:12:48.520 --> 00:12:54.080 align:start position:19%
+old. Now, of course, this is not the
+full picture. I've just given you a very
+
+00:12:51.880 --> 00:12:58.040 align:start position:19%
+small window into like how posts and
+how, you know, a single post reaches
+
+00:12:55.880 --> 00:13:02.520 align:start position:19%
+your timeline. What happens is that once
+these 200 posts are created and once the
+
+00:13:00.200 --> 00:13:06.720 align:start position:19%
+Thunder Network are also there, all of
+them are combined together because you
+
+00:13:04.280 --> 00:13:09.600 align:start position:19%
+see that inside the For You tab, which
+is there on Twitter, this is by the way
+
+00:13:08.240 --> 00:13:15.320 align:start position:19%
+this algorithm that I just told you
+about, this is only for the For You tab,
+
+00:13:11.480 --> 00:13:19.280 align:start position:19%
+right? This place over here is a mix of
+followers post plus, you know, broader
+
+00:13:17.880 --> 00:13:22.600 align:start position:19%
+network, which is the which is the
+outside network. So, the posts
+
+00:13:20.720 --> 00:13:26.320 align:start position:19%
+recommended by your machine learning
+candidate pool over here and the post
+
+00:13:24.680 --> 00:13:30.600 align:start position:19%
+over here, which are recommended by
+Thunder, are combined and then they are
+
+00:13:28.440 --> 00:13:33.920 align:start position:19%
+sorted again for relevance. You know,
+and then and only then then they are
+
+00:13:32.320 --> 00:13:38.480 align:start position:19%
+delivered to your timeline over here.
+Now, see, inherently, it's not possible
+
+00:13:36.000 --> 00:13:42.080 align:start position:19%
+to generate a recipe for, you know, a
+post virality. So, it's not like you
+
+00:13:40.480 --> 00:13:45.240 align:start position:19%
+include a bunch of keywords and then
+it'll become viral because you if you
+
+00:13:43.600 --> 00:13:49.520 align:start position:19%
+look at this carefully, you're going to
+see that none of these networks are
+
+00:13:47.520 --> 00:13:53.360 align:start position:19%
+actually prioritizing your content only
+on the basis of what the content is in
+
+00:13:51.760 --> 00:13:57.440 align:start position:19%
+the first place. I'm not saying that
+this vector over here, this post vector
+
+00:13:55.280 --> 00:14:00.560 align:start position:19%
+is of itself, so it's doing a dot
+product to figure out like if this is
+
+00:13:58.920 --> 00:14:05.440 align:start position:19%
+the right thing or not. What they are
+prioritizing more is on the interactions
+
+00:14:03.000 --> 00:14:09.480 align:start position:19%
+done by a specific cohort of people,
+right? So, if people who like a lot of,
+
+00:14:07.880 --> 00:14:14.000 align:start position:19%
+you know, in this case in this post if
+people who like a lot of bun and, you
+
+00:14:11.480 --> 00:14:17.960 align:start position:19%
+know, maybe like rust, for example, as a
+keyword and, you know, million line
+
+00:14:15.880 --> 00:14:23.800 align:start position:19%
+change PR, these sort of things, they
+would automatically have these candidate
+
+00:14:20.840 --> 00:14:28.200 align:start position:19%
+pools generated which includes topics of
+those sorts, right? And if X saw I'm
+
+00:14:26.400 --> 00:14:31.600 align:start position:19%
+going to recommend this to a few people
+inside this post just to see like what's
+
+00:14:29.839 --> 00:14:35.440 align:start position:19%
+going on and all of them or at least
+most of them are responding positively,
+
+00:14:33.520 --> 00:14:38.680 align:start position:19%
+then the platform puts it into exploit
+mode, right? Which is where it'll try to
+
+00:14:36.960 --> 00:14:42.040 align:start position:19%
+expand your audience and it'll try to
+show that post to more and more people.
+
+00:14:40.480 --> 00:14:46.480 align:start position:19%
+And because this is fundamentally built
+on how people react to your post, there
+
+00:14:44.320 --> 00:14:50.080 align:start position:19%
+is no way to actually like engineer
+virality until and unless, of course,
+
+00:14:48.480 --> 00:14:53.160 align:start position:19%
+you don't have a lot of followers in the
+first place, right? So, if you have a
+
+00:14:51.640 --> 00:14:56.880 align:start position:19%
+lot of followers like I have I don't
+have a lot of followers. I have around
+
+00:14:54.560 --> 00:15:00.440 align:start position:19%
+28, 30,000 followers. But if you have
+somebody has like 1 million plus
+
+00:14:58.440 --> 00:15:04.880 align:start position:19%
+followers and if they write something
+interesting, then the chances of them
+
+00:15:02.760 --> 00:15:08.800 align:start position:19%
+going viral are far higher because the
+Thunder system that exists in the first
+
+00:15:06.680 --> 00:15:13.920 align:start position:19%
+place, it's an in-network system that
+avoids all this um things, right? Of ML
+
+00:15:12.000 --> 00:15:18.200 align:start position:19%
+and dot products and so on and so forth.
+It's an easy way to give some of these
+
+00:15:16.240 --> 00:15:22.280 align:start position:19%
+posts some visibility in the first
+candidate pool that is created, right?
+
+00:15:20.320 --> 00:15:26.800 align:start position:19%
+Because Thunder network also has
+priority in this. People who you follow
+
+00:15:24.560 --> 00:15:30.960 align:start position:19%
+have priority in this. In fact, Twitter
+has a dedicated following tab in the
+
+00:15:28.880 --> 00:15:34.080 align:start position:19%
+first place, right? So, if not for you,
+people will always discover you with
+
+00:15:32.600 --> 00:15:38.600 align:start position:19%
+following tab if they are on that. So,
+yeah, that is sort of like a mini look
+
+00:15:35.960 --> 00:15:42.880 align:start position:19%
+inside X algorithm. It obviously gets a
+lot more complex than what I have
+
+00:15:40.240 --> 00:15:46.800 align:start position:19%
+explained, but this more or less is the
+foundation of how they are making all of
+
+00:15:44.960 --> 00:15:50.680 align:start position:19%
+this work. The core idea of the
+algorithm itself, like how does it
+
+00:15:48.520 --> 00:15:55.640 align:start position:19%
+recommend in the first place, is that it
+wants to maximize these positive actions
+
+00:15:53.520 --> 00:15:59.800 align:start position:19%
+from people, right? That is why it would
+recommend it. If people are forcing more
+
+00:15:57.800 --> 00:16:02.840 align:start position:19%
+or doing more of negative actions, it
+will just kill your post. That is why if
+
+00:16:01.520 --> 00:16:06.440 align:start position:19%
+you would have seen, like, I don't know
+if you have seen this or not, but you
+
+00:16:04.200 --> 00:16:10.560 align:start position:19%
+can do a rage bait on X, or you know,
+you can just create posts which are
+
+00:16:08.440 --> 00:16:13.480 align:start position:19%
+negative, they would get a spike because
+they would quickly get a lot of likes,
+
+00:16:12.120 --> 00:16:17.240 align:start position:19%
+let's say, but they would also get
+negative reactions. People are blocking,
+
+00:16:15.200 --> 00:16:20.920 align:start position:19%
+people are muting. So, in the long term,
+I feel that would not be a wise strategy
+
+00:16:19.160 --> 00:16:25.920 align:start position:19%
+to grow your account. In order to grow
+your account, you'd want posts like this
+
+00:16:23.320 --> 00:16:30.560 align:start position:19%
+which have majorly positive reaction
+from the algorithm so that it keeps
+
+00:16:28.280 --> 00:16:35.320 align:start position:19%
+pushing your account and the tweets that
+you are doing among the audience. Now,
+
+00:16:33.040 --> 00:16:38.240 align:start position:19%
+I'm pretty sure that there would be some
+parts or some things that are hidden,
+
+00:16:36.960 --> 00:16:42.040 align:start position:19%
+obviously, like some things that we
+obviously know, like the Phoenix weights
+
+00:16:40.200 --> 00:16:45.520 align:start position:19%
+and, you know, how this works internally
+is how it is trained internally is not
+
+00:16:43.920 --> 00:16:48.560 align:start position:19%
+known to us, but I'm pretty sure that
+there would be other things as well
+
+00:16:46.760 --> 00:16:52.480 align:start position:19%
+which are hidden. This algorithm that is
+open source to us you can't really
+
+00:16:50.600 --> 00:16:55.760 align:start position:19%
+confirm that this is the actual code
+that's also running in the X algorithm,
+
+00:16:54.160 --> 00:16:59.320 align:start position:19%
+right? On the back end. You just have to
+trust us, trust them. Um, but I think
+
+00:16:58.200 --> 00:17:02.440 align:start position:19%
+this is good enough, right? If they're
+saying and if they're doing a lot of
+
+00:17:00.800 --> 00:17:05.439 align:start position:19%
+this code, it's very hard for them to
+actually create a completely different
+
+00:17:03.880 --> 00:17:09.560 align:start position:19%
+algorithm. Yes, there would be some more
+things on top of this, maybe like they
+
+00:17:07.000 --> 00:17:13.480 align:start position:19%
+have given some special account access
+or, you know, government account or gray
+
+00:17:11.199 --> 00:17:18.000 align:start position:19%
+checks access differently in some
+specific ways which we don't know about,
+
+00:17:15.600 --> 00:17:22.079 align:start position:19%
+but more or less, for us common people,
+this is like a interesting algorithm
+
+00:17:20.680 --> 00:17:25.319 align:start position:19%
+breakdown. There are a lot of things,
+you know, if you if you run this through
+
+00:17:23.600 --> 00:17:28.480 align:start position:19%
+Grok, you will see a bunch of more
+suggestions what you should do, what you
+
+00:17:26.920 --> 00:17:32.800 align:start position:19%
+should not do, but I just found that
+this is interesting because it helped me
+
+00:17:30.200 --> 00:17:36.320 align:start position:19%
+understand like why some posts go viral,
+why some posts don't go viral. And the
+
+00:17:34.600 --> 00:17:40.480 align:start position:19%
+core idea is that you just have to make
+content that is good and that is
+
+00:17:38.120 --> 00:17:44.560 align:start position:19%
+relatable to your initial followers,
+right? And that means that ideally you
+
+00:17:42.440 --> 00:17:49.080 align:start position:19%
+should stick to your niche because if
+you're talking outside of your niche,
+
+00:17:46.800 --> 00:17:53.920 align:start position:19%
+maybe it's a great tweet, but you would
+not get the Phoenix network to activate
+
+00:17:51.720 --> 00:17:57.760 align:start position:19%
+until unless your thunder network itself
+is not, you know, giving strong results.
+
+00:17:56.240 --> 00:18:01.440 align:start position:19%
+There could be exceptions, obviously,
+like I mentioned, you know, it's not
+
+00:17:59.280 --> 00:18:05.160 align:start position:19%
+like a foolproof system because we don't
+really know how this is working and
+
+00:18:03.200 --> 00:18:08.240 align:start position:19%
+machine learning models are obviously
+like they are not fully deterministic.
+
+00:18:06.960 --> 00:18:12.720 align:start position:19%
+You can get different outputs on
+different inputs, on same inputs rather.
+
+00:18:10.440 --> 00:18:16.480 align:start position:19%
+So, um so yeah, but but generally
+speaking, a few tips if you want to take
+
+00:18:15.080 --> 00:18:19.640 align:start position:19%
+away if you're trying to grow on X and
+if you want to see like what what's
+
+00:18:17.960 --> 00:18:24.680 align:start position:19%
+working is that I would say first of
+all, stick to your niche. Second is
+
+00:18:22.080 --> 00:18:28.800 align:start position:19%
+that, you know, engage with your
+followers so that they engage back more.
+
+00:18:27.280 --> 00:18:32.480 align:start position:19%
+This is something I'm also guilty of. I
+just, you know, post tweets in my free
+
+00:18:30.760 --> 00:18:35.640 align:start position:19%
+time and then just forgot forget to look
+at them. But this would help, right?
+
+00:18:34.280 --> 00:18:38.920 align:start position:19%
+Because the reason it would help is
+because the next tweets that they you
+
+00:18:37.200 --> 00:18:42.000 align:start position:19%
+would add, they would engage with that,
+right? So, it will give you further
+
+00:18:40.040 --> 00:18:49.040 align:start position:19%
+boost. And third is, of course, like
+avoid tweets that would result in people
+
+00:18:46.240 --> 00:18:53.480 align:start position:19%
+taking aggressive actions, right? So,
+for example, I mean, if you're just
+
+00:18:51.120 --> 00:18:57.520 align:start position:19%
+solely focusing on growth, I would avoid
+tweets that are like too much
+
+00:18:55.600 --> 00:19:00.760 align:start position:19%
+polarizing, so much that people just end
+up blocking you in the first place,
+
+00:18:59.240 --> 00:19:04.000 align:start position:19%
+right? Because that is a huge negative
+signal. So, yeah, you can be
+
+00:19:02.720 --> 00:19:07.720 align:start position:19%
+opinionated. I'm not saying that you
+have to fake it, but you can always
+
+00:19:05.720 --> 00:19:11.840 align:start position:19%
+engineer the language in such a way that
+if your block rate is 50%, let's just
+
+00:19:09.880 --> 00:19:16.200 align:start position:19%
+say it drops to 10%. So, yeah, that's
+pretty much it for this video. I guess
+
+00:19:14.040 --> 00:19:20.240 align:start position:19%
+that is that gives you a little bit of
+understanding on how the X algorithm
+
+00:19:18.040 --> 00:19:24.200 align:start position:19%
+works. This is the only algorithm I
+think that we have which is like a major
+
+00:19:21.840 --> 00:19:28.040 align:start position:19%
+website which is open-source, but not
+quite fully because of two reasons, of
+
+00:19:26.040 --> 00:19:32.720 align:start position:19%
+course. First is that we don't know what
+is this machine learning model exactly
+
+00:19:30.880 --> 00:19:37.200 align:start position:19%
+and how this is trained and how this is
+updated also and what are the weights.
+
+00:19:35.200 --> 00:19:40.520 align:start position:19%
+And second is, of course, like we don't
+really know if this is the exact code
+
+00:19:38.920 --> 00:19:44.240 align:start position:19%
+which is running in production or this
+is like a trimmed down cleaned up fork
+
+00:19:42.960 --> 00:19:47.040 align:start position:19%
+of the code. But, yeah, that's pretty
+much it. Do let me know in the comments
+
+00:19:45.760 --> 00:19:50.280 align:start position:19%
+what do you think. So, that's all for
+this video. Hopefully, you liked it. If
+
+00:19:48.800 --> 00:19:54.040 align:start position:19%
+you did, make sure to leave a like and
+subscribe to the channel. I'm going to
+
+00:19:51.760 --> 00:19:57.600 align:start position:19%
+see you in the next video very soon. If
+you're still watching, make sure you
+
+00:19:55.400 --> 00:20:00.960 align:start position:19%
+leave a comment I watched till the end
+below to tell me that you were still
+
+00:19:59.280 --> 00:20:03.760 align:start position:19%
+here and let me know what do you think
+about the video.
+

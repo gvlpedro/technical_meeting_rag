@@ -1,0 +1,692 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.040 --> 00:00:05.799 align:start position:19%
+in this system design interview scenario
+we'll break down the design of a Twitter
+
+00:00:03.840 --> 00:00:09.639 align:start position:19%
+like up covering everything from the
+initial requirements to the high level
+
+00:00:07.720 --> 00:00:14.120 align:start position:19%
+architecture so let's start with the
+background of X or Twitter we know that
+
+00:00:12.080 --> 00:00:18.400 align:start position:19%
+people can follow others and this can be
+mutual meaning others can follow them
+
+00:00:16.119 --> 00:00:22.600 align:start position:19%
+back so people can follow each other but
+naturally some users will end up being
+
+00:00:20.240 --> 00:00:26.480 align:start position:19%
+more popular meaning with more followers
+and this indicates that it will be a
+
+00:00:24.240 --> 00:00:30.039 align:start position:19%
+read heavy system as most users only
+browse the tweets while a small
+
+00:00:28.199 --> 00:00:33.960 align:start position:19%
+percentage will be actively creating
+these tweets and the typical tweet looks
+
+00:00:32.079 --> 00:00:39.399 align:start position:19%
+something like this people can tweet
+text up to 280 characters and optionally
+
+00:00:37.000 --> 00:00:42.879 align:start position:19%
+they can also include images and videos
+and we also have some interactions at
+
+00:00:41.000 --> 00:00:47.360 align:start position:19%
+the bottom like users can comment
+retweet or like other people's tweets
+
+00:00:45.520 --> 00:00:51.039 align:start position:19%
+and now let's prioritize these features
+and see which are the must have features
+
+00:00:49.120 --> 00:00:55.719 align:start position:19%
+for us the core features that we will
+focus on are the followings users need
+
+00:00:53.199 --> 00:00:59.760 align:start position:19%
+to be able to follow other people we
+will support the tweeting functionality
+
+00:00:57.640 --> 00:01:04.439 align:start position:19%
+users need to be able to create tweets
+and and this tweet length can be up to
+
+00:01:01.600 --> 00:01:08.759 align:start position:19%
+280 characters for most users and we
+will also support images and videos but
+
+00:01:06.760 --> 00:01:13.240 align:start position:19%
+we won't be covering the premium feature
+of extended tweet length in this basic
+
+00:01:11.000 --> 00:01:17.840 align:start position:19%
+design so the maximum tweet length is
+still 280 characters we will also
+
+00:01:15.799 --> 00:01:22.079 align:start position:19%
+support the news feed users need to see
+tweets from other users they follow and
+
+00:01:20.000 --> 00:01:26.200 align:start position:19%
+on X for example we have the for you and
+following feeds the for you feed is a
+
+00:01:24.159 --> 00:01:29.960 align:start position:19%
+bit algorithmic while the following is
+just showing the tweets of people that
+
+00:01:28.040 --> 00:01:33.479 align:start position:19%
+you follow and we will only cover the
+this type of Feed in our system design
+
+00:01:32.439 --> 00:01:37.280 align:start position:19%
+with that let's move on to
+non-functional requirements and let's
+
+00:01:35.439 --> 00:01:41.320 align:start position:19%
+consider the scale and performance
+demands of this system let's start with
+
+00:01:39.560 --> 00:01:46.360 align:start position:19%
+the scale research shows that X
+currently has 500 million monthly active
+
+00:01:43.759 --> 00:01:51.079 align:start position:19%
+users and let's assume that out of these
+200 million are daily active users and
+
+00:01:48.840 --> 00:01:54.960 align:start position:19%
+the typical user here on average follows
+around 4 100 people with this
+
+00:01:53.119 --> 00:01:59.479 align:start position:19%
+information we can calculate the read
+and write volumes let's start with the
+
+00:01:57.159 --> 00:02:04.119 align:start position:19%
+read volume with our assumption which is
+typically daily active users read on
+
+00:02:01.600 --> 00:02:09.160 align:start position:19%
+average 100 tweets per day that will be
+around 200 Millions time 100 and we will
+
+00:02:06.759 --> 00:02:13.160 align:start position:19%
+have 20 billion reads daily and when it
+comes to the right volume we can assume
+
+00:02:11.120 --> 00:02:17.760 align:start position:19%
+that daily active user typically creates
+10 tweets per day significantly lower
+
+00:02:15.720 --> 00:02:22.599 align:start position:19%
+than the read volume and that will be
+200 Millions time 10 and that will be 2
+
+00:02:19.959 --> 00:02:26.920 align:start position:19%
+billion new tweets daily in our system
+and regarding the data size that will be
+
+00:02:24.519 --> 00:02:31.440 align:start position:19%
+storing each of these tweets can be 1
+kiloby on average if it's text only but
+
+00:02:29.319 --> 00:02:36.519 align:start position:19%
+if it contains attachments like images
+and videos then it can range from 1
+
+00:02:33.360 --> 00:02:40.200 align:start position:19%
+megab to 5 mgab but to simplify let's
+assume that an average tweet size will
+
+00:02:38.080 --> 00:02:43.959 align:start position:19%
+be 1 megabytes even though some tweets
+with media could be larger and this
+
+00:02:42.239 --> 00:02:48.920 align:start position:19%
+means that we are dealing with 200
+million time 1 Megabyte and we will be
+
+00:02:46.159 --> 00:02:53.040 align:start position:19%
+storing 20 petabytes of data each day
+and some key takeaways that we can do
+
+00:02:50.800 --> 00:02:57.400 align:start position:19%
+from here is that this is clearly a read
+heavy system meaning we should optimize
+
+00:02:55.000 --> 00:03:02.080 align:start position:19%
+for efficient reads and the data storage
+requirements are very large so we need
+
+00:02:59.319 --> 00:03:06.440 align:start position:19%
+to consider scalable storage options and
+also handling the load of popular users
+
+00:03:04.440 --> 00:03:10.760 align:start position:19%
+with millions of followers will present
+a unique Challenge on its own and with
+
+00:03:08.760 --> 00:03:14.480 align:start position:19%
+this we can move on to the API design of
+our system we'll assume that all
+
+00:03:12.480 --> 00:03:19.200 align:start position:19%
+requests are authenticated with some
+sort of off service before reaching to
+
+00:03:16.480 --> 00:03:23.440 align:start position:19%
+our API and we also have the user ID in
+each request and we won't dive deep into
+
+00:03:21.360 --> 00:03:27.239 align:start position:19%
+this off service as in system design
+interviews usually you don't focus on
+
+00:03:25.360 --> 00:03:31.000 align:start position:19%
+such services and the interviewer
+usually assumes that you know how to
+
+00:03:28.959 --> 00:03:35.159 align:start position:19%
+authenticate us users so we can start
+sketching our core endpoints and the
+
+00:03:32.920 --> 00:03:39.400 align:start position:19%
+first one will be for creating tweets
+this will be a post request to/ tweets
+
+00:03:37.680 --> 00:03:44.040 align:start position:19%
+and in the request we will have the
+content which is the string text of the
+
+00:03:41.560 --> 00:03:48.560 align:start position:19%
+tweet it will contain media IDs which is
+an array of media IDs for images and
+
+00:03:46.599 --> 00:03:52.480 align:start position:19%
+videos and from the server s we will
+obtain this user ID which is received
+
+00:03:50.599 --> 00:03:56.439 align:start position:19%
+from the authentication Service and
+we'll also receive the created ad or
+
+00:03:54.400 --> 00:04:00.840 align:start position:19%
+some sort of Tim stamp which is set by
+the server at the time of the creation
+
+00:03:58.959 --> 00:04:05.239 align:start position:19%
+and in case of the successful response
+we will include the ID of this created
+
+00:04:02.879 --> 00:04:09.040 align:start position:19%
+tweet we will also attach the Tim stamp
+when the Tweet was created and also a
+
+00:04:07.239 --> 00:04:13.159 align:start position:19%
+success bullion which indicates whether
+the Tweet was created or not the next
+
+00:04:11.280 --> 00:04:18.160 align:start position:19%
+endpoint will be for our feed which is
+the get to/ feed in the request we can
+
+00:04:16.000 --> 00:04:22.560 align:start position:19%
+optionally include the cursor of string
+which is a pagination token to fetch the
+
+00:04:20.359 --> 00:04:26.680 align:start position:19%
+next set of tweets and also from the
+server side we will receive this user ID
+
+00:04:24.759 --> 00:04:30.479 align:start position:19%
+so that we know which feed we need to
+return and in the response we will
+
+00:04:28.440 --> 00:04:34.600 align:start position:19%
+receive an array of tweet of objects and
+each of them will contain media IDs
+
+00:04:32.479 --> 00:04:38.960 align:start position:19%
+which is an array of strings of images
+and videos and for each of them we will
+
+00:04:36.600 --> 00:04:43.240 align:start position:19%
+also contain the created at timestamp
+and also the next corser which is a
+
+00:04:40.919 --> 00:04:47.560 align:start position:19%
+pagination token to fetch the next set
+of tweets the next Endo that we will
+
+00:04:45.400 --> 00:04:52.120 align:start position:19%
+have is for users to be able to follow
+each other and that will be a post
+
+00:04:49.240 --> 00:04:55.800 align:start position:19%
+request to slf SL the ID of the user
+that we want to follow and this can be
+
+00:04:54.039 --> 00:04:59.680 align:start position:19%
+pretty simple we can just return the
+success bullion which indicates whether
+
+00:04:57.600 --> 00:05:04.120 align:start position:19%
+the follow operation was successful or
+or not or we can just return a success
+
+00:05:01.759 --> 00:05:07.440 align:start position:19%
+status code and that's it and similar to
+this we will have the unfollow endpoint
+
+00:05:06.039 --> 00:05:11.600 align:start position:19%
+which is actually not a separate
+endpoint but we will just change the
+
+00:05:09.199 --> 00:05:16.000 align:start position:19%
+method of this to be delete to slf
+follow SL the user ID that we want to
+
+00:05:13.759 --> 00:05:20.199 align:start position:19%
+unfollow and now let's move on to the
+high level design of this system a quick
+
+00:05:18.360 --> 00:05:23.720 align:start position:19%
+note if you're enjoying this so far I
+have a free system design course in our
+
+00:05:22.000 --> 00:05:27.639 align:start position:19%
+school Community where you can learn
+more about each of the components that
+
+00:05:25.400 --> 00:05:31.680 align:start position:19%
+we'll be discussing here let's visualize
+the major components of this system we
+
+00:05:29.800 --> 00:05:35.880 align:start position:19%
+will have the mobile app and also the
+client and this is where users will
+
+00:05:33.639 --> 00:05:39.880 align:start position:19%
+interact with our system creating tweets
+viewing feeds and following or
+
+00:05:37.680 --> 00:05:43.400 align:start position:19%
+unfollowing others in front of all the
+requests we will have a load balancer
+
+00:05:41.840 --> 00:05:48.479 align:start position:19%
+which will distribute the requests
+across multiple observers and for now we
+
+00:05:46.199 --> 00:05:52.919 align:start position:19%
+can use the layer for load balancing
+which operates based on the TCP port
+
+00:05:50.520 --> 00:05:56.840 align:start position:19%
+numbers and IP addresses and this is
+suitable for now for Distributing
+
+00:05:54.919 --> 00:06:00.600 align:start position:19%
+General traffic without needing to
+inspect the content of the requests but
+
+00:05:59.039 --> 00:06:04.720 align:start position:19%
+we'll change the this layer soon in the
+scaling section and you'll see exactly
+
+00:06:02.639 --> 00:06:08.599 align:start position:19%
+why we need to change it next in front
+of this load balancer we will have the
+
+00:06:06.479 --> 00:06:12.520 align:start position:19%
+API servers and this will handle the
+requests that we created earlier like
+
+00:06:10.599 --> 00:06:16.520 align:start position:19%
+fetching tweets filtering feeds or
+interacting with the database and cache
+
+00:06:14.560 --> 00:06:20.599 align:start position:19%
+and rendering responses back to the
+client and we also need to decide on the
+
+00:06:18.639 --> 00:06:26.240 align:start position:19%
+database whether we are going to use no
+SQL or SQL type of database while no SQL
+
+00:06:23.919 --> 00:06:30.880 align:start position:19%
+databases will be great here at handling
+large amounts of unstructured data but
+
+00:06:28.680 --> 00:06:35.440 align:start position:19%
+actually a relation database is better
+suited for our use case due to the need
+
+00:06:33.120 --> 00:06:39.720 align:start position:19%
+for complex relationships and Joints
+between the users and tweets so we'll
+
+00:06:37.680 --> 00:06:44.639 align:start position:19%
+use a relational database something like
+MySQL or poster SQL to store the
+
+00:06:42.120 --> 00:06:49.120 align:start position:19%
+structured data regarding our database
+schema we will have a followers table
+
+00:06:46.759 --> 00:06:54.199 align:start position:19%
+and here we will store the FY ID which
+is a string the ID of the user that is
+
+00:06:51.639 --> 00:06:59.080 align:start position:19%
+being followed and also the follower ID
+which is the ID of the user that follows
+
+00:06:56.400 --> 00:07:04.199 align:start position:19%
+this followe and we can Index this table
+on follower ID to efficiently retrieve
+
+00:07:01.759 --> 00:07:09.000 align:start position:19%
+all the people user follows and these
+are also foreign Keys which are pointing
+
+00:07:06.120 --> 00:07:14.360 align:start position:19%
+to the users table in the users table we
+will have the basic information like ID
+
+00:07:11.360 --> 00:07:18.400 align:start position:19%
+of a user username email and also create
+that which is the creation date of the
+
+00:07:16.479 --> 00:07:23.000 align:start position:19%
+account and from here we will have the
+ID as primary key which links to the
+
+00:07:20.599 --> 00:07:27.280 align:start position:19%
+tweets table in the tweets table we will
+have the Tweet ID which is a unique
+
+00:07:24.919 --> 00:07:31.639 align:start position:19%
+identifier for each tweet we will have
+the content which is the text content of
+
+00:07:29.560 --> 00:07:35.960 align:start position:19%
+this tweet and also created at which is
+the Tim stamp that the Tweet was created
+
+00:07:34.199 --> 00:07:41.120 align:start position:19%
+and here optionally we will also have
+the media IDs which is the IDS of the
+
+00:07:38.319 --> 00:07:45.080 align:start position:19%
+images videos and other media files and
+other than that we may have some small
+
+00:07:42.800 --> 00:07:50.199 align:start position:19%
+tables like likes which just joins the
+tweets and users tables based on the
+
+00:07:47.159 --> 00:07:54.360 align:start position:19%
+Tweet ID and user ID and in front of our
+database we will have a cache layer
+
+00:07:52.080 --> 00:07:58.879 align:start position:19%
+something like redis or mcache to store
+frequently accessed data like popular
+
+00:07:56.520 --> 00:08:03.720 align:start position:19%
+tweets or popular user profiles and this
+will reduce the load on our database and
+
+00:08:01.280 --> 00:08:07.800 align:start position:19%
+it will also improve our read latency
+and in our case we can use lru cache
+
+00:08:05.840 --> 00:08:11.879 align:start position:19%
+which is least recently used and this
+will help us keep the most relevant data
+
+00:08:09.919 --> 00:08:16.720 align:start position:19%
+in the cache and remove the others that
+are not relevant anymore and regarding
+
+00:08:14.319 --> 00:08:21.479 align:start position:19%
+the images videos or other media files
+we need some sort of object storage
+
+00:08:18.720 --> 00:08:25.720 align:start position:19%
+something like awss fre or Google Cloud
+Storage this is used to store large
+
+00:08:23.479 --> 00:08:29.039 align:start position:19%
+media files like the images and videos
+that we are going to store and we will
+
+00:08:27.479 --> 00:08:33.680 align:start position:19%
+have the associated Tweets in our
+database and the link to the media files
+
+00:08:31.479 --> 00:08:37.839 align:start position:19%
+which is inside of this object storage
+so with this setup the apis will get the
+
+00:08:35.760 --> 00:08:42.560 align:start position:19%
+tweets from the database and the clients
+will query the object storage for the
+
+00:08:39.919 --> 00:08:47.120 align:start position:19%
+images and videos but we can take this a
+step further and introduce a pool based
+
+00:08:44.680 --> 00:08:51.720 align:start position:19%
+CDN which will cach our media files
+closer to the users geographically and
+
+00:08:49.600 --> 00:08:56.080 align:start position:19%
+this will further reduce the latency and
+it will also improve the user experience
+
+00:08:54.120 --> 00:09:00.240 align:start position:19%
+and we'll use a full based CDN which
+fetches the content from the origin
+
+00:08:58.000 --> 00:09:04.560 align:start position:19%
+object storage on the first request and
+also caches it for the next incoming
+
+00:09:02.480 --> 00:09:08.160 align:start position:19%
+requests now with our current system
+design the database is the primary
+
+00:09:06.480 --> 00:09:12.600 align:start position:19%
+bottleneck and if you have something
+that will fail that will be the database
+
+00:09:10.200 --> 00:09:15.800 align:start position:19%
+first so we need to scale our database
+first let's see how we can scale the
+
+00:09:14.120 --> 00:09:20.200 align:start position:19%
+reads to scale the reads we can
+introduce read replicas of our primary
+
+00:09:18.040 --> 00:09:24.920 align:start position:19%
+database and these replicas are just
+copies of the primary database but they
+
+00:09:22.399 --> 00:09:29.440 align:start position:19%
+are only used for read operations so
+we'll have one master replica or leader
+
+00:09:27.240 --> 00:09:33.399 align:start position:19%
+which is responsible for writing to the
+database and we'll have many read
+
+00:09:31.600 --> 00:09:38.160 align:start position:19%
+replicas or followers which are
+responsible for retrieving data to our
+
+00:09:35.480 --> 00:09:42.120 align:start position:19%
+apis and in addition to these replicas
+we also have the caching layer that we
+
+00:09:39.920 --> 00:09:46.480 align:start position:19%
+are leveraging and popular tweets and
+user profiles will be stored there and
+
+00:09:44.360 --> 00:09:50.800 align:start position:19%
+this will also reduce the need to query
+the database for frequently accessed
+
+00:09:48.600 --> 00:09:55.200 align:start position:19%
+data now let's talk about scaling the
+rights as one right database might not
+
+00:09:53.040 --> 00:09:59.959 align:start position:19%
+be enough for this system and to scale
+our right we can sh the database or one
+
+00:09:57.800 --> 00:10:04.440 align:start position:19%
+specific table like tweet table which
+will be used the most based on the user
+
+00:10:02.120 --> 00:10:09.240 align:start position:19%
+ID and this means that will horizontally
+partition the table or database across
+
+00:10:06.920 --> 00:10:13.120 align:start position:19%
+multiple database servers and each of
+these sharts will be responsible for
+
+00:10:11.000 --> 00:10:17.120 align:start position:19%
+storing the tweets for a specific range
+of user IDs and to determine the
+
+00:10:15.360 --> 00:10:21.680 align:start position:19%
+location of the data will use a
+technique called consistent hushing to
+
+00:10:19.160 --> 00:10:25.959 align:start position:19%
+map the user ID to shards which will
+ensure the distribution of data and it
+
+00:10:23.880 --> 00:10:30.040 align:start position:19%
+will also minimize the impact of adding
+or removing shards so we'll add the
+
+00:10:28.040 --> 00:10:34.120 align:start position:19%
+shards to the database system system and
+to further optimize performance we can
+
+00:10:32.120 --> 00:10:38.560 align:start position:19%
+separate read and write operations
+meaning we can have read apis and also
+
+00:10:36.440 --> 00:10:43.320 align:start position:19%
+write apis and this will be separate
+apis each will be responsible for its
+
+00:10:40.600 --> 00:10:47.399 align:start position:19%
+own thing so the right API will only be
+responsible for writing to the leader
+
+00:10:45.399 --> 00:10:51.959 align:start position:19%
+database and the read apis will be
+responsible for reading from the cache
+
+00:10:49.320 --> 00:10:55.920 align:start position:19%
+or from the follower databases and to
+achieve this we need to change the layer
+
+00:10:53.839 --> 00:11:00.040 align:start position:19%
+of the load balancer we need to change
+that to layer seven which is the
+
+00:10:57.600 --> 00:11:04.399 align:start position:19%
+application layer and this ler allows us
+to make routing decisions based on the
+
+00:11:02.120 --> 00:11:09.320 align:start position:19%
+content of the request itself such as
+HTTP methods where we can direct the get
+
+00:11:06.959 --> 00:11:14.360 align:start position:19%
+requests to the read apis and the post
+delete requests to the write apis or we
+
+00:11:12.040 --> 00:11:18.639 align:start position:19%
+can also use the URL path to be more
+specific and this is perfect for our
+
+00:11:16.279 --> 00:11:22.880 align:start position:19%
+scenario and finally let's also talk
+about handling the peak load of our
+
+00:11:20.399 --> 00:11:27.320 align:start position:19%
+current system to manage the peak craing
+we can introduce a message cue something
+
+00:11:24.920 --> 00:11:31.560 align:start position:19%
+like Kafka so when a user creates a
+tweet the API server will publish a
+
+00:11:29.480 --> 00:11:35.959 align:start position:19%
+message to this message queue and we can
+have a temporary cache and we can store
+
+00:11:33.639 --> 00:11:40.160 align:start position:19%
+the copy of this tweet to the temporary
+cache while it's being written to the
+
+00:11:37.800 --> 00:11:44.399 align:start position:19%
+database and during that time the users
+can read this tweet from the temporary
+
+00:11:42.040 --> 00:11:49.200 align:start position:19%
+cache and once the Tweet will be written
+in our database it will also be added to
+
+00:11:46.800 --> 00:11:52.920 align:start position:19%
+our lru cache and we can remove it from
+the temporary cache and this will be the
+
+00:11:51.399 --> 00:11:56.880 align:start position:19%
+final look of our high level
+architecture obviously Real World
+
+00:11:54.920 --> 00:12:01.120 align:start position:19%
+Systems like Twitter are more complex
+than this with many challenges like
+
+00:11:58.720 --> 00:12:06.000 align:start position:19%
+concurrent updates and also the for you
+algorithmical feed with pagination twet
+
+00:12:03.560 --> 00:12:09.800 align:start position:19%
+ordering and many other challenges but
+in real system design interview you
+
+00:12:07.880 --> 00:12:13.440 align:start position:19%
+typically won't focus on that for you
+feet or that complex tasks and this
+
+00:12:11.880 --> 00:12:17.440 align:start position:19%
+should be enough for you to have the
+high level overview and then you can
+
+00:12:15.279 --> 00:12:20.600 align:start position:19%
+dive into specific areas in depth and
+explore them on your own
+

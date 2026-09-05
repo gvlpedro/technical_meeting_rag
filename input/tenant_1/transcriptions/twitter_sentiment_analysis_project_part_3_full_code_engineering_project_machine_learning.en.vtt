@@ -1,0 +1,927 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.799 --> 00:00:07.680 align:start position:19%
+hello everyone welcome back to my
+channel this is part three of twitter
+
+00:00:04.480 --> 00:00:11.599 align:start position:19%
+sentiment analysis project series
+in this video i have provided the link
+
+00:00:09.840 --> 00:00:16.320 align:start position:19%
+in the description to download the
+entire code of the project and i will be
+
+00:00:14.160 --> 00:00:21.119 align:start position:19%
+explaining how to install and run the
+project also i'll explain the working of
+
+00:00:18.720 --> 00:00:25.519 align:start position:19%
+the code as much as possible if you have
+any doubts do mention it in the comment
+
+00:00:23.359 --> 00:00:29.679 align:start position:19%
+section i'll try to explain them in the
+subsequent videos
+
+00:00:27.199 --> 00:00:34.000 align:start position:19%
+and finally don't forget to like and
+subscribe to my channel i'll be posting
+
+00:00:31.840 --> 00:00:38.480 align:start position:19%
+more such videos on simple project and
+code explanation so do subscribe and
+
+00:00:36.559 --> 00:00:43.520 align:start position:19%
+support me
+now i'll explain how to run the project
+
+00:00:41.440 --> 00:00:47.360 align:start position:19%
+so the first step is to download the
+file from the link that i have provided
+
+00:00:45.280 --> 00:00:52.399 align:start position:19%
+in the description it contains the
+entire code of the project it's a zip
+
+00:00:49.520 --> 00:00:57.920 align:start position:19%
+file so you will have to unzip it first
+next make sure you have python 3.6 or
+
+00:00:55.360 --> 00:01:02.559 align:start position:19%
+greater version installed on your laptop
+along with this you also need to add
+
+00:01:00.160 --> 00:01:06.479 align:start position:19%
+python path in your system environment
+variables
+
+00:01:04.159 --> 00:01:10.080 align:start position:19%
+there are certain python libraries that
+needs to be installed for the
+
+00:01:08.159 --> 00:01:14.799 align:start position:19%
+application to run
+so these are the three libraries that we
+
+00:01:12.479 --> 00:01:19.680 align:start position:19%
+will be needing for our project and the
+procedure to install these libraries is
+
+00:01:17.439 --> 00:01:26.960 align:start position:19%
+by opening your command prompt
+and typing this syntax and press enter
+
+00:01:23.680 --> 00:01:31.920 align:start position:19%
+so the syntax is pip space install space
+the library name for example if you want
+
+00:01:29.600 --> 00:01:38.240 align:start position:19%
+to install the vp library you have to
+enter pip install tp and press enter
+
+00:01:35.520 --> 00:01:42.320 align:start position:19%
+similarly if you want to install flash
+then enter pip install flask and press
+
+00:01:41.119 --> 00:01:47.280 align:start position:19%
+enter
+so follow the same procedure to install
+
+00:01:44.960 --> 00:01:50.640 align:start position:19%
+all the three libraries and make sure
+you have installed all these three
+
+00:01:48.720 --> 00:01:55.520 align:start position:19%
+libraries on your system
+next make sure you have all the four
+
+00:01:53.040 --> 00:01:58.719 align:start position:19%
+keys copied from your twitter developer
+account
+
+00:01:56.479 --> 00:02:02.960 align:start position:19%
+please watch part 2 of the series if you
+haven't created your twitter developer
+
+00:02:00.640 --> 00:02:06.719 align:start position:19%
+account yet we'll be needing that for
+our project
+
+00:02:04.320 --> 00:02:10.640 align:start position:19%
+so these are the four keys that we will
+be needing for our project
+
+00:02:08.479 --> 00:02:15.920 align:start position:19%
+so make sure you have all these four
+keys available with you
+
+00:02:13.040 --> 00:02:23.200 align:start position:19%
+next open the project on any ide of your
+choice i'll be using vs code
+
+00:02:18.959 --> 00:02:28.959 align:start position:19%
+finally you have to run the app.py file
+here i am in my vs code editor and i
+
+00:02:26.000 --> 00:02:33.080 align:start position:19%
+have opened app.by file
+now i will run this
+
+00:02:43.760 --> 00:02:49.840 align:start position:19%
+once the app starts running you will get
+this message
+
+00:02:47.280 --> 00:02:54.879 align:start position:19%
+you can either copy paste this entire
+link into your browser or you can just
+
+00:02:52.239 --> 00:03:00.319 align:start position:19%
+do control and click to open this
+application
+
+00:02:56.800 --> 00:03:05.159 align:start position:19%
+now i have copied this link
+now i'll paste the link on my browser
+
+00:03:05.840 --> 00:03:15.120 align:start position:19%
+the project is now open and working
+one more important thing to note is that
+
+00:03:12.400 --> 00:03:21.760 align:start position:19%
+the keys that you generate by clicking
+on consumer keys has to be copied to
+
+00:03:18.400 --> 00:03:27.599 align:start position:19%
+these two variables in the app.py code
+consumer key and consumer secret
+
+00:03:24.959 --> 00:03:32.879 align:start position:19%
+similarly the case that you generate by
+clicking on access token and secret has
+
+00:03:30.319 --> 00:03:38.400 align:start position:19%
+to be copied to these two variables in
+the app.py code access token and access
+
+00:03:36.319 --> 00:03:42.720 align:start position:19%
+token secret
+before running the code please make sure
+
+00:03:40.560 --> 00:03:49.120 align:start position:19%
+you have pasted the correct keys
+corresponding to each of these variables
+
+00:03:46.560 --> 00:03:53.680 align:start position:19%
+all you have to do is replace this x
+with the actual code that you have
+
+00:03:51.200 --> 00:03:59.439 align:start position:19%
+received from twitter developer account
+within single quotations
+
+00:03:55.760 --> 00:04:02.959 align:start position:19%
+only after that run the application
+now i'll explain the directory structure
+
+00:04:01.280 --> 00:04:08.239 align:start position:19%
+of the project
+within the project folder you'll find
+
+00:04:05.360 --> 00:04:13.840 align:start position:19%
+two other folders and one python script
+file that is app.py
+
+00:04:10.799 --> 00:04:17.919 align:start position:19%
+app.py contains the python code to
+run the application
+
+00:04:15.840 --> 00:04:21.199 align:start position:19%
+next we have two different folders named
+static and templates
+
+00:04:21.440 --> 00:04:28.240 align:start position:19%
+templates folder contains all the html
+files
+
+00:04:25.320 --> 00:04:33.840 align:start position:19%
+index.html will be the home page of our
+application or the main page
+
+00:04:31.160 --> 00:04:39.440 align:start position:19%
+result.html is the page used to display
+the result of phrase level sentiment
+
+00:04:36.080 --> 00:04:45.199 align:start position:19%
+analysis and result1.html
+is the page used to display the result
+
+00:04:42.000 --> 00:04:49.600 align:start position:19%
+of sentence level sentiment analysis
+to understand what phrase level and
+
+00:04:47.360 --> 00:04:55.120 align:start position:19%
+sentence level sentiment analysis is
+please watch part one of the series
+
+00:04:52.639 --> 00:04:58.720 align:start position:19%
+next static folder contains all the
+static contents that we will be
+
+00:04:56.720 --> 00:05:03.360 align:start position:19%
+requiring for our project like the
+styling files and the image that will be
+
+00:05:01.360 --> 00:05:08.080 align:start position:19%
+using for our application
+here within the css folder you will find
+
+00:05:06.240 --> 00:05:12.759 align:start position:19%
+two other files
+i have used index style dot css file
+
+00:05:11.039 --> 00:05:19.280 align:start position:19%
+just to style the
+index.html page and resultstyle.css
+
+00:05:16.880 --> 00:05:24.639 align:start position:19%
+i have used that to style both result
+and result1.html
+
+00:05:22.080 --> 00:05:30.000 align:start position:19%
+finally make sure you don't rename or
+move any of these files
+
+00:05:26.639 --> 00:05:35.680 align:start position:19%
+it will be easier that way
+now let us try to understand app.py code
+
+00:05:33.680 --> 00:05:41.199 align:start position:19%
+i have actually used the same code
+provided in geeksforgeeks website
+
+00:05:38.880 --> 00:05:44.960 align:start position:19%
+i have made few changes to this code to
+fit for my application
+
+00:05:43.120 --> 00:05:49.440 align:start position:19%
+so if you want to get a better
+understanding or more information on
+
+00:05:46.800 --> 00:05:55.440 align:start position:19%
+this topic you can visit the site and
+have a look at it
+
+00:05:50.880 --> 00:06:00.080 align:start position:19%
+i have provided the link in description
+coming back to our code there are many
+
+00:05:57.919 --> 00:06:04.400 align:start position:19%
+different methods that i have used in
+the project
+
+00:06:01.280 --> 00:06:09.600 align:start position:19%
+i'll explain each of the methods working
+let us start by understanding what main
+
+00:06:07.039 --> 00:06:13.680 align:start position:19%
+method does so the execution begins from
+main method
+
+00:06:10.880 --> 00:06:19.840 align:start position:19%
+i have taken four different variables to
+store the values of the case that we
+
+00:06:16.880 --> 00:06:24.720 align:start position:19%
+obtained from twitter developer account
+all you need to do is copy the keys from
+
+00:06:22.560 --> 00:06:29.680 align:start position:19%
+twitter developer account and paste it
+here within the single quotation
+
+00:06:27.440 --> 00:06:35.120 align:start position:19%
+next in these three lines we are trying
+to authenticate ourselves to the twitter
+
+00:06:32.000 --> 00:06:40.000 align:start position:19%
+api these same keys are used for
+authentication process as well after
+
+00:06:37.440 --> 00:06:45.199 align:start position:19%
+successful authentication twitter api
+object will get created and the object
+
+00:06:42.319 --> 00:06:48.400 align:start position:19%
+will be stored in this variable api so
+throughout the code i'll be using the
+
+00:06:47.199 --> 00:06:53.919 align:start position:19%
+same variable
+to refer to the twitter api
+
+00:06:51.360 --> 00:06:59.919 align:start position:19%
+if the authentication fails then this
+error message will be displayed
+
+00:06:57.280 --> 00:07:06.800 align:start position:19%
+next we have app.debug is equal to true
+here app refers to the flask application
+
+00:07:03.599 --> 00:07:10.639 align:start position:19%
+that i have declared right here
+next we have app dot static folder is
+
+00:07:08.880 --> 00:07:15.919 align:start position:19%
+equal to static
+this is just to specify the name of the
+
+00:07:13.120 --> 00:07:21.919 align:start position:19%
+folder that contains static contents for
+our application
+
+00:07:18.160 --> 00:07:26.960 align:start position:19%
+coming back we have app.run host is
+equal to localhost
+
+00:07:24.080 --> 00:07:33.199 align:start position:19%
+this will run our application on the
+local mission or the localhost
+
+00:07:29.680 --> 00:07:38.400 align:start position:19%
+now let us move to the routes
+so this is the home route or the default
+
+00:07:36.639 --> 00:07:44.560 align:start position:19%
+route
+what this code means is that when we
+
+00:07:41.039 --> 00:07:48.879 align:start position:19%
+reach the home route index.html page
+will be rendered let me show this to you
+
+00:07:47.199 --> 00:07:52.240 align:start position:19%
+once
+so this is the home page of our
+
+00:07:51.039 --> 00:07:57.039 align:start position:19%
+application
+this is nothing but
+
+00:07:53.720 --> 00:07:59.759 align:start position:19%
+index.html web page as you can see here
+i'll enter a forward slash and press
+
+00:07:58.800 --> 00:08:04.160 align:start position:19%
+enter
+this is bringing me back to the same
+
+00:08:01.599 --> 00:08:08.240 align:start position:19%
+home page this just means that when we
+reach the home route index.html page is
+
+00:08:07.039 --> 00:08:13.400 align:start position:19%
+rendered
+now let me try phrase level sentiment
+
+00:08:10.400 --> 00:08:13.400 align:start position:19%
+analysis
+
+00:08:16.960 --> 00:08:22.800 align:start position:19%
+this is the result page of phrase level
+sentiment analysis
+
+00:08:20.400 --> 00:08:27.400 align:start position:19%
+as you can see over here we have reached
+forward slash predict route when we
+
+00:08:24.639 --> 00:08:33.440 align:start position:19%
+reach forward slash predict route
+results.html page will be rendered
+
+00:08:31.599 --> 00:08:36.919 align:start position:19%
+now let me try out sentence level
+sentiment analysis
+
+00:08:41.039 --> 00:08:46.880 align:start position:19%
+this is the result page of sentence
+level sentiment analysis as you can see
+
+00:08:45.120 --> 00:08:52.399 align:start position:19%
+here we have reached forward slash
+predict one route so we'll be using
+
+00:08:49.839 --> 00:08:58.000 align:start position:19%
+predict one route to display the result
+page of sentence level sentiment
+
+00:08:54.480 --> 00:09:03.680 align:start position:19%
+analysis and will be using predict route
+to display the result page of phrase
+
+00:09:00.320 --> 00:09:03.680 align:start position:19%
+level sentiment analysis
+
+00:09:03.839 --> 00:09:10.000 align:start position:19%
+now coming back to the code as i said
+earlier we'll be using forward slash
+
+00:09:07.600 --> 00:09:14.080 align:start position:19%
+predict round for phrase level sentiment
+analysis
+
+00:09:11.920 --> 00:09:18.880 align:start position:19%
+when we reach the predict route this
+piece of code will get executed
+
+00:09:16.880 --> 00:09:22.560 align:start position:19%
+it first checks if the request method is
+post
+
+00:09:19.920 --> 00:09:27.279 align:start position:19%
+if yes will we will fetch user input
+values by using form controls and
+
+00:09:24.640 --> 00:09:33.800 align:start position:19%
+transfer it to python variables for
+example request.form of query this will
+
+00:09:30.480 --> 00:09:41.440 align:start position:19%
+fetch values from input tag from
+index.html page which has name attribute
+
+00:09:37.680 --> 00:09:45.040 align:start position:19%
+as query since i am using a form action
+so when the user clicks on the submit
+
+00:09:43.920 --> 00:09:49.760 align:start position:19%
+button
+whatever the value that he has entered
+
+00:09:47.120 --> 00:09:54.640 align:start position:19%
+in this input tag will be associated
+with the name query
+
+00:09:52.480 --> 00:10:00.000 align:start position:19%
+and the same value will be transferred
+to our python code and it will store in
+
+00:09:57.760 --> 00:10:06.320 align:start position:19%
+this particular variable
+and the same happens for request dot
+
+00:10:02.240 --> 00:10:11.040 align:start position:19%
+form of num so the input tag which has
+name attribute as num
+
+00:10:08.640 --> 00:10:17.680 align:start position:19%
+this value will be transferred back to
+the python code to this variable
+
+00:10:14.720 --> 00:10:24.160 align:start position:19%
+next we are calling get tweets method
+i'll explain get tweets method later on
+
+00:10:21.680 --> 00:10:30.079 align:start position:19%
+basically what the get tweets method
+does is that it takes query string and
+
+00:10:27.360 --> 00:10:34.959 align:start position:19%
+count as an input and it will find all
+the tweets that has query string in it
+
+00:10:32.880 --> 00:10:41.519 align:start position:19%
+and it will predict each of the tweets
+sentiment and return back the predicted
+
+00:10:37.920 --> 00:10:46.480 align:start position:19%
+values to our variable right over here
+the return value will be in the form of
+
+00:10:44.240 --> 00:10:51.920 align:start position:19%
+list of dictionary elements
+so i have given here an example of list
+
+00:10:49.360 --> 00:10:56.720 align:start position:19%
+of dictionary elements as you can see
+each of the dictionary elements has two
+
+00:10:54.000 --> 00:11:01.440 align:start position:19%
+components one is the text and the other
+one is sentiment so text is nothing but
+
+00:10:59.680 --> 00:11:06.399 align:start position:19%
+the tweet itself
+and the sentiment is nothing but the
+
+00:11:03.920 --> 00:11:12.079 align:start position:19%
+predicted sentiment of that particular
+tweet
+
+00:11:08.079 --> 00:11:16.320 align:start position:19%
+finally we will render results.html page
+along with that we'll be sending fetch
+
+00:11:14.079 --> 00:11:22.160 align:start position:19%
+tweets result to it
+as you can see here in results.html page
+
+00:11:19.680 --> 00:11:28.560 align:start position:19%
+there is a variable called results
+so the value for this variable will be
+
+00:11:26.079 --> 00:11:33.200 align:start position:19%
+sending that from our python code so
+whatever the value that is present in
+
+00:11:30.560 --> 00:11:41.279 align:start position:19%
+the fetch tweets variable will be passed
+on to the result variable in result.html
+
+00:11:38.000 --> 00:11:46.800 align:start position:19%
+next we are doing a for each on result
+and we are printing the tweet and its
+
+00:11:44.079 --> 00:11:49.279 align:start position:19%
+corresponding sentiment in a tabular
+format
+
+00:11:50.000 --> 00:11:58.480 align:start position:19%
+next we have predict1 route
+as i mentioned earlier predict1 route is
+
+00:11:56.720 --> 00:12:01.839 align:start position:19%
+used for sentence level sentiment
+analysis
+
+00:11:59.519 --> 00:12:06.560 align:start position:19%
+here again similar to the predict route
+we are taking a statement as an input
+
+00:12:04.639 --> 00:12:12.639 align:start position:19%
+from the user and storing that in a
+variable called text
+
+00:12:08.880 --> 00:12:16.880 align:start position:19%
+next we are applying text blob method on
+the input text
+
+00:12:14.560 --> 00:12:23.040 align:start position:19%
+so to understand how the text block
+works i'll show you that with an example
+
+00:12:20.160 --> 00:12:28.079 align:start position:19%
+so this is the command prompt first i am
+importing text blob
+
+00:12:25.839 --> 00:12:32.160 align:start position:19%
+now let me take a variable answer is
+equal to
+
+00:12:29.920 --> 00:12:35.839 align:start position:19%
+text
+text blob of
+
+00:12:37.279 --> 00:12:44.320 align:start position:19%
+good morning
+let us see what the answer variable has
+
+00:12:42.079 --> 00:12:48.880 align:start position:19%
+answer variable has an object of text
+blob
+
+00:12:45.519 --> 00:12:51.600 align:start position:19%
+now i'll do an answer dot
+sentiment
+
+00:12:51.680 --> 00:12:57.839 align:start position:19%
+so this is returning a two values one is
+the polarity and the other one is
+
+00:12:56.160 --> 00:13:01.680 align:start position:19%
+subjectivity
+the value that we need to concentrate is
+
+00:12:59.920 --> 00:13:08.240 align:start position:19%
+the polarity value
+now let me take another example
+
+00:13:05.279 --> 00:13:12.560 align:start position:19%
+and now i'll do a text blob of
+bad morning
+
+00:13:09.839 --> 00:13:17.760 align:start position:19%
+now let us see what answer dot sentiment
+returns it is returning a polarity value
+
+00:13:15.040 --> 00:13:25.279 align:start position:19%
+of minus 0.699
+let me take another example now we'll do
+
+00:13:21.279 --> 00:13:29.360 align:start position:19%
+text blob of just morning
+so
+
+00:13:26.240 --> 00:13:34.720 align:start position:19%
+answer dot sentiment is returning a
+polarity value of 0.0
+
+00:13:32.160 --> 00:13:39.760 align:start position:19%
+what we can understand here is that when
+the statement has a positive sentiment
+
+00:13:37.279 --> 00:13:44.079 align:start position:19%
+then the polarity value is greater than
+zero
+
+00:13:41.120 --> 00:13:48.959 align:start position:19%
+similarly when the statement has a
+negative sentiment the polarity value is
+
+00:13:46.720 --> 00:13:54.720 align:start position:19%
+decreasing less than 0 in this case it
+is reaching minus 0.698
+
+00:13:52.079 --> 00:13:59.760 align:start position:19%
+and when the statement is neutral the
+polarity remains at 0.
+
+00:13:57.279 --> 00:14:04.240 align:start position:19%
+so we are using the same logic for our
+project as well
+
+00:14:01.680 --> 00:14:09.279 align:start position:19%
+we have implemented the same logic in
+our code as well we are first finding
+
+00:14:06.800 --> 00:14:13.760 align:start position:19%
+out what the polarity value is
+and then we are checking if the polarity
+
+00:14:11.360 --> 00:14:17.760 align:start position:19%
+value is greater than zero if it is
+greater than zero then we are
+
+00:14:15.279 --> 00:14:23.440 align:start position:19%
+classifying the sentiment as positive
+if the polarity is equal to 0 then we
+
+00:14:20.800 --> 00:14:27.760 align:start position:19%
+are classifying the sentiment as neutral
+otherwise we will be classifying the
+
+00:14:25.440 --> 00:14:32.000 align:start position:19%
+sentiment as negative
+finally we will render
+
+00:14:30.040 --> 00:14:38.320 align:start position:19%
+result1.html page
+along with that we are passing the input
+
+00:14:34.639 --> 00:14:42.240 align:start position:19%
+text message and the predicted sentiment
+here in
+
+00:14:39.399 --> 00:14:47.600 align:start position:19%
+result1.html we are using two different
+variables msg and result and the values
+
+00:14:45.199 --> 00:14:51.440 align:start position:19%
+for these two variables we are passing
+it through our python code
+
+00:14:52.560 --> 00:15:00.160 align:start position:19%
+now let us understand how get tweets
+method works
+
+00:14:57.760 --> 00:15:06.079 align:start position:19%
+takes three different arguments api
+query and count so by default i have set
+
+00:15:03.600 --> 00:15:11.600 align:start position:19%
+the account value as 5.
+here i am converting the count value
+
+00:15:08.959 --> 00:15:16.560 align:start position:19%
+into an integer value this is just to
+make sure that we only have integer as a
+
+00:15:14.240 --> 00:15:22.079 align:start position:19%
+value for count
+next i am declaring a list over here
+
+00:15:19.360 --> 00:15:27.839 align:start position:19%
+with the name of tweets and this is the
+variable that we will be finally
+
+00:15:24.240 --> 00:15:27.839 align:start position:19%
+returning from this method
+
+00:15:32.800 --> 00:15:42.079 align:start position:19%
+as i had mentioned earlier the result of
+get tweet method will be in the form of
+
+00:15:39.040 --> 00:15:46.880 align:start position:19%
+a list of dictionary elements
+and that is the reason why i have
+
+00:15:44.000 --> 00:15:51.519 align:start position:19%
+declared a list over here as well
+so for each of the tweet i will store
+
+00:15:49.199 --> 00:15:57.120 align:start position:19%
+the text component and the sentiment
+component in the form of a dictionary
+
+00:15:54.240 --> 00:16:01.440 align:start position:19%
+and finally i will append these
+dictionary values to the list
+
+00:16:02.160 --> 00:16:11.040 align:start position:19%
+and that is how we will finally be
+getting a list of dictionary elements so
+
+00:16:07.759 --> 00:16:16.240 align:start position:19%
+i'll return the same variable
+back to the calling method
+
+00:16:13.680 --> 00:16:20.720 align:start position:19%
+this is the syntax to call for twitter
+api
+
+00:16:17.759 --> 00:16:26.079 align:start position:19%
+here we are specifying the api to do a
+search we are also passing the query
+
+00:16:23.680 --> 00:16:31.680 align:start position:19%
+string as an argument and we are
+mentioning the language as english
+
+00:16:29.360 --> 00:16:35.839 align:start position:19%
+and we are specifying the tweet mode as
+extended
+
+00:16:32.959 --> 00:16:40.880 align:start position:19%
+this tweet mode make sure that we get
+the entire entire tweet not just a part
+
+00:16:39.279 --> 00:16:46.160 align:start position:19%
+of it
+finally we are limiting the total number
+
+00:16:43.440 --> 00:16:50.399 align:start position:19%
+of tweets to the account specified by
+the user
+
+00:16:47.759 --> 00:16:55.759 align:start position:19%
+next we are doing a forage on each of
+the tweets written by the twitter api
+
+00:16:53.680 --> 00:17:01.040 align:start position:19%
+and for each of the tweets we are
+extracting the full text value of the
+
+00:16:58.720 --> 00:17:01.040 align:start position:19%
+tweet
+
+00:17:01.759 --> 00:17:09.600 align:start position:19%
+and then to get the sentiment of the
+tweets we are calling one more method
+
+00:17:07.120 --> 00:17:14.799 align:start position:19%
+called get tweet sentiment
+now let us see what get weight sentiment
+
+00:17:12.640 --> 00:17:19.520 align:start position:19%
+looks like
+so this is the
+
+00:17:16.959 --> 00:17:23.839 align:start position:19%
+method definition of get tweet sentiment
+as you can see it takes one argument
+
+00:17:21.600 --> 00:17:27.760 align:start position:19%
+which is nothing but the tweet
+i have actually mentioned here two ways
+
+00:17:26.000 --> 00:17:33.679 align:start position:19%
+in which we can get the sentiment of
+these tweets one is by using the nail
+
+00:17:30.640 --> 00:17:40.880 align:start position:19%
+base analyzer and one is
+without using any type of analyzer
+
+00:17:37.200 --> 00:17:47.280 align:start position:19%
+you can use either but since this
+code without specifying any analyzer is
+
+00:17:44.720 --> 00:17:52.720 align:start position:19%
+much quicker than using the nail base
+analyzer so i'll be sticking on to
+
+00:17:50.480 --> 00:17:57.840 align:start position:19%
+this cone
+but there is a slight change when you
+
+00:17:54.880 --> 00:18:02.960 align:start position:19%
+use the nail base analyzer so instead of
+getting the polarity of the tweet you
+
+00:18:00.320 --> 00:18:08.080 align:start position:19%
+will get the classification itself and
+the classification can either be
+
+00:18:04.960 --> 00:18:15.039 align:start position:19%
+positive or negative you cannot get a
+neutral classification in this method
+
+00:18:12.320 --> 00:18:20.400 align:start position:19%
+as you can see here i am doing a text
+blob method on the clean tweets clean
+
+00:18:18.559 --> 00:18:25.280 align:start position:19%
+tweets is again a
+separate method that
+
+00:18:22.559 --> 00:18:29.760 align:start position:19%
+i have declared over here
+clean tweet basically just removes
+
+00:18:27.919 --> 00:18:35.760 align:start position:19%
+unwanted space
+hashtags or any special characters from
+
+00:18:32.880 --> 00:18:41.280 align:start position:19%
+the extracted tweets so it uses basic
+regular expression to do that
+
+00:18:38.160 --> 00:18:46.640 align:start position:19%
+so we are applying the text blob method
+on the return clean tweets
+
+00:18:44.240 --> 00:18:51.280 align:start position:19%
+again same as earlier we are extracting
+the polarity value of the
+
+00:18:48.720 --> 00:18:56.559 align:start position:19%
+of the answer and checking if the value
+is greater than zero if it's greater
+
+00:18:53.440 --> 00:19:00.799 align:start position:19%
+than zero then the sentiment is positive
+if the polarity is equal to zero then
+
+00:18:58.640 --> 00:19:06.880 align:start position:19%
+the sentiment is neutral
+and finally if the polarity is less than
+
+00:19:03.520 --> 00:19:10.960 align:start position:19%
+zero then the sentiment will be negative
+so this is the logic behind get tweet
+
+00:19:09.280 --> 00:19:16.720 align:start position:19%
+sentiment
+if you like to use the naves analyzer
+
+00:19:14.000 --> 00:19:24.960 align:start position:19%
+code all you need to do is that
+comment these lines of code
+
+00:19:20.320 --> 00:19:31.280 align:start position:19%
+and uncomment the name base analyzer one
+just save this code and run it and you
+
+00:19:27.600 --> 00:19:38.160 align:start position:19%
+will be able to get the same result
+after getting the tweet and the
+
+00:19:33.840 --> 00:19:44.720 align:start position:19%
+sentiment in the text and sentiment part
+of our dictionary we will append the
+
+00:19:40.799 --> 00:19:49.840 align:start position:19%
+same into our tweets list
+the same process will happen for each of
+
+00:19:46.960 --> 00:19:54.880 align:start position:19%
+the tweets finally by the end of this
+loop we will get a list of dictionary
+
+00:19:52.559 --> 00:19:58.720 align:start position:19%
+elements and that dictionary contains
+all the tweets and its corresponding
+
+00:19:56.880 --> 00:20:04.000 align:start position:19%
+sentiments
+and this is the overall functioning of
+
+00:20:01.200 --> 00:20:09.880 align:start position:19%
+app.py code
+thanks a lot for watching i'll see you
+
+00:20:06.159 --> 00:20:09.880 align:start position:19%
+guys in the next video
+

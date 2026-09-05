@@ -1,0 +1,1989 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.520 --> 00:00:11.799 align:start position:19%
+AA sigidi of
+[Applause]
+
+00:00:08.880 --> 00:00:16.640 align:start position:19%
+Microsoft thank you very much this has
+this has to be the uh nicest
+
+00:00:14.200 --> 00:00:22.039 align:start position:19%
+introduction I got ever and I'm sure it
+made me
+
+00:00:17.800 --> 00:00:26.439 align:start position:19%
+blush um and uh yeah so uh welcome
+everybody to the uh talk about uh real
+
+00:00:24.640 --> 00:00:31.199 align:start position:19%
+time tweet delivery architecture at
+Twitter you were supposed to have Rafi
+
+00:00:29.080 --> 00:00:35.800 align:start position:19%
+standing here Rafi is an ex- colleague
+of mine he is director of platform
+
+00:00:32.640 --> 00:00:42.039 align:start position:19%
+services at Twitter and
+uh he's unfortunately unable to be here
+
+00:00:39.120 --> 00:00:45.480 align:start position:19%
+but he is here uh with us on Skype say
+hello
+
+00:00:43.039 --> 00:00:49.719 align:start position:19%
+Rafi hello everybody I'm sorry I
+couldn't make it in person right
+
+00:00:47.760 --> 00:00:55.800 align:start position:19%
+excellent but he'll be here he is
+probably better qualified to uh answer
+
+00:00:51.719 --> 00:01:00.519 align:start position:19%
+the questions and uh and uh he is uh
+he's of course free to chime in anytime
+
+00:00:58.359 --> 00:01:05.200 align:start position:19%
+I uh leave something out or or maybe get
+something wrong the reason I uh am
+
+00:01:02.640 --> 00:01:10.320 align:start position:19%
+standing here in front of you is um I'm
+currently with uh well Oracle instead of
+
+00:01:07.880 --> 00:01:17.520 align:start position:19%
+Microsoft and uh I'm here at the
+Stockholm office so I was at hand as a
+
+00:01:13.640 --> 00:01:23.159 align:start position:19%
+substitution so uh uh I did actually
+work uh for Twitter before for for about
+
+00:01:20.680 --> 00:01:26.920 align:start position:19%
+two years before I joined oraca and I
+was working in a in a runtime systems
+
+00:01:25.079 --> 00:01:33.560 align:start position:19%
+team that's closely working that's
+closely working with rafi's team and uh
+
+00:01:30.040 --> 00:01:39.000 align:start position:19%
+so uh as luck has it I did actually work
+on uh mostly Performance Tuning some of
+
+00:01:37.159 --> 00:01:43.320 align:start position:19%
+those services that we will be talking
+about making sure that they're not just
+
+00:01:41.040 --> 00:01:49.479 align:start position:19%
+nominally real time but like really real
+time so with that uh let's get into
+
+00:01:51.119 --> 00:01:58.560 align:start position:19%
+it rafy has all the nicest transitions
+in
+
+00:01:55.280 --> 00:02:04.880 align:start position:19%
+slides so uh yeah I am channeling him
+today um so if I haven't told you that I
+
+00:02:03.000 --> 00:02:09.080 align:start position:19%
+work for Oracle you would get a clue
+this is the standard disclaimer even if
+
+00:02:06.840 --> 00:02:12.599 align:start position:19%
+this guy lies through his teeth uh we
+don't care don't hold it against
+
+00:02:13.120 --> 00:02:21.760 align:start position:19%
+us so uh all right uh we will talk
+mostly about uh timeline delivery when
+
+00:02:19.879 --> 00:02:27.400 align:start position:19%
+talk about tweet delivery it is really
+all about uh about timelines timelines
+
+00:02:25.040 --> 00:02:34.239 align:start position:19%
+are chronologically reversed ordered
+series of tweets um
+
+00:02:31.280 --> 00:02:39.319 align:start position:19%
+and uh that everybody who uses Twitter
+No Doubt uh knows how does that look
+
+00:02:37.280 --> 00:02:44.400 align:start position:19%
+like uh there are several categories of
+these uh we have uh soal targeted
+
+00:02:41.879 --> 00:02:47.480 align:start position:19%
+timelines your home timeline is typical
+targeted timeline when you log on to
+
+00:02:46.040 --> 00:02:54.480 align:start position:19%
+Twitter what you see is your home
+timeline it's targeted it's personalized
+
+00:02:49.680 --> 00:02:59.480 align:start position:19%
+for you uh there is a we can we can get
+them as as as pull timeline so when you
+
+00:02:56.959 --> 00:03:06.599 align:start position:19%
+log on to Twitter what you get your your
+browser is pulling the timeline down um
+
+00:03:03.720 --> 00:03:11.280 align:start position:19%
+or any of the Twitter clients hit
+twitter.com you will be uh interacting
+
+00:03:09.400 --> 00:03:16.319 align:start position:19%
+with the home timeline API and you will
+be pulling your current timeline from
+
+00:03:12.920 --> 00:03:21.040 align:start position:19%
+there uh aside from this there is a
+queried timeline when you are doing a
+
+00:03:18.599 --> 00:03:26.319 align:start position:19%
+real-time request into Twitter and you
+are asking it to search in the in the in
+
+00:03:24.440 --> 00:03:33.280 align:start position:19%
+the overall Corpus of the tweets based
+on keywords then you are doing a uh
+
+00:03:30.400 --> 00:03:38.920 align:start position:19%
+I what you get you're getting a query
+timeline you're using the search API uh
+
+00:03:37.040 --> 00:03:41.480 align:start position:19%
+when you hit this API with particular
+parameters you're causing a search
+
+00:03:40.239 --> 00:03:47.519 align:start position:19%
+process to go through the system we'll
+get to
+
+00:03:42.439 --> 00:03:53.680 align:start position:19%
+that and aside from the pool based uh
+tweet delivery uh we also have uh
+
+00:03:51.439 --> 00:03:58.840 align:start position:19%
+varieties of push based deliveries and
+there is a equival there is a duality to
+
+00:03:56.560 --> 00:04:03.480 align:start position:19%
+Target it and quered on the push side
+one of those
+
+00:04:00.239 --> 00:04:08.720 align:start position:19%
+uh are the user and the S streams we
+will cover what exactly do these mean
+
+00:04:05.519 --> 00:04:15.120 align:start position:19%
+later and uh with those we can can we
+can deliver uh timelines to your device
+
+00:04:12.959 --> 00:04:21.560 align:start position:19%
+uh without the device having to pull
+having to pull all the time uh normally
+
+00:04:17.680 --> 00:04:27.240 align:start position:19%
+through an open uh socket um the uh one
+of those said user side streams the
+
+00:04:24.000 --> 00:04:32.120 align:start position:19%
+other kind is the so-called uh uh track
+follow which is sort of like a stand
+
+00:04:29.720 --> 00:04:38.919 align:start position:19%
+ending search query uh you open a
+connection to this API you
+
+00:04:35.080 --> 00:04:43.000 align:start position:19%
+specify certain set of users or or
+tokens that you're interested in and
+
+00:04:41.120 --> 00:04:48.520 align:start position:19%
+those tweets that come in the real time
+they match these uh they match these uh
+
+00:04:46.199 --> 00:04:52.720 align:start position:19%
+the criteria that you set they get
+pushed to your
+
+00:04:49.960 --> 00:04:58.600 align:start position:19%
+device
+um all right so um how does this
+
+00:04:55.400 --> 00:05:04.440 align:start position:19%
+typically look like well uh let's let's
+talk about uh
+
+00:05:00.800 --> 00:05:09.280 align:start position:19%
+uh a bit of a quick overview of how does
+Twitter work people tweet when they do
+
+00:05:07.479 --> 00:05:13.120 align:start position:19%
+they are filling their so-called user
+timeline this is a snippet of my user
+
+00:05:11.080 --> 00:05:22.280 align:start position:19%
+timeline that rafre three few days ago
+and it's particularly funny and uh um so
+
+00:05:19.360 --> 00:05:28.840 align:start position:19%
+these are some of my tweets as they were
+happening now if somebody's following
+
+00:05:24.600 --> 00:05:34.880 align:start position:19%
+myself and maybe Matias then you have
+another set of tweets that Matias was
+
+00:05:31.639 --> 00:05:40.199 align:start position:19%
+tweeting and if the somebody is also
+following J Focus then you will have
+
+00:05:37.000 --> 00:05:46.759 align:start position:19%
+another set of tweets that the J Focus
+account is tweeting now normally if you
+
+00:05:43.080 --> 00:05:54.680 align:start position:19%
+follow these three people what you get
+is
+
+00:05:48.600 --> 00:06:00.440 align:start position:19%
+a reverse time ordered merge of uh of
+all the tweets of the people you follow
+
+00:05:57.319 --> 00:06:08.120 align:start position:19%
+now of course this is not that trivially
+easy because um the timeline rules are a
+
+00:06:05.039 --> 00:06:16.120 align:start position:19%
+little bit more complicated we have at
+replies um we have um retweets and there
+
+00:06:13.479 --> 00:06:19.800 align:start position:19%
+are rules for when do you see a retweet
+you might see a tweet from somebody you
+
+00:06:17.840 --> 00:06:24.280 align:start position:19%
+don't follow because somebody who you
+follow did retweet their tweet uh if
+
+00:06:23.000 --> 00:06:29.000 align:start position:19%
+people are having a threaded
+conversation using at replies at each
+
+00:06:26.280 --> 00:06:34.039 align:start position:19%
+other you only see those if you follow
+both part to the conversation otherwise
+
+00:06:31.400 --> 00:06:38.680 align:start position:19%
+if uh if I respond to a tweet from
+someone and uh there is somebody
+
+00:06:36.360 --> 00:06:42.479 align:start position:19%
+observing me as I'm tweeting he follows
+me but he doesn't follow the person that
+
+00:06:40.160 --> 00:06:46.000 align:start position:19%
+I had replied to he won't see that part
+of the
+
+00:06:43.479 --> 00:06:50.160 align:start position:19%
+conversation these are uh tried and
+tested rules over the years uh and uh
+
+00:06:48.599 --> 00:06:54.319 align:start position:19%
+and of course they have to manifest
+themselves in the software so
+
+00:06:51.319 --> 00:06:58.800 align:start position:19%
+compositing a merged timeline is not all
+that trivial so obviously we cannot
+
+00:06:56.400 --> 00:07:03.960 align:start position:19%
+really do it all the time on every
+request because it would be horribly
+
+00:07:01.160 --> 00:07:09.599 align:start position:19%
+slow um several years ago when I was was
+actually joining Twitter I uh I have a
+
+00:07:06.560 --> 00:07:12.919 align:start position:19%
+friend and my friend uh asked me so how
+many people work at Twitter and that
+
+00:07:11.000 --> 00:07:18.039 align:start position:19%
+time it was 300 I think right now it's
+probably more like 1500 people something
+
+00:07:14.840 --> 00:07:24.280 align:start position:19%
+like that but my friend was actually
+uh was actually completely incredulous
+
+00:07:21.360 --> 00:07:30.560 align:start position:19%
+when he heard the 300 he was like three
+what could possibly 300 people do there
+
+00:07:28.520 --> 00:07:35.639 align:start position:19%
+this is such an easy service I could
+write this in an afternoon and yeah of
+
+00:07:33.840 --> 00:07:38.680 align:start position:19%
+course you could and it would work for
+you and five for
+
+00:07:38.840 --> 00:07:49.159 align:start position:19%
+friends so anyway let's see how this
+works uh you tweet
+
+00:07:45.680 --> 00:07:53.240 align:start position:19%
+something this tweet will hit the
+so-called right API it's an HTTP
+
+00:07:51.479 --> 00:07:58.400 align:start position:19%
+endpoint we are of course highly
+abstracting the system here and what
+
+00:07:56.560 --> 00:08:03.919 align:start position:19%
+happens is that once we hit the right
+API we need need to ensure that all of
+
+00:08:00.680 --> 00:08:07.440 align:start position:19%
+your followers will see this tweet
+hopefully in something that can be
+
+00:08:05.400 --> 00:08:12.319 align:start position:19%
+considered real
+time uh what we don't show is that the
+
+00:08:10.280 --> 00:08:17.080 align:start position:19%
+Tweet will first uh be written to dis
+and a quick HTTP response uh uh will be
+
+00:08:15.560 --> 00:08:21.360 align:start position:19%
+returned to the client so everything is
+asynchronous decoupled from there on we
+
+00:08:19.199 --> 00:08:25.479 align:start position:19%
+don't want people to have to keep
+persistent connection what when they
+
+00:08:23.280 --> 00:08:29.720 align:start position:19%
+tweet we want them we want to return to
+them a quick HTTP 200 okay as soon as
+
+00:08:27.960 --> 00:08:33.080 align:start position:19%
+possible because maybe they tweeting
+from a mobile device that wouldn't be
+
+00:08:31.280 --> 00:08:37.479 align:start position:19%
+too good at maintaining a longer
+connection and so on so try to be nice
+
+00:08:35.479 --> 00:08:42.080 align:start position:19%
+and quick we want to return within 50
+milliseconds after we we eliminated
+
+00:08:39.959 --> 00:08:45.480 align:start position:19%
+duplicate tweets because we watch for
+that and other like trivial business
+
+00:08:43.599 --> 00:08:52.360 align:start position:19%
+logic in the in the in the Tweet format
+of the HTP request so what happens after
+
+00:08:48.440 --> 00:08:57.920 align:start position:19%
+that is what we call a fan out we call
+it fan out because we take every
+
+00:08:54.240 --> 00:09:01.560 align:start position:19%
+incoming tweet and insert it into the
+home timelines of all the the people who
+
+00:09:00.000 --> 00:09:06.600 align:start position:19%
+are following the author of that tweet
+we fan it out into all into all the home
+
+00:09:04.279 --> 00:09:12.959 align:start position:19%
+timelines where they need to
+go we have a timeline cache and this
+
+00:09:09.760 --> 00:09:20.000 align:start position:19%
+timeline cache is based on redis reddis
+is a very nice uh inmemory key Value
+
+00:09:16.320 --> 00:09:26.480 align:start position:19%
+Store um it's sort of like mcash except
+that uh it it allows for uh mcash deals
+
+00:09:23.440 --> 00:09:30.839 align:start position:19%
+in binary blobs uh redis deals in
+structured data and this is actually
+
+00:09:28.079 --> 00:09:35.680 align:start position:19%
+significant for us
+um
+
+00:09:33.320 --> 00:09:40.279 align:start position:19%
+the but anyway you can think of it as an
+inmemory key Value Store uh now of
+
+00:09:38.680 --> 00:09:47.160 align:start position:19%
+course we don't have a single reddis
+instance we have a huge Bank of redice
+
+00:09:44.240 --> 00:09:52.360 align:start position:19%
+instances that are uh keeping the uh uh
+timeline cache and in addition to that
+
+00:09:49.640 --> 00:09:56.519 align:start position:19%
+for fault tolerance every person's
+timeline will not live on a single
+
+00:09:54.519 --> 00:10:01.120 align:start position:19%
+instance it lives at three instances so
+when it has to be retrieved if the the
+
+00:09:58.920 --> 00:10:07.800 align:start position:19%
+first machine that you hit for a
+particular timeline based on some kind
+
+00:10:03.360 --> 00:10:12.360 align:start position:19%
+of a um hashing algorithm obviously you
+uh don't find it there you can go around
+
+00:10:09.839 --> 00:10:18.279 align:start position:19%
+find it in in a second or third instance
+hopefully um at a at Twitter scale
+
+00:10:15.680 --> 00:10:21.720 align:start position:19%
+machines just fall over every time you
+have to plan for that it it's just part
+
+00:10:20.279 --> 00:10:27.560 align:start position:19%
+of the business you never have an
+assumption that something is up if you
+
+00:10:24.120 --> 00:10:32.880 align:start position:19%
+do your system won't be terribly
+stable so uh what Fen out does is we
+
+00:10:30.680 --> 00:10:37.959 align:start position:19%
+have the social graph service which uh
+maintains the information of who follows
+
+00:10:34.600 --> 00:10:42.399 align:start position:19%
+who among other things and uh figures
+out all the people who are following the
+
+00:10:39.440 --> 00:10:46.720 align:start position:19%
+author of the tweet and then start uh
+the insert process into reddest
+
+00:10:45.120 --> 00:10:52.519 align:start position:19%
+instances
+um Fen out itself is not just a single
+
+00:10:50.680 --> 00:10:56.760 align:start position:19%
+machine obviously that's also a bank of
+machines and they're interconnected many
+
+00:10:54.360 --> 00:11:02.160 align:start position:19%
+to many with all the Rices there's a lot
+of TCP connections being open at the
+
+00:10:58.440 --> 00:11:08.959 align:start position:19%
+same time uh but that's the way it it it
+has to be so say rafy tweets or I tweet
+
+00:11:06.360 --> 00:11:13.519 align:start position:19%
+and then we carry redis for uh okay who
+are the people who follow Rafi and then
+
+00:11:12.000 --> 00:11:21.040 align:start position:19%
+we have to append this tweet into each
+of their timelines now insert into
+
+00:11:17.800 --> 00:11:26.800 align:start position:19%
+reddis uh for every users's home
+timeline there is a there is
+
+00:11:23.480 --> 00:11:31.920 align:start position:19%
+a well there is a there is a key in the
+Redd is key of the recipient and uh we
+
+00:11:29.639 --> 00:11:37.000 align:start position:19%
+will just append to that it's replicated
+and U also we are pipelining to about 4K
+
+00:11:35.639 --> 00:11:41.720 align:start position:19%
+destinations at the time so we are
+chunking it into 4,000 followers uh push
+
+00:11:40.279 --> 00:11:44.720 align:start position:19%
+this to Red at
+once
+
+00:11:46.279 --> 00:11:55.800 align:start position:19%
+um using redice
+is nice and why do I oh so
+
+00:11:58.240 --> 00:12:07.040 align:start position:19%
+just sorry I'm having a my machine is
+having a senior
+
+00:12:03.120 --> 00:12:12.440 align:start position:19%
+moment all right um so as I said we have
+a native list structure in reddis so we
+
+00:12:09.160 --> 00:12:17.920 align:start position:19%
+can just append one after the other uh
+back in the day in the ancient history
+
+00:12:14.639 --> 00:12:22.360 align:start position:19%
+probably four years ago um I think for a
+while we tried using mcash for uh for
+
+00:12:20.199 --> 00:12:27.440 align:start position:19%
+these and of course it didn't work out
+after a while because every time you had
+
+00:12:24.720 --> 00:12:30.839 align:start position:19%
+to pull in from the mcash the binary
+blob that was the timeline app pendant
+
+00:12:29.240 --> 00:12:34.800 align:start position:19%
+element to it then serialize the whole
+thing back with redis we just tell it
+
+00:12:33.199 --> 00:12:40.000 align:start position:19%
+here's this key push this element to the
+listen redis actually knows about data
+
+00:12:36.720 --> 00:12:47.519 align:start position:19%
+structures band with wide uh band with
+wise it's it's just so much nicer uh we
+
+00:12:43.480 --> 00:12:53.240 align:start position:19%
+use the r push X command which uh
+basically in red this means if the key
+
+00:12:50.199 --> 00:12:59.720 align:start position:19%
+is not there ignore this command so we
+are not doing any work for uh for uh
+
+00:12:57.800 --> 00:13:03.360 align:start position:19%
+those people whose time timelines are
+not cached and whose people's timelines
+
+00:13:01.880 --> 00:13:08.279 align:start position:19%
+are not cached well people who are
+inactive so if you haven't logged into
+
+00:13:05.800 --> 00:13:13.480 align:start position:19%
+Twitter for a long time your timeline
+will eventually fall out from the cach
+
+00:13:10.199 --> 00:13:20.160 align:start position:19%
+because reddis is an inmemory uh thing
+if uh you assign it um you know 24 gigs
+
+00:13:17.160 --> 00:13:24.120 align:start position:19%
+of memory on that particular box then uh
+whenever it has to uh uh to uh you you
+
+00:13:22.639 --> 00:13:30.199 align:start position:19%
+can configure it with a policy that
+whenever uh it uh needs to uh needs to
+
+00:13:28.560 --> 00:13:33.360 align:start position:19%
+uh evacuate something from memory
+because it's just running at full
+
+00:13:31.639 --> 00:13:42.320 align:start position:19%
+capacity or just be throwing away the
+oldest item so it it works as an lru
+
+00:13:37.880 --> 00:13:47.399 align:start position:19%
+cache so uh what we store normally is ID
+of the Tweet the user ID and some
+
+00:13:45.760 --> 00:13:51.880 align:start position:19%
+additional bits we are not storing the
+whole tweet because that would be hugely
+
+00:13:49.519 --> 00:13:57.880 align:start position:19%
+redundant because as same tweet if I
+tweet something to my meager 2.5k
+
+00:13:55.000 --> 00:14:04.320 align:start position:19%
+followers then uh you will have to uh
+have that stored 2,500 times if Lady
+
+00:14:01.480 --> 00:14:08.920 align:start position:19%
+Gaga tweets something then honestly I
+have I don't even have an idea how many
+
+00:14:06.160 --> 00:14:14.040 align:start position:19%
+followers she has these days
+um it's either single digit millions or
+
+00:14:11.480 --> 00:14:17.759 align:start position:19%
+double digit Millions one of the two um
+so obviously we don't want to replicate
+
+00:14:15.600 --> 00:14:22.240 align:start position:19%
+a lot of that
+um so uh the other thing we do is redis
+
+00:14:20.839 --> 00:14:26.639 align:start position:19%
+is really good at storing variable
+length entries so there's no need for
+
+00:14:24.800 --> 00:14:30.600 align:start position:19%
+all of these records to actually be the
+same length I mean r this is beautiful I
+
+00:14:28.600 --> 00:14:35.880 align:start position:19%
+just cannot say enough nice things about
+it we really love it so uh in case that
+
+00:14:33.440 --> 00:14:42.880 align:start position:19%
+your Tweet is actually not a tweet but a
+retweet we can we can we can append the
+
+00:14:39.120 --> 00:14:46.800 align:start position:19%
+uh the ID of the original tweet to uh to
+your retweet when you retweet something
+
+00:14:45.160 --> 00:14:50.600 align:start position:19%
+you actually gener behind the scenes
+you're generating a new tweet with its
+
+00:14:48.440 --> 00:14:54.920 align:start position:19%
+own ID but it's linked to whatever was
+the retweeted
+
+00:14:52.320 --> 00:14:59.560 align:start position:19%
+one uh as I said we are highly redundant
+within data center if you wonder about
+
+00:14:57.440 --> 00:15:03.800 align:start position:19%
+the cross data center replication
+then uh we are not doing it on the
+
+00:15:01.920 --> 00:15:07.880 align:start position:19%
+redest level there's just too much
+bandwidth there there's too much uh
+
+00:15:05.759 --> 00:15:14.320 align:start position:19%
+traffic that would be going on we
+actually do the replication on the right
+
+00:15:11.199 --> 00:15:19.440 align:start position:19%
+API level so the the the Tweet stream as
+it comes in the right API is actually
+
+00:15:16.480 --> 00:15:23.680 align:start position:19%
+replicated to additional data centers
+and all the computation is basically
+
+00:15:21.079 --> 00:15:30.040 align:start position:19%
+repeated in every data center that's
+what uh worked best uh for
+
+00:15:26.519 --> 00:15:34.040 align:start position:19%
+Twitter so after after a while you want
+to pull this thing in your browser what
+
+00:15:32.360 --> 00:15:40.279 align:start position:19%
+happens is that there exist a thing
+called D timeline service which will
+
+00:15:36.959 --> 00:15:47.000 align:start position:19%
+read these red Rices or red
+eye um so uh TW is obviously more than
+
+00:15:44.519 --> 00:15:54.199 align:start position:19%
+an ID in order to get this nice display
+you need to compose it from user the
+
+00:15:50.040 --> 00:15:59.959 align:start position:19%
+user's icon the text of the Tweet uh
+geoinformation whether you favored this
+
+00:15:56.600 --> 00:16:04.639 align:start position:19%
+tweet already or not uh
+that all needs to be in the rendered
+
+00:16:02.519 --> 00:16:10.120 align:start position:19%
+version of the tweet this is the So-Cal
+hydrated tweet and the timeline Services
+
+00:16:07.240 --> 00:16:14.240 align:start position:19%
+is interacting with other services to uh
+to to to hydrate tweet from the Tweet ID
+
+00:16:13.040 --> 00:16:19.600 align:start position:19%
+that it pulled from
+redis um
+
+00:16:16.759 --> 00:16:24.959 align:start position:19%
+however uh the uh the thing is if you
+are in cash this process takes about 50
+
+00:16:22.519 --> 00:16:31.399 align:start position:19%
+milliseconds it's nicely optimized over
+the years if you are out of the cash
+
+00:16:28.560 --> 00:16:36.519 align:start position:19%
+then what timeline service has to do so
+you haven't logged in for Twitter for
+
+00:16:33.560 --> 00:16:42.480 align:start position:19%
+several weeks you fell out of the cache
+uh we started updating your timeline
+
+00:16:39.360 --> 00:16:47.519 align:start position:19%
+with tweets as they come in in redis um
+then this timeline service will have to
+
+00:16:44.959 --> 00:16:53.079 align:start position:19%
+hit the social graph service figure out
+who you follow query their timelines
+
+00:16:50.720 --> 00:16:58.920 align:start position:19%
+reassemble your home timeline stick it
+into reddis and then carry on and uh
+
+00:16:56.720 --> 00:17:07.199 align:start position:19%
+that takes about 3 seconds but it only
+happens for uh for uh uh people that uh
+
+00:17:02.600 --> 00:17:14.679 align:start position:19%
+that were inactive for for a
+time so this was the um the uh basic
+
+00:17:11.760 --> 00:17:20.559 align:start position:19%
+targeted timeline in a pool mode Let's
+talk about search a little bit um search
+
+00:17:17.799 --> 00:17:23.959 align:start position:19%
+works sometime somewhat different the
+right API also Forks off to a thing
+
+00:17:22.919 --> 00:17:30.240 align:start position:19%
+named
+ingester which
+
+00:17:26.120 --> 00:17:36.520 align:start position:19%
+uh uh which goes to um which tokenizes
+the tweet and then we have a search
+
+00:17:33.559 --> 00:17:41.080 align:start position:19%
+index which runs on a bunch of services
+named the early bird at Twitter
+
+00:17:37.960 --> 00:17:45.600 align:start position:19%
+everything has to be a bird uh uh early
+bird is actually an optimiz think of
+
+00:17:44.000 --> 00:17:50.520 align:start position:19%
+think of it as an optimized Lu scine it
+mostly is an optimized Lu scine uh of
+
+00:17:48.600 --> 00:17:55.039 align:start position:19%
+course we have a bunch of those again
+however the the significant difference
+
+00:17:52.039 --> 00:18:01.720 align:start position:19%
+is that uh uh
+while the insert into the redice fans
+
+00:17:59.520 --> 00:18:06.840 align:start position:19%
+out so it's potentially an order and
+operation based on how many followers
+
+00:18:03.679 --> 00:18:12.520 align:start position:19%
+you have this guy here in Jester it
+tokenizes the tweet and uses the tokens
+
+00:18:10.120 --> 00:18:19.000 align:start position:19%
+plus other signal GE information and so
+on and just pushes it into the relevant
+
+00:18:14.919 --> 00:18:23.679 align:start position:19%
+index for for uh uh in in in the search
+index in in a particular uh early bird
+
+00:18:21.640 --> 00:18:27.640 align:start position:19%
+and then when you do a search you are
+faced with a thing called blender which
+
+00:18:25.480 --> 00:18:31.679 align:start position:19%
+is a quite ingenious uh uh piece of
+engineering uh that some really really
+
+00:18:29.919 --> 00:18:37.840 align:start position:19%
+smart folks in the search organization
+did and uh it does a really nice uh and
+
+00:18:35.039 --> 00:18:42.360 align:start position:19%
+quick scatter GA of or early birds for
+the index for all the terms in the
+
+00:18:39.200 --> 00:18:48.480 align:start position:19%
+search query that you did applies some
+more signals from your search it might
+
+00:18:45.520 --> 00:18:53.440 align:start position:19%
+uh figure out who you are where you are
+what were your past interests and so on
+
+00:18:51.000 --> 00:18:56.919 align:start position:19%
+based on that ranks the results and then
+does a real time merge and presents all
+
+00:18:55.080 --> 00:19:00.559 align:start position:19%
+of that to you as far as we are
+concerned though the the delivery self
+
+00:18:59.320 --> 00:19:05.840 align:start position:19%
+from right
+API until the index it happens really
+
+00:19:03.520 --> 00:19:11.280 align:start position:19%
+quickly because we are just inserting
+into index per token there's no fan out
+
+00:19:09.440 --> 00:19:18.159 align:start position:19%
+as such so you see there's this
+interesting counter balance redis uh
+
+00:19:16.080 --> 00:19:22.960 align:start position:19%
+timeline caching is a little bit it's
+it's expensive on the write it's cheap
+
+00:19:19.960 --> 00:19:27.960 align:start position:19%
+on the read search is cheap on the Cheap
+on the right more expensive on the read
+
+00:19:25.400 --> 00:19:33.000 align:start position:19%
+fortunately we have a lot more of those
+than we have of uh of
+
+00:19:31.039 --> 00:19:40.039 align:start position:19%
+those all
+right oh yeah uh in aside from explicit
+
+00:19:37.720 --> 00:19:43.880 align:start position:19%
+queries we also have a kind of an
+implicit query which is the Discover tab
+
+00:19:42.320 --> 00:19:49.799 align:start position:19%
+discover tab is basically an implicit
+query it also runs off of blender as I
+
+00:19:46.720 --> 00:19:53.480 align:start position:19%
+said it you you're logged in right so
+there is probably an information about
+
+00:19:51.320 --> 00:19:58.280 align:start position:19%
+your geolocation your past interest and
+so on so this is it is also used blender
+
+00:19:55.960 --> 00:20:02.360 align:start position:19%
+is also used uh to compose the the
+discovered tab that's on the far left
+
+00:20:00.360 --> 00:20:10.919 align:start position:19%
+right
+now all right um that's the pool mode
+
+00:20:07.200 --> 00:20:19.200 align:start position:19%
+this was the search API let's look into
+push many nice transitions here yep
+
+00:20:16.120 --> 00:20:25.480 align:start position:19%
+repeat all right the push
+cluster obviously uh we have uh HTTP
+
+00:20:23.480 --> 00:20:32.440 align:start position:19%
+push and mobile push let's discuss HTTP
+push first um the
+
+00:20:29.840 --> 00:20:36.760 align:start position:19%
+this is if if you could like real time
+look at the bandwidth that comes in
+
+00:20:34.880 --> 00:20:43.000 align:start position:19%
+Twitter you would see something
+something crazy like this is a bit like
+
+00:20:38.400 --> 00:20:47.600 align:start position:19%
+the Matrix isn't it uh this is uh Json
+ised tweets a tweet might be 140
+
+00:20:45.240 --> 00:20:52.480 align:start position:19%
+characters but when you uh tokenize it
+extract the entities the URLs the the
+
+00:20:50.200 --> 00:20:56.679 align:start position:19%
+usernames whatnot they usually can get
+up to few kilobytes of Json and this is
+
+00:20:54.799 --> 00:20:59.520 align:start position:19%
+normally the internal form that they are
+being trafficked within the Twitter
+
+00:20:58.159 --> 00:21:04.400 align:start position:19%
+system
+um we have a service that's called hose
+
+00:21:01.840 --> 00:21:11.000 align:start position:19%
+bird and this maintains persistent
+connections with the end clients um it
+
+00:21:07.240 --> 00:21:16.640 align:start position:19%
+is mostly an a routing cluster right now
+for all public tweets you need about 25
+
+00:21:13.440 --> 00:21:23.880 align:start position:19%
+megabytes per second bandwidth to to
+consume all the public tweets and
+
+00:21:21.000 --> 00:21:26.480 align:start position:19%
+uh and uh not just tweets but also the
+events I have to emphasize the events
+
+00:21:25.559 --> 00:21:31.400 align:start position:19%
+because you'll see why they're
+interesting why they're important
+
+00:21:28.960 --> 00:21:40.080 align:start position:19%
+uh so the right API can also hit the
+hose bird now hose bird is um it just
+
+00:21:37.760 --> 00:21:45.039 align:start position:19%
+gets all the tweets and then it routes
+them into different cues for public
+
+00:21:42.039 --> 00:21:51.080 align:start position:19%
+tweets for for social events like people
+follow unfollow delete tweets these are
+
+00:21:48.440 --> 00:21:54.360 align:start position:19%
+all additional events that need to be uh
+taken into account they need to be paid
+
+00:21:52.799 --> 00:21:59.799 align:start position:19%
+attention to in order to have everything
+consistent and work
+
+00:21:56.120 --> 00:22:04.360 align:start position:19%
+correctly um as SLA is about 150
+milliseconds and sending these out and
+
+00:22:01.720 --> 00:22:09.960 align:start position:19%
+we need to figure out what to do now the
+thing is obviously you cannot have a
+
+00:22:06.039 --> 00:22:14.120 align:start position:19%
+single machine for that uh at any given
+time we have about 1 million clients
+
+00:22:11.880 --> 00:22:17.679 align:start position:19%
+connecting to the push API that's 1
+million open sockets no way there
+
+00:22:16.200 --> 00:22:21.120 align:start position:19%
+there's no Hardware right now on planet
+that handles this for single machine and
+
+00:22:19.400 --> 00:22:28.360 align:start position:19%
+even if it did it would be really really
+bad for failover wouldn't it so uh uh so
+
+00:22:25.720 --> 00:22:32.279 align:start position:19%
+what there is is there is a there's a I
+mean I mean structurally is beautiful
+
+00:22:29.960 --> 00:22:37.360 align:start position:19%
+right that it's a cascading cluster you
+have one machine everything comes in it
+
+00:22:34.880 --> 00:22:40.880 align:start position:19%
+fans it out to two or several other
+machines the next level which mostly do
+
+00:22:39.039 --> 00:22:46.360 align:start position:19%
+nothing but fend them out to another
+level and another level and there is
+
+00:22:43.360 --> 00:22:49.799 align:start position:19%
+four levels of cascading in the hosb
+cluster right now and you can always add
+
+00:22:48.080 --> 00:22:56.240 align:start position:19%
+a fifth one if people start tweeting
+five as much as they do these days um
+
+00:22:53.240 --> 00:23:00.360 align:start position:19%
+and that last level is mostly that
+maintains the it's the edge it maintains
+
+00:22:58.640 --> 00:23:06.240 align:start position:19%
+connection with the external clients
+with the Tweet decks and twitters for
+
+00:23:02.640 --> 00:23:11.320 align:start position:19%
+mac and any other third- party clients
+uh of this
+
+00:23:07.960 --> 00:23:15.960 align:start position:19%
+world uh they are running on uh on on
+gigabit Ethernet cards and they are
+
+00:23:13.919 --> 00:23:21.200 align:start position:19%
+provisioned for about between two and
+the three times of the highest observed
+
+00:23:18.720 --> 00:23:24.679 align:start position:19%
+Spike so far so you know there there
+there is some addition there is some
+
+00:23:23.200 --> 00:23:29.520 align:start position:19%
+additional capacity in the system there
+has to be uh an interesting tidbit
+
+00:23:28.000 --> 00:23:35.880 align:start position:19%
+social graph
+changes happen 10 times more often than
+
+00:23:33.360 --> 00:23:40.080 align:start position:19%
+actual tweets you wouldn't think this is
+true but I mean when I when I learned
+
+00:23:37.919 --> 00:23:44.240 align:start position:19%
+that I was I was flabbergasted too but
+uh uh in the in the in the host bird
+
+00:23:42.080 --> 00:23:48.799 align:start position:19%
+events stream the social graph changes
+actually are 10x to
+
+00:23:46.679 --> 00:23:54.520 align:start position:19%
+tweets it's quite
+amazing so
+
+00:23:51.039 --> 00:23:59.880 align:start position:19%
+um what kind of clients do we have on
+the other hand well we have the fire
+
+00:23:56.799 --> 00:24:05.960 align:start position:19%
+hose which is you have an edge machine
+it's just this basically raw input of
+
+00:24:02.799 --> 00:24:12.159 align:start position:19%
+public tweets it goes out to it this is
+not publicly available uh companies pay
+
+00:24:09.679 --> 00:24:18.760 align:start position:19%
+for this Google used to pay for it so
+that it could real time index it other
+
+00:24:14.679 --> 00:24:22.080 align:start position:19%
+companies are paying for it uh of course
+uh it's also not publicly available
+
+00:24:20.279 --> 00:24:27.559 align:start position:19%
+because it's quite costly to maintain
+you need to provide a 25 megabyte per
+
+00:24:24.520 --> 00:24:33.600 align:start position:19%
+second connection to that entity that's
+purchasing this from you um for and and
+
+00:24:32.480 --> 00:24:36.960 align:start position:19%
+of course you can only just have a
+limited number of these per box because
+
+00:24:35.760 --> 00:24:40.880 align:start position:19%
+it's it's really it's like a huge
+bandwidth that's why it's called fire
+
+00:24:38.399 --> 00:24:45.039 align:start position:19%
+hose we used to also have a garden hose
+I don't know whether that exists anymore
+
+00:24:42.919 --> 00:24:48.960 align:start position:19%
+where you could uh uh without paying you
+could subscribe to a fraction 1% or
+
+00:24:47.399 --> 00:24:51.880 align:start position:19%
+something like that of the public tweets
+if you wanted to sample them for
+
+00:24:50.240 --> 00:24:58.520 align:start position:19%
+research I'm not sure whether that
+exists anymore rafy do you
+
+00:24:55.399 --> 00:25:04.480 align:start position:19%
+know yeah we still do support it for
+smaller organizations mhm all
+
+00:25:00.960 --> 00:25:07.600 align:start position:19%
+right okay so this is fireh house you
+have the other thing which is the So-Cal
+
+00:25:05.840 --> 00:25:14.720 align:start position:19%
+track follow track follow is if you ever
+use the um tweet deck then uh in tweet
+
+00:25:12.080 --> 00:25:20.360 align:start position:19%
+deck you can uh specify I want to see
+all the tweets from this user and that
+
+00:25:18.120 --> 00:25:25.799 align:start position:19%
+user and another user and additionally
+all the tweets that mention J Focus or
+
+00:25:23.720 --> 00:25:30.440 align:start position:19%
+Stockholm and then and then you will get
+a real time push of those what happens
+
+00:25:27.840 --> 00:25:33.440 align:start position:19%
+is that the the tweets are tokenized the
+edge machine when you open the
+
+00:25:32.320 --> 00:25:37.399 align:start position:19%
+connection to this you're actually
+sending an HTTP request that has a huge
+
+00:25:35.600 --> 00:25:40.679 align:start position:19%
+list of parameters saying these are all
+the tokens I'm interested in and then
+
+00:25:39.279 --> 00:25:46.600 align:start position:19%
+it's doing the filtering and only
+sending you those tokens that that that
+
+00:25:43.240 --> 00:25:52.360 align:start position:19%
+uh you are interested in this is a this
+is search light in a sense that uh
+
+00:25:49.480 --> 00:26:00.039 align:start position:19%
+instead of hitting the expensive blender
+query API you are just getting a uh uh
+
+00:25:57.640 --> 00:26:03.880 align:start position:19%
+stream that's filtered on user and
+content tokens uh we might be sending
+
+00:26:02.640 --> 00:26:08.799 align:start position:19%
+you a little bit more than you
+originally wanted to get but this is
+
+00:26:07.000 --> 00:26:13.159 align:start position:19%
+counteracted by the fact that the the
+client tweet deck or whoever can do some
+
+00:26:11.159 --> 00:26:18.240 align:start position:19%
+client side filtering on it additionally
+so we don't worry much about
+
+00:26:15.120 --> 00:26:21.720 align:start position:19%
+that um and there is the user streams
+which basically replicates your home
+
+00:26:19.480 --> 00:26:26.360 align:start position:19%
+timeline experience you log into the uh
+Twitter for Mac or Twitter on your
+
+00:26:24.120 --> 00:26:28.880 align:start position:19%
+iPhone and as tweets or tweetbot or
+whatever and as tweets are coming in you
+
+00:26:28.000 --> 00:26:32.919 align:start position:19%
+are just
+getting them right so it's almost
+
+00:26:30.840 --> 00:26:38.880 align:start position:19%
+identical to track follow except that
+instead of you specifying the Search
+
+00:26:34.720 --> 00:26:43.279 align:start position:19%
+terms it's basically saying anything
+tweeted by these
+
+00:26:41.000 --> 00:26:47.840 align:start position:19%
+people you will send it out on the
+socket so anything tweeted out by your
+
+00:26:45.360 --> 00:26:52.120 align:start position:19%
+followers it will be sent out of the uh
+through through this socket and the
+
+00:26:49.840 --> 00:26:56.240 align:start position:19%
+reason why we have to propagate social
+graph changes through this cluster as
+
+00:26:54.080 --> 00:27:00.120 align:start position:19%
+well is that if you start to follow
+somebody new then all the edge machine
+
+00:26:58.200 --> 00:27:04.399 align:start position:19%
+machines will have to get notified that
+hey this guy is now following somebody
+
+00:27:01.600 --> 00:27:09.120 align:start position:19%
+new so yeah now you will need to stream
+additional tweets through that
+
+00:27:06.440 --> 00:27:15.080 align:start position:19%
+connection for that for that person for
+his Mac on
+
+00:27:11.159 --> 00:27:19.440 align:start position:19%
+iPad uh or you stop stop following
+somebody or you blocked somebody then
+
+00:27:16.840 --> 00:27:27.840 align:start position:19%
+obviously again this needs to be updated
+uh most of the uh most of the RAM and
+
+00:27:24.039 --> 00:27:33.640 align:start position:19%
+CPU in these machines is actually uh
+used by maintaining this kind of a cach
+
+00:27:30.480 --> 00:27:37.679 align:start position:19%
+coherence uh of
+course I think we also do something
+
+00:27:35.960 --> 00:27:42.840 align:start position:19%
+since we have a lot of these machines
+they will do rolling uh updates uh of
+
+00:27:41.240 --> 00:27:46.440 align:start position:19%
+social graph as well so sometime they
+just throw away whatever is CED and
+
+00:27:44.320 --> 00:27:51.399 align:start position:19%
+refresh from the social graph just for
+additional
+
+00:27:48.200 --> 00:27:57.200 align:start position:19%
+consistency all right so
+um this is what we covered so far which
+
+00:27:54.880 --> 00:28:04.480 align:start position:19%
+is quite a lot so there is your Twitter
+for Mac basically when this thing uh
+
+00:28:00.880 --> 00:28:11.200 align:start position:19%
+runs it it never hits the pool API it
+just goes through push except when you
+
+00:28:06.679 --> 00:28:15.519 align:start position:19%
+start it because when you start it uh if
+it only used the push API your Twitter
+
+00:28:13.559 --> 00:28:19.320 align:start position:19%
+client would start blank and as people
+are real- time tweeting you it will
+
+00:28:17.120 --> 00:28:24.000 align:start position:19%
+start to fill up but that's bad user
+experience you would like to see the
+
+00:28:20.840 --> 00:28:28.480 align:start position:19%
+tweets uh that were tweeted several
+minutes before you launched your client
+
+00:28:25.919 --> 00:28:32.640 align:start position:19%
+so in launch Twitter from Mac or IP
+iPhone iPad whatever it goes to the
+
+00:28:30.360 --> 00:28:37.360 align:start position:19%
+timeline service pulls tweets back fills
+its UI and after that it only talks to
+
+00:28:34.480 --> 00:28:40.279 align:start position:19%
+the HTTP push well except if you scroll
+back a lot then it again has to talk to
+
+00:28:38.919 --> 00:28:45.320 align:start position:19%
+the timeline service but mostly we try
+to avoid
+
+00:28:42.320 --> 00:28:53.159 align:start position:19%
+it all right we covered almost all of
+push except the mobile push so um yeah
+
+00:28:50.600 --> 00:29:01.559 align:start position:19%
+let's quickly talk about
+that mobile push
+
+00:28:56.600 --> 00:29:05.080 align:start position:19%
+is very it's somewhat similar to http
+push and it's somewhat similar to The
+
+00:29:03.440 --> 00:29:11.360 align:start position:19%
+reddis Fan out it's an interesting
+hybrid of the two um every tweet will
+
+00:29:08.559 --> 00:29:16.279 align:start position:19%
+hit the mobile push demons which are
+similar to The a little bit similar to
+
+00:29:13.440 --> 00:29:20.240 align:start position:19%
+how fan out works because the mobile
+push demos will also interrogate the
+
+00:29:18.240 --> 00:29:26.360 align:start position:19%
+social service graph to figure out who
+do you mobile follow now um Twitter
+
+00:29:24.399 --> 00:29:30.120 align:start position:19%
+actually has more than one follower
+graph because there is such a thing as
+
+00:29:28.399 --> 00:29:33.960 align:start position:19%
+follow and there is such thing as mobile
+follow you might be following a lot of
+
+00:29:31.519 --> 00:29:41.360 align:start position:19%
+people but you don't necessarily want to
+um be notified when all in SMS when all
+
+00:29:37.799 --> 00:29:46.039 align:start position:19%
+of those people uh tweet so you can
+separately specify who are people for
+
+00:29:43.519 --> 00:29:51.840 align:start position:19%
+whom you might want to get uh push push
+notifications on iPhone or SMS and so on
+
+00:29:49.440 --> 00:29:58.760 align:start position:19%
+so uh it interrogates for the mobile
+follow and and to all your mobile
+
+00:29:54.919 --> 00:30:04.080 align:start position:19%
+followers then it similarly fans out
+except instead of into a timeline
+
+00:30:01.279 --> 00:30:10.840 align:start position:19%
+cache this works in a separate data
+center which has dedicated lines for
+
+00:30:07.320 --> 00:30:15.840 align:start position:19%
+almost all of the world's mobile phone
+carriers it's a when you think about it
+
+00:30:13.360 --> 00:30:21.519 align:start position:19%
+it's quite scary right but this is what
+it does and then you know just exerts
+
+00:30:19.360 --> 00:30:27.360 align:start position:19%
+pressure on them just sends to their API
+saying uh we have a phone number of on
+
+00:30:24.840 --> 00:30:31.320 align:start position:19%
+file send this SMS to this phone number
+and pushes there's usually a bit of a
+
+00:30:29.320 --> 00:30:37.360 align:start position:19%
+back pressure on that so uh when your
+tweets get dropped it's most likely not
+
+00:30:34.159 --> 00:30:42.360 align:start position:19%
+Twitter more likely AT&amp;T but let's not
+shift the blame but anyway yes let's
+
+00:30:39.600 --> 00:30:42.360 align:start position:19%
+shift the blame it's
+
+00:30:44.200 --> 00:30:54.559 align:start position:19%
+them and yeah that's pretty much how it
+works all right
+
+00:30:51.200 --> 00:30:58.399 align:start position:19%
+um so the idea is that we actually want
+to um ideally we would like to all
+
+00:30:56.559 --> 00:31:02.679 align:start position:19%
+computation to happen within 100 seconds
+of a tweet arriving within
+
+00:31:00.039 --> 00:31:07.000 align:start position:19%
+Twitter I'm not sure whether we are
+whether we are hitting the goal yet or
+
+00:31:04.600 --> 00:31:11.080 align:start position:19%
+not but most of the computation should
+actually happen obviously you have I
+
+00:31:08.840 --> 00:31:15.120 align:start position:19%
+mean a big fan out to Red this will will
+will will take a
+
+00:31:12.480 --> 00:31:21.760 align:start position:19%
+while all
+right what else do we have okay this is
+
+00:31:18.919 --> 00:31:26.120 align:start position:19%
+a recap slide oh yeah we have batch
+computation um this is not real time
+
+00:31:24.600 --> 00:31:32.880 align:start position:19%
+it's included for the sake of
+completeness uh there is a honking big
+
+00:31:29.279 --> 00:31:37.799 align:start position:19%
+Bank of clusters which also receive all
+the right API run a bunch load of
+
+00:31:34.960 --> 00:31:41.919 align:start position:19%
+analytics on it and if you don't log
+into a Twitter for a day or so you might
+
+00:31:40.159 --> 00:31:45.200 align:start position:19%
+actually receive an email from Twitter
+saying hey these are some tweet that we
+
+00:31:43.600 --> 00:31:50.080 align:start position:19%
+think are interesting and that you might
+have
+
+00:31:46.360 --> 00:31:54.760 align:start position:19%
+missed that's what Hado does uh runs
+analytics and uh sends you out this
+
+00:31:52.399 --> 00:31:59.000 align:start position:19%
+email it again it knows what you might
+you might find interesting only from
+
+00:31:57.039 --> 00:32:02.639 align:start position:19%
+people you follow but then it can use a
+bunch of signals as in what was
+
+00:32:00.360 --> 00:32:07.000 align:start position:19%
+interesting to you in the past what
+tweets with links from those have people
+
+00:32:05.000 --> 00:32:12.840 align:start position:19%
+clicked the most that's why it's good to
+have a routing URL shortener for better
+
+00:32:09.960 --> 00:32:19.120 align:start position:19%
+or worse um and that's what the hudo
+cluster does this is not real time it
+
+00:32:14.880 --> 00:32:24.279 align:start position:19%
+runs uh nightly right now I think uh
+whenever they can they will try to make
+
+00:32:21.000 --> 00:32:27.639 align:start position:19%
+it uh uh hourly or even more frequent
+obviously the more frequent the better
+
+00:32:25.880 --> 00:32:33.159 align:start position:19%
+the better it can service everybody
+right I think it runs nightly so when we
+
+00:32:31.039 --> 00:32:37.120 align:start position:19%
+talk about the path we have the
+synchronous path which is hitting the
+
+00:32:34.639 --> 00:32:42.440 align:start position:19%
+right API as I said aside
+from a little bit of tweet D duplication
+
+00:32:40.279 --> 00:32:46.799 align:start position:19%
+and similar it returns really quickly
+within five 50 milliseconds or less so
+
+00:32:44.519 --> 00:32:52.880 align:start position:19%
+as to not confuse your device trying to
+go over a shaky Edge
+
+00:32:49.799 --> 00:32:57.279 align:start position:19%
+connection and uh everything after that
+happens completely asynchronously
+
+00:32:55.080 --> 00:33:00.840 align:start position:19%
+completely independent this three pass
+uh happen uh completely independent of
+
+00:32:59.240 --> 00:33:05.200 align:start position:19%
+each other and this is the Tweet
+delivery and uh there is the and there
+
+00:33:03.760 --> 00:33:08.679 align:start position:19%
+obviously there's a query path for when
+you go to the website you query the
+
+00:33:06.960 --> 00:33:15.000 align:start position:19%
+timeline and you have the discovery and
+the search there just a quick recap so
+
+00:33:12.480 --> 00:33:22.600 align:start position:19%
+RAF You' like to us to talk about some
+things we're trying namely uh again you
+
+00:33:19.559 --> 00:33:29.080 align:start position:19%
+tweet something and it hits the right
+API goes to the ingestor goes to early
+
+00:33:25.159 --> 00:33:35.279 align:start position:19%
+bids and Rices uh
+one of these things is fairly much like
+
+00:33:31.240 --> 00:33:40.960 align:start position:19%
+the other right so one side is ingesting
+into surged indexes so the Tweet will be
+
+00:33:38.760 --> 00:33:46.039 align:start position:19%
+indexed into the index for the word
+hello and the index for the for the word
+
+00:33:43.519 --> 00:33:50.480 align:start position:19%
+world and on the fan out if we go to the
+fan out index roughy tweets then we know
+
+00:33:48.559 --> 00:33:56.080 align:start position:19%
+that Dana is following him so we'll need
+to insert the Tweet into Dana's index so
+
+00:33:53.080 --> 00:34:00.399 align:start position:19%
+it's all about inserting tweet IDs into
+indexes they're really really similar
+
+00:34:04.440 --> 00:34:12.280 align:start position:19%
+right so we always have a user intent
+you have a query expansion which uh uh
+
+00:34:10.280 --> 00:34:17.919 align:start position:19%
+when you search for Hello World you want
+to search for the intersection of the
+
+00:34:14.720 --> 00:34:21.599 align:start position:19%
+indexes hello and the world on the other
+hand when you say I want raf's home
+
+00:34:20.000 --> 00:34:27.280 align:start position:19%
+timeline which is now right now works
+from redis what you're really saying is
+
+00:34:24.760 --> 00:34:30.839 align:start position:19%
+you want this key from the reddis but
+this key from the red this is actually a
+
+00:34:29.079 --> 00:34:35.879 align:start position:19%
+union of a bunch of others because if
+Rafi follows Nelson and Dana then uh
+
+00:34:33.800 --> 00:34:40.960 align:start position:19%
+then we will need to uh actually get a
+get a merge of these people's uh
+
+00:34:38.720 --> 00:34:44.919 align:start position:19%
+people's indices so both of these things
+are Boolean operations on indices they
+
+00:34:43.480 --> 00:34:51.679 align:start position:19%
+are very
+similar so there are some thinking on U
+
+00:34:49.839 --> 00:34:56.000 align:start position:19%
+how the hell could we unify these things
+right so uh but you also see there's
+
+00:34:54.200 --> 00:35:00.240 align:start position:19%
+this interesting Duality one is Fan in
+one is fan out the other is fan out one
+
+00:34:58.240 --> 00:35:05.720 align:start position:19%
+is cheap to write expensive to read one
+is expensive to write cheap to read and
+
+00:35:03.800 --> 00:35:09.720 align:start position:19%
+it works right now because people search
+less than they update their timeline so
+
+00:35:07.680 --> 00:35:14.160 align:start position:19%
+you would think it's fine except for one
+little
+
+00:35:11.440 --> 00:35:19.560 align:start position:19%
+thing
+celebrities uh when celebrities tweet
+
+00:35:17.359 --> 00:35:24.119 align:start position:19%
+then you might have to update like few
+Millions timelines that takes time it
+
+00:35:22.240 --> 00:35:29.640 align:start position:19%
+introduces unpredictability into the
+system and uh and you know uh uh good
+
+00:35:27.960 --> 00:35:33.680 align:start position:19%
+system engineer gets nervous when
+there's unpredictability so you are it's
+
+00:35:31.920 --> 00:35:38.560 align:start position:19%
+hard to capacity plan for that so you
+would like to do uh you you would like
+
+00:35:35.520 --> 00:35:44.000 align:start position:19%
+lesson city in in your
+system and so how well one thing that
+
+00:35:41.960 --> 00:35:52.280 align:start position:19%
+can be done is
+uh okay 10 minutes excellent all right
+
+00:35:48.160 --> 00:35:57.599 align:start position:19%
+that chimes in with my own timer and uh
+so uh you could do things where you we
+
+00:35:55.319 --> 00:36:01.760 align:start position:19%
+say okay if somebody has a lot of follow
+followers so we have a celebrity
+
+00:35:59.960 --> 00:36:06.160 align:start position:19%
+threshold Twitter celebrity threshold
+that' be a nice thing right like 2
+
+00:36:04.280 --> 00:36:12.200 align:start position:19%
+million followers you have more than two
+million followers then uh Twitter will
+
+00:36:08.520 --> 00:36:20.160 align:start position:19%
+just not fan out your tweets into
+redis just not instead when somebody
+
+00:36:17.480 --> 00:36:25.200 align:start position:19%
+wants to pull their timeline and they
+are following some celebrities then what
+
+00:36:22.160 --> 00:36:29.319 align:start position:19%
+we do we return the ruffy's home
+timeline so rfy needs his timeline we
+
+00:36:27.319 --> 00:36:36.040 align:start position:19%
+return timeline into which we were
+merging all the uh the uh less followed
+
+00:36:33.119 --> 00:36:42.480 align:start position:19%
+people so myself my tweets would end up
+uh in that particular index uh because I
+
+00:36:38.800 --> 00:36:47.880 align:start position:19%
+don't have many followers but uh roughy
+likes Taylor Swift apparently so uh uh
+
+00:36:45.200 --> 00:36:53.280 align:start position:19%
+and when she tweets uh we wouldn't merge
+Taylor's uh tweets into roughest
+
+00:36:50.280 --> 00:36:58.760 align:start position:19%
+timeline rather when Rafi retrieves the
+timeline we would do a real-time merge
+
+00:36:55.359 --> 00:37:04.680 align:start position:19%
+of celebrities so we have a pre-computed
+preached partial
+
+00:37:00.920 --> 00:37:11.040 align:start position:19%
+timeline for for lighter uh lightly
+followed people and we have a real-time
+
+00:37:08.079 --> 00:37:16.400 align:start position:19%
+merge of Highly followed people so
+writing gets cheaper reading gets a bit
+
+00:37:13.880 --> 00:37:21.040 align:start position:19%
+more expensive depends on where you make
+your threshold you can you can hit a
+
+00:37:18.599 --> 00:37:26.599 align:start position:19%
+sweet spot with a computation so that's
+one of the things that might be thought
+
+00:37:24.000 --> 00:37:30.520 align:start position:19%
+of as experiment there's also the
+question of a streaming compute uh this
+
+00:37:28.880 --> 00:37:35.480 align:start position:19%
+is the generalization of the push
+infrastructure hose bird is a pretty old
+
+00:37:32.680 --> 00:37:38.880 align:start position:19%
+piece of uh Twitter infrastructure but
+it's not leveraged for any other
+
+00:37:37.000 --> 00:37:44.720 align:start position:19%
+purposes except for this kind of a light
+tokenization delivery and track and
+
+00:37:40.800 --> 00:37:51.760 align:start position:19%
+follow and so on uh there is uh Nathan
+matz has his Cloud uh sorry storm it's
+
+00:37:50.000 --> 00:37:56.000 align:start position:19%
+hard to get up to date with all the
+weather-based
+
+00:37:53.119 --> 00:37:59.520 align:start position:19%
+terminology uh so he has a storm uh
+computational uh continuous
+
+00:37:57.839 --> 00:38:04.160 align:start position:19%
+computational system written inclosure
+it's actually a really really nice piece
+
+00:38:00.760 --> 00:38:07.839 align:start position:19%
+of code um it's it's available on GitHub
+and Twitter is U internally I guess
+
+00:38:06.119 --> 00:38:11.880 align:start position:19%
+starting to deliver it for things you
+can do things like a realtime
+
+00:38:09.800 --> 00:38:15.800 align:start position:19%
+clickstream analysis for figuring out
+people's interests so that in a real
+
+00:38:13.599 --> 00:38:20.280 align:start position:19%
+time you can re rerank search results
+because you can quickly notice that
+
+00:38:17.480 --> 00:38:24.119 align:start position:19%
+something became more uh popular than
+something else it can be uh used for a
+
+00:38:23.160 --> 00:38:29.240 align:start position:19%
+lot of things this is basically a
+generalization of the push mechanism you
+
+00:38:26.280 --> 00:38:34.040 align:start position:19%
+want to do more computation on the right
+PA and uh end up with hopefully less dis
+
+00:38:32.240 --> 00:38:38.119 align:start position:19%
+and memory usage on the read
+pass
+
+00:38:36.040 --> 00:38:45.319 align:start position:19%
+so so these are some of the things that
+we're trying uh okay recap of the uh
+
+00:38:41.560 --> 00:38:50.160 align:start position:19%
+full system and uh we'll finish with uh
+some timeline
+
+00:38:47.440 --> 00:38:55.400 align:start position:19%
+statistics Twitter has about 150 million
+active users worldwide you get about
+
+00:38:53.560 --> 00:39:03.319 align:start position:19%
+300,000
+uh uh pole base bed timeline requests
+
+00:38:59.079 --> 00:39:09.119 align:start position:19%
+per second that's quite a lot um the 8
+percen for the for satisfying this
+
+00:39:05.800 --> 00:39:14.520 align:start position:19%
+lookup is 1 millisecond that's amazing
+uh four uh 99% is four milliseconds
+
+00:39:12.920 --> 00:39:18.480 align:start position:19%
+typically 1 millisecond is for the
+redest lookup itself rest of the
+
+00:39:16.280 --> 00:39:25.359 align:start position:19%
+latencies goes to the composition
+there's also like 30k uh queries uh per
+
+00:39:22.400 --> 00:39:31.680 align:start position:19%
+uh second for the search based timelines
+and uh what we have on the input side is
+
+00:39:28.200 --> 00:39:39.079 align:start position:19%
+about 340 million tweets a day uh and
+growing uh average is
+
+00:39:34.880 --> 00:39:45.119 align:start position:19%
+4K Peak is about 6K daily you have large
+events can jump up to 10 uh for for for
+
+00:39:42.599 --> 00:39:50.079 align:start position:19%
+a little bit now the thing is these
+numbers are actually not particularly
+
+00:39:48.440 --> 00:39:52.920 align:start position:19%
+impressive on their own you might think
+they are they're not we'll get to the
+
+00:39:51.800 --> 00:40:01.400 align:start position:19%
+impressive
+numbers um so this is
+
+00:39:58.119 --> 00:40:09.119 align:start position:19%
+this is a change in a Twitter
+traffic over time this is one
+
+00:40:05.760 --> 00:40:14.000 align:start position:19%
+day this is the average as you can see
+the system is actually running quite a
+
+00:40:10.839 --> 00:40:19.720 align:start position:19%
+lot above average which and it on its
+own this doesn't really mean anything
+
+00:40:15.720 --> 00:40:24.720 align:start position:19%
+but uh but you have to plan for that um
+the pattern is closely correlated
+
+00:40:21.680 --> 00:40:30.720 align:start position:19%
+obviously with uh when is the sun mostly
+up above regions where people tweet a
+
+00:40:27.720 --> 00:40:30.720 align:start position:19%
+lot
+
+00:40:31.760 --> 00:40:40.960 align:start position:19%
+um however what is interesting is that
+when Rafi when Dana tweets or Rafi
+
+00:40:38.920 --> 00:40:49.200 align:start position:19%
+tweets they follow each other they will
+see each other's tweets but as soon as
+
+00:40:44.920 --> 00:40:55.880 align:start position:19%
+you add more people in the mix every
+tweet that's tweeted every single one of
+
+00:40:51.760 --> 00:41:06.680 align:start position:19%
+those 340 million tweets per day are
+delivered to many other people so that's
+
+00:41:02.800 --> 00:41:12.640 align:start position:19%
+why it's not so much about 340 million
+tweets a day okay whatever but this
+
+00:41:09.359 --> 00:41:16.640 align:start position:19%
+means 26 billion deliveries of tweets a
+day because each tweet has to be
+
+00:41:13.839 --> 00:41:20.000 align:start position:19%
+delivered to many people it's like 18
+million per minute you get that down to
+
+00:41:18.599 --> 00:41:24.839 align:start position:19%
+I don't know what's what's that in
+seconds but it's oh yeah it's it's there
+
+00:41:21.839 --> 00:41:30.359 align:start position:19%
+it's 300,000 delivers per second uh it's
+a lot that's so many times tweet is
+
+00:41:27.720 --> 00:41:34.920 align:start position:19%
+inserted into reddis a tweet is pushed
+through a hir cluster a tweet will ring
+
+00:41:33.720 --> 00:41:40.119 align:start position:19%
+somebody's
+phone that's
+
+00:41:36.960 --> 00:41:43.560 align:start position:19%
+300,000 times per second that is an
+impressive number and there's an
+
+00:41:41.720 --> 00:41:50.000 align:start position:19%
+infrastructure that handles
+that so uh the real motivating factor
+
+00:41:47.640 --> 00:41:56.280 align:start position:19%
+for why do we want to do this I don't
+know how do you see it this
+
+00:41:53.800 --> 00:42:01.160 align:start position:19%
+is immediately after following the Japan
+earthquake you see the the flow of the
+
+00:41:58.599 --> 00:42:08.640 align:start position:19%
+tweets as the earthquake hit as as you
+had the global replies and this is why
+
+00:42:03.960 --> 00:42:15.920 align:start position:19%
+you need real-time delivery this
+is this is what
+
+00:42:13.119 --> 00:42:22.319 align:start position:19%
+differentiates data from information
+information information is something
+
+00:42:18.200 --> 00:42:27.839 align:start position:19%
+that has value for people at the time it
+is delivered Twitter delivers
+
+00:42:24.880 --> 00:42:33.680 align:start position:19%
+information faster these days days than
+anything else on the planet there's this
+
+00:42:30.599 --> 00:42:38.520 align:start position:19%
+uh when when that plane landed in Hudson
+the New York Times people uh journalists
+
+00:42:36.440 --> 00:42:42.599 align:start position:19%
+were watching it from their windows and
+they knew they cannot publish it for
+
+00:42:40.119 --> 00:42:47.640 align:start position:19%
+several hours until they go to print but
+it was on Twitter and uh most recently
+
+00:42:46.119 --> 00:42:51.520 align:start position:19%
+well not most recently fortunately it
+has been for a while now but the example
+
+00:42:49.839 --> 00:42:58.559 align:start position:19%
+that RAF is here had on the
+video many of those tweets going in and
+
+00:42:54.839 --> 00:43:03.280 align:start position:19%
+out from Japan were tweets about people
+giving a sign telling I'm fine and other
+
+00:43:00.760 --> 00:43:09.119 align:start position:19%
+people asking are you fine conversation
+is also real time and uh and uh and
+
+00:43:07.040 --> 00:43:13.920 align:start position:19%
+being able to have a real time two-way
+conversation just give give a sign I
+
+00:43:11.880 --> 00:43:17.839 align:start position:19%
+mean just think about it the most basic
+thing give a sign that you are alive in
+
+00:43:15.880 --> 00:43:24.440 align:start position:19%
+the time of trouble now that's a big
+thing that's why real-time delivery
+
+00:43:20.280 --> 00:43:35.620 align:start position:19%
+matters and with that that's uh all I
+had to say thank you
+
+00:43:27.190 --> 00:43:35.620 align:start position:19%
+[Applause]
+

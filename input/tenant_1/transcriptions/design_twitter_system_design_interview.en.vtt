@@ -1,0 +1,1496 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:06.359 align:start position:19%
+let's design the high level architecture
+of Twitter I mean how hard Could It Be
+
+00:00:04.140 --> 00:00:09.780 align:start position:19%
+by the way this video is taken from my
+ongoing course system design interview
+
+00:00:07.980 --> 00:00:13.799 align:start position:19%
+which will be complete by the end of
+this month you can check it out on
+
+00:00:11.120 --> 00:00:18.000 align:start position:19%
+neco.io before we get started I do want
+to mention Twitter has been quite a
+
+00:00:15.719 --> 00:00:21.539 align:start position:19%
+popular topic recently especially the
+underlying infrastructure and design but
+
+00:00:20.160 --> 00:00:26.220 align:start position:19%
+keep in mind that in a real interview
+Your Design does not have to exactly
+
+00:00:24.000 --> 00:00:29.400 align:start position:19%
+match the product that's not what it's
+about at all it's about discussing the
+
+00:00:27.960 --> 00:00:34.440 align:start position:19%
+trade-offs and kind of demonstrating
+your knowledge of being able to weigh
+
+00:00:32.279 --> 00:00:38.640 align:start position:19%
+the pros and cons of an approach and of
+course there's many similar products to
+
+00:00:36.420 --> 00:00:42.660 align:start position:19%
+Twitter there really isn't any one
+correct approach so we don't have to
+
+00:00:40.680 --> 00:00:46.260 align:start position:19%
+actually replicate the real Twitter
+design unless of course you're
+
+00:00:44.219 --> 00:00:49.200 align:start position:19%
+interviewing at Twitter in that case you
+might have to because they recently
+
+00:00:47.460 --> 00:00:53.219 align:start position:19%
+fired everyone so they need people to
+know how it works so let's start with
+
+00:00:51.000 --> 00:00:59.219 align:start position:19%
+the background we know that Twitter is a
+social network first and foremost where
+
+00:00:55.739 --> 00:01:02.820 align:start position:19%
+some people can follow other people and
+that relationship can be be mutual this
+
+00:01:01.079 --> 00:01:08.340 align:start position:19%
+person can also follow the other person
+but some people might end up with more
+
+00:01:05.580 --> 00:01:12.420 align:start position:19%
+followers than others right so assume
+that one person is really popular and
+
+00:01:10.260 --> 00:01:15.240 align:start position:19%
+everybody wants to read all of their
+tweets but you know most people on
+
+00:01:13.920 --> 00:01:19.500 align:start position:19%
+Twitter probably aren't actually
+tweeting very often most people don't
+
+00:01:17.220 --> 00:01:23.040 align:start position:19%
+actually have many followers including
+myself I'm mentioning this because it
+
+00:01:21.420 --> 00:01:27.180 align:start position:19%
+kind of hints that this is going to be a
+very read heavy system and of course on
+
+00:01:25.500 --> 00:01:31.920 align:start position:19%
+Twitter the whole point is that people
+can create tweets so on a particular
+
+00:01:30.000 --> 00:01:35.820 align:start position:19%
+tweet you have a person like this is
+their profile picture and their username
+
+00:01:33.840 --> 00:01:40.320 align:start position:19%
+and then the actual content of the tweet
+it can have some text it can have some
+
+00:01:37.560 --> 00:01:43.799 align:start position:19%
+images and it can have a video there's a
+lot of things you can do to interact
+
+00:01:41.640 --> 00:01:47.939 align:start position:19%
+with a tweet of course you can like the
+Tweet you can do a retweet you can
+
+00:01:46.320 --> 00:01:52.140 align:start position:19%
+follow the person who actually made the
+Tweet or unfollow them recently you can
+
+00:01:50.159 --> 00:01:56.100 align:start position:19%
+even edit tweets now but this is just to
+give you a general idea of what kind of
+
+00:01:54.119 --> 00:01:59.880 align:start position:19%
+functionality you might want to clarify
+with your interviewer so now actually
+
+00:01:57.780 --> 00:02:04.200 align:start position:19%
+digging into the functional requirements
+Twitter is very very large of course we
+
+00:02:02.280 --> 00:02:08.640 align:start position:19%
+can't design every little piece of
+functionality in a 45 minute interview
+
+00:02:06.000 --> 00:02:12.720 align:start position:19%
+so what exactly do we want to spend most
+of our time on and what parts can we
+
+00:02:10.739 --> 00:02:17.280 align:start position:19%
+just kind of hand wave and dismiss and
+just briefly discuss let's say the first
+
+00:02:14.879 --> 00:02:22.680 align:start position:19%
+feature the priority feature is that we
+want to be able to follow other users so
+
+00:02:20.280 --> 00:02:27.060 align:start position:19%
+users can follow each other now there's
+no point of following other people if
+
+00:02:24.660 --> 00:02:32.220 align:start position:19%
+you can't actually create tweets so
+that's also going to be just as
+
+00:02:29.280 --> 00:02:38.580 align:start position:19%
+important and then third is actually
+viewing a news feed now at a basic level
+
+00:02:35.760 --> 00:02:42.300 align:start position:19%
+these two features are pretty simple but
+viewing a feed can definitely be more
+
+00:02:40.620 --> 00:02:45.540 align:start position:19%
+complicated especially when we get into
+how we want to rank that feed what kind
+
+00:02:44.459 --> 00:02:49.620 align:start position:19%
+of algorithm are we going to use
+probably there's machine learning going
+
+00:02:47.160 --> 00:02:53.819 align:start position:19%
+on in there and in many cases you end up
+seeing Tweets in your feed by people
+
+00:02:51.900 --> 00:02:57.599 align:start position:19%
+that you're not even following but we're
+gonna assume that that's not the case
+
+00:02:55.680 --> 00:03:01.019 align:start position:19%
+for reviewing a feed we just want to see
+tweets of people that we actually follow
+
+00:02:59.459 --> 00:03:04.260 align:start position:19%
+I think that would be something worth
+clarifying with your interviewer that's
+
+00:03:02.640 --> 00:03:07.080 align:start position:19%
+something that can kind of scope down
+this interview because you might assume
+
+00:03:06.000 --> 00:03:10.319 align:start position:19%
+that we're doing something really
+complicated but your interviewer is
+
+00:03:08.940 --> 00:03:14.459 align:start position:19%
+actually looking for something more
+simple that's a trap that you don't want
+
+00:03:12.060 --> 00:03:18.000 align:start position:19%
+to fall into now what exactly is going
+to go in the Tweet itself we know that
+
+00:03:16.200 --> 00:03:21.780 align:start position:19%
+Twitter actually has a limit on tweet
+size I think it's 140 characters let's
+
+00:03:20.220 --> 00:03:26.220 align:start position:19%
+assume that your interviewer gives you
+that number but at the same time with
+
+00:03:24.300 --> 00:03:31.920 align:start position:19%
+social networks of course we end up with
+images and videos and let's say that yes
+
+00:03:29.459 --> 00:03:36.180 align:start position:19%
+we are going to include these in our
+design so now let's transition into the
+
+00:03:34.080 --> 00:03:39.360 align:start position:19%
+non-functional requirements which is not
+going to be completely separate from
+
+00:03:37.739 --> 00:03:42.420 align:start position:19%
+these actual features we're implementing
+the first thing you probably want to
+
+00:03:40.680 --> 00:03:48.060 align:start position:19%
+know is how many users we're talking
+about here let's say the number is 500
+
+00:03:45.480 --> 00:03:52.560 align:start position:19%
+million total users but in terms of
+daily active users we have about 200
+
+00:03:50.459 --> 00:03:55.500 align:start position:19%
+million of them that are daily active I
+think that's pretty close to the real
+
+00:03:53.879 --> 00:03:59.760 align:start position:19%
+number but remember the real number
+isn't so important I think the main
+
+00:03:57.720 --> 00:04:04.799 align:start position:19%
+observation here is that almost half
+half of the users are active so when we
+
+00:04:02.580 --> 00:04:08.220 align:start position:19%
+actually create feeds for users we'll be
+doing it for most users most people are
+
+00:04:06.840 --> 00:04:12.780 align:start position:19%
+going to be logging on most people are
+going to be viewing their feed well not
+
+00:04:10.439 --> 00:04:16.380 align:start position:19%
+most but nearly half which is a pretty
+large percentage about 40 percent Now
+
+00:04:14.760 --> 00:04:20.100 align:start position:19%
+While most people will be viewing their
+feed they probably won't be creating
+
+00:04:18.239 --> 00:04:25.020 align:start position:19%
+tweets but again this is something we
+have to clarify let's say of those 200
+
+00:04:22.800 --> 00:04:31.440 align:start position:19%
+million daily active users each of them
+will read about a hundred tweets per day
+
+00:04:28.740 --> 00:04:38.340 align:start position:19%
+so 200 million times a hundred that's
+going to be 20 billion tweet reads per
+
+00:04:35.100 --> 00:04:44.160 align:start position:19%
+day now what is the size of each tweet
+if we have 140 characters that's about
+
+00:04:41.520 --> 00:04:48.060 align:start position:19%
+140 bytes but let's assume that there's
+additional information with a tweet we
+
+00:04:46.320 --> 00:04:52.259 align:start position:19%
+have the username of that tweet and
+possibly there's a lot more metadata to
+
+00:04:50.160 --> 00:04:56.699 align:start position:19%
+be safe or just a basic tweet that just
+includes text we can assume that for
+
+00:04:54.180 --> 00:05:01.080 align:start position:19%
+each tweet we have to do a kilobyte of
+reading from our storage now we also
+
+00:04:59.160 --> 00:05:05.820 align:start position:19%
+know that some tweets can contain images
+and videos so on average this is going
+
+00:05:03.840 --> 00:05:08.820 align:start position:19%
+to be higher how much higher we could
+spend a lot of time digging into the
+
+00:05:07.500 --> 00:05:12.000 align:start position:19%
+math you could ask your interviewer a
+bunch of questions but most likely this
+
+00:05:10.560 --> 00:05:16.740 align:start position:19%
+is not what they want you to spend time
+on let's just average this up to a
+
+00:05:14.400 --> 00:05:20.580 align:start position:19%
+megabyte because maybe videos on average
+are 10 megabytes if they're a bit longer
+
+00:05:18.780 --> 00:05:24.539 align:start position:19%
+which I don't know what the limit is for
+a video length on Twitter but it could
+
+00:05:22.259 --> 00:05:28.259 align:start position:19%
+be reasonably high but we also know that
+few tweets are going to actually have
+
+00:05:26.280 --> 00:05:31.139 align:start position:19%
+this so we average it down to this
+because most tweets are going to be
+
+00:05:29.460 --> 00:05:34.800 align:start position:19%
+about a kilobyte let's say so let's say
+a megabyte per each tweet so how much
+
+00:05:33.120 --> 00:05:40.080 align:start position:19%
+data are we going to be reading if it's
+20 billion tweets a megabyte for each
+
+00:05:36.900 --> 00:05:45.300 align:start position:19%
+tweet that is quite a lot of data so if
+each tweet was just one byte 20 billion
+
+00:05:42.840 --> 00:05:49.680 align:start position:19%
+that's going to be 20 Gigabytes but now
+we're actually multiplying this by a
+
+00:05:47.520 --> 00:05:53.699 align:start position:19%
+megabyte which is a million so multiply
+this by a thousand we get 20 terabytes
+
+00:05:52.020 --> 00:05:57.060 align:start position:19%
+but we have to multiply it by a thousand
+again because that's you know what a
+
+00:05:55.139 --> 00:06:02.639 align:start position:19%
+million is and then we get to 20
+petabytes so overall we're going to be
+
+00:05:59.400 --> 00:06:07.080 align:start position:19%
+reading 20 petabytes of data per day now
+it's no surprise to us that this is
+
+00:06:04.440 --> 00:06:11.100 align:start position:19%
+going to be a read heavy system this is
+kind of hinting to us what type of
+
+00:06:09.000 --> 00:06:14.820 align:start position:19%
+storage solution should we use we
+probably don't need to be strongly
+
+00:06:12.780 --> 00:06:18.660 align:start position:19%
+consistent eventual consistency is
+enough and that brings us to how much
+
+00:06:16.860 --> 00:06:22.440 align:start position:19%
+are we going to be writing per day how
+many tweets are we going to be creating
+
+00:06:20.100 --> 00:06:27.300 align:start position:19%
+per day well we have 200 million daily
+active users so let's say a reasonable
+
+00:06:24.780 --> 00:06:30.060 align:start position:19%
+number is 50 million tweets created per
+day most people aren't going to be
+
+00:06:28.620 --> 00:06:34.139 align:start position:19%
+creating tweets but maybe some people
+create 10 tweets per day so this is a
+
+00:06:32.639 --> 00:06:37.380 align:start position:19%
+decent number but you're not going to be
+guessing this your interviewer should be
+
+00:06:35.699 --> 00:06:40.380 align:start position:19%
+giving you something reasonable now we
+could go through the rest of the math
+
+00:06:38.819 --> 00:06:44.460 align:start position:19%
+with this number and I can show you that
+we're going to be writing much less than
+
+00:06:42.180 --> 00:06:48.240 align:start position:19%
+20 petabytes of data per day especially
+if we don't include the images and
+
+00:06:46.380 --> 00:06:52.080 align:start position:19%
+videos which we're probably not going to
+be directly storing in a database but
+
+00:06:50.460 --> 00:06:55.259 align:start position:19%
+the main thing here to realize is that
+yes we're going to be writing much less
+
+00:06:53.580 --> 00:07:00.660 align:start position:19%
+than we're reading so that's how we want
+to optimize our design and let's say
+
+00:06:57.539 --> 00:07:05.580 align:start position:19%
+that the average user follow those about
+a hundred people so a hundred follows
+
+00:07:03.720 --> 00:07:10.139 align:start position:19%
+per person but of course there can be
+power users who have a thousand or ten
+
+00:07:07.919 --> 00:07:15.060 align:start position:19%
+thousand people that they follow but the
+more important consideration here is for
+
+00:07:12.419 --> 00:07:18.600 align:start position:19%
+a user how many followers can they have
+someone like Kim Kardashian I don't know
+
+00:07:16.979 --> 00:07:22.440 align:start position:19%
+if she's the most popular on Twitter but
+I think it's at least over a hundred
+
+00:07:20.280 --> 00:07:26.819 align:start position:19%
+million followers that they have so this
+is the more important consideration
+
+00:07:24.000 --> 00:07:30.780 align:start position:19%
+people who have a massive amount of
+followers so the question is going to be
+
+00:07:28.800 --> 00:07:34.740 align:start position:19%
+for all the people that follow Kim
+Kardashian how are they gonna get the
+
+00:07:32.940 --> 00:07:38.940 align:start position:19%
+tweets this is kind of hinting to us
+that wherever we're storing her tweets
+
+00:07:36.720 --> 00:07:42.240 align:start position:19%
+it's gonna get overloaded pretty quickly
+so now that we kind of know what we're
+
+00:07:40.440 --> 00:07:45.720 align:start position:19%
+looking for let's get into the high
+level design we know of course that
+
+00:07:44.099 --> 00:07:49.979 align:start position:19%
+everything is going to start with our
+client whether that's a computer or a
+
+00:07:48.479 --> 00:07:54.300 align:start position:19%
+mobile device it doesn't really matter
+for us we're focusing on the back end
+
+00:07:51.780 --> 00:07:58.319 align:start position:19%
+which is agnostic to the front end we
+know the first thing our user is going
+
+00:07:56.039 --> 00:08:03.000 align:start position:19%
+to be hitting is the application servers
+to perform actions like creating a tweet
+
+00:08:00.900 --> 00:08:06.300 align:start position:19%
+or getting their news feed or following
+someone now because of the scale that
+
+00:08:04.860 --> 00:08:09.660 align:start position:19%
+we're dealing with we're probably going
+to be bottlenecked by getting the news
+
+00:08:08.280 --> 00:08:13.620 align:start position:19%
+feed that's what's going to be happening
+most frequently and if we want to scale
+
+00:08:11.580 --> 00:08:17.280 align:start position:19%
+this up assuming that these application
+servers are stateless it should be easy
+
+00:08:15.479 --> 00:08:20.940 align:start position:19%
+to scale them up and of course we will
+have the load balancer in between this
+
+00:08:19.319 --> 00:08:24.060 align:start position:19%
+that's pretty hand wavy I mean that's
+something you can just memorize and say
+
+00:08:22.500 --> 00:08:26.879 align:start position:19%
+well if you want to scale horizontally
+scale this and put a load balancer in
+
+00:08:25.560 --> 00:08:29.819 align:start position:19%
+there it's pretty trivial so I'm not
+going to spend a lot of time on that now
+
+00:08:28.500 --> 00:08:33.899 align:start position:19%
+of course our application server is
+going to be reading from some storage
+
+00:08:31.319 --> 00:08:37.800 align:start position:19%
+let's say we do have a database and
+let's say that it is a relational
+
+00:08:35.700 --> 00:08:41.279 align:start position:19%
+database and you might be thinking if
+we're going to be doing read heavy why
+
+00:08:39.300 --> 00:08:45.420 align:start position:19%
+use a relational database why not just
+have a nosql database well it depends on
+
+00:08:43.860 --> 00:08:49.860 align:start position:19%
+what type of data we're going to be
+storing do we need joins in this case
+
+00:08:48.000 --> 00:08:53.100 align:start position:19%
+and we could because we do have a very
+relational model when it comes to
+
+00:08:51.660 --> 00:08:57.240 align:start position:19%
+following that's a pretty clear
+relationship between followers and
+
+00:08:55.080 --> 00:09:01.620 align:start position:19%
+follow ease so that's a reason to go
+with a relational database now in theory
+
+00:08:59.339 --> 00:09:04.860 align:start position:19%
+you it would be easier to scale a nosql
+database but we can Implement sharding
+
+00:09:03.240 --> 00:09:08.880 align:start position:19%
+with a relational database so that does
+give us some flexibility though after
+
+00:09:07.140 --> 00:09:12.480 align:start position:19%
+finishing our high level design we might
+want to revise this because we could
+
+00:09:10.620 --> 00:09:17.820 align:start position:19%
+just store tweets and user information
+in a nosql database and then have the
+
+00:09:14.820 --> 00:09:21.839 align:start position:19%
+graph DB which would be very easy to
+find that follower relationship because
+
+00:09:19.800 --> 00:09:26.100 align:start position:19%
+a graph DB is essentially like an
+adjacency list graph where every person
+
+00:09:24.060 --> 00:09:29.399 align:start position:19%
+is like a node in a graph and to find
+all the people that they follow you just
+
+00:09:27.540 --> 00:09:33.120 align:start position:19%
+have to look at every outgoing Edge and
+to find all the followers of a person
+
+00:09:31.320 --> 00:09:37.019 align:start position:19%
+you just have to look at every incoming
+Edge so depending on your expertise and
+
+00:09:35.279 --> 00:09:39.959 align:start position:19%
+your background and of course what your
+interviewer is looking for and what they
+
+00:09:38.339 --> 00:09:43.740 align:start position:19%
+might be familiar with you can kind of
+have some discussion about these
+
+00:09:41.820 --> 00:09:47.640 align:start position:19%
+differences now with the massive amount
+of reads that we're going to be doing we
+
+00:09:45.300 --> 00:09:52.560 align:start position:19%
+basically have to have a caching layer
+in between so as we're reading tweets we
+
+00:09:50.220 --> 00:09:57.060 align:start position:19%
+will be hitting our cache before we hit
+our database but also remember that we
+
+00:09:54.720 --> 00:10:00.779 align:start position:19%
+are going to be storing media so we need
+a separate storage solution for that
+
+00:09:58.920 --> 00:10:04.200 align:start position:19%
+media related National databases aren't
+the best for that so we'll have some
+
+00:10:02.519 --> 00:10:08.519 align:start position:19%
+type of object storage for that
+something like Google Cloud Storage or
+
+00:10:06.240 --> 00:10:12.839 align:start position:19%
+Amazon S3 so when we actually read a
+tweet we'll be getting the information
+
+00:10:09.720 --> 00:10:16.980 align:start position:19%
+about that tweet like the Tweet ID who's
+the creator of that tweet what time was
+
+00:10:15.060 --> 00:10:20.580 align:start position:19%
+it created whether it included an image
+or not what was the image that it
+
+00:10:18.660 --> 00:10:23.820 align:start position:19%
+included the profile picture of the
+person who made it the application
+
+00:10:21.959 --> 00:10:27.180 align:start position:19%
+server can then fetch the image like the
+profile picture or the video that showed
+
+00:10:25.680 --> 00:10:32.940 align:start position:19%
+up in that tweet and it can do that
+separately but at the same time because
+
+00:10:29.459 --> 00:10:38.519 align:start position:19%
+these assets are static in nature it may
+be better to actually distribute them
+
+00:10:35.160 --> 00:10:42.540 align:start position:19%
+over a CDN Network so then actually our
+application server does not have to
+
+00:10:40.560 --> 00:10:46.680 align:start position:19%
+interact with the object storage the
+application server will respond to the
+
+00:10:44.519 --> 00:10:52.440 align:start position:19%
+user with all the information that they
+need including the URL of that image or
+
+00:10:50.160 --> 00:10:56.700 align:start position:19%
+video that they need and then the client
+whether they're using a mobile device or
+
+00:10:54.360 --> 00:11:01.560 align:start position:19%
+a desktop browser will make a separate
+request which will actually hit our CDN
+
+00:10:59.100 --> 00:11:05.100 align:start position:19%
+Network which is tied to our object
+storage what type of algorithm would we
+
+00:11:03.660 --> 00:11:09.779 align:start position:19%
+use in this case well even though we're
+looking at the high level right now we
+
+00:11:06.839 --> 00:11:13.620 align:start position:19%
+probably want to use a poll based CDN we
+don't want to necessarily push every
+
+00:11:11.519 --> 00:11:17.940 align:start position:19%
+image or video to the CDN immediately
+also remember the benefit of a CDN is
+
+00:11:16.019 --> 00:11:21.779 align:start position:19%
+that it's geographically located close
+to the user we know that people in India
+
+00:11:19.980 --> 00:11:25.920 align:start position:19%
+might be looking at different types of
+tweets and images and videos than people
+
+00:11:23.640 --> 00:11:30.660 align:start position:19%
+in the United States so it doesn't make
+sense to put every single new tweet push
+
+00:11:28.320 --> 00:11:34.620 align:start position:19%
+it directly to the CDN Network and with
+a pull-based CDN we kind of guarantee
+
+00:11:32.760 --> 00:11:39.720 align:start position:19%
+that the stuff that's loaded onto our
+CDN is the relevant stuff that people
+
+00:11:36.839 --> 00:11:43.560 align:start position:19%
+want to see anyway the popular things so
+now let's spend most of our time
+
+00:11:41.160 --> 00:11:47.100 align:start position:19%
+actually digging into the details which
+some people like to start out with the
+
+00:11:45.300 --> 00:11:50.459 align:start position:19%
+interface that we'll be using we will
+have a couple so remember we have a
+
+00:11:49.079 --> 00:11:53.820 align:start position:19%
+create tweet there could be a lot of
+metadata sent with that request of
+
+00:11:52.019 --> 00:11:58.320 align:start position:19%
+course the user ID of the person
+creating the Tweet but mainly the user
+
+00:11:56.220 --> 00:12:03.300 align:start position:19%
+is actually responsible for sending the
+content of the tweets so one is the
+
+00:12:00.899 --> 00:12:07.920 align:start position:19%
+actual text and then second is going to
+be the actual media of course every
+
+00:12:05.579 --> 00:12:11.220 align:start position:19%
+tweet has a created timestamp but we
+assume that that will be handled server
+
+00:12:09.600 --> 00:12:15.420 align:start position:19%
+side and every tweet has to be
+identified but we'll assume that the
+
+00:12:13.079 --> 00:12:18.360 align:start position:19%
+Tweet ID is also created server side and
+of course the user ID of the person
+
+00:12:16.860 --> 00:12:22.260 align:start position:19%
+that's actually creating it well we'll
+assume that in the header of the HTTP
+
+00:12:20.700 --> 00:12:26.220 align:start position:19%
+request that there's some authorization
+token for us to know that the correct
+
+00:12:24.360 --> 00:12:30.899 align:start position:19%
+person is making the Tweet but we could
+also have the user ID passed into this
+
+00:12:28.920 --> 00:12:36.360 align:start position:19%
+request or the username of the person
+and next of course we have getting the
+
+00:12:33.899 --> 00:12:39.899 align:start position:19%
+actual feed and that really doesn't need
+any information at all that's a very
+
+00:12:38.100 --> 00:12:42.899 align:start position:19%
+basic read request we don't need to send
+additional data that we're going to be
+
+00:12:41.100 --> 00:12:46.800 align:start position:19%
+actually storing get feed should just
+pass in the user ID so that we know
+
+00:12:44.579 --> 00:12:52.079 align:start position:19%
+which person's feed are we getting but
+at the same time I should not be able to
+
+00:12:49.260 --> 00:12:55.800 align:start position:19%
+pass in your user ID even if I know it
+to get your user feed there's nothing
+
+00:12:54.240 --> 00:12:59.279 align:start position:19%
+that can go super wrong with that but it
+shouldn't be allowed and that would be
+
+00:12:57.120 --> 00:13:02.639 align:start position:19%
+handled by the HTTP header we know that
+that there's actual authentication going
+
+00:13:01.200 --> 00:13:06.360 align:start position:19%
+on in this system it's just that we're
+not focusing on that we're focusing on
+
+00:13:04.380 --> 00:13:10.200 align:start position:19%
+the actual Twitter design authentication
+happens with pretty much every
+
+00:13:07.620 --> 00:13:16.139 align:start position:19%
+application and we also have the follow
+interaction so a user can follow another
+
+00:13:13.560 --> 00:13:19.860 align:start position:19%
+person they'll pass in their user ID and
+maybe the username of the person that
+
+00:13:18.480 --> 00:13:23.220 align:start position:19%
+they're trying to follow so these are
+the three main interactions now how are
+
+00:13:21.600 --> 00:13:27.779 align:start position:19%
+we actually going to be storing this
+data in particular we're going to be
+
+00:13:24.899 --> 00:13:31.380 align:start position:19%
+storing two things the actual tweets so
+assuming we have a relational database
+
+00:13:29.339 --> 00:13:36.600 align:start position:19%
+we'll have a table of tweets and we'll
+also have a table of follows so the
+
+00:13:34.320 --> 00:13:40.800 align:start position:19%
+follow relationship is pretty simple you
+have the follow e the person who's
+
+00:13:39.240 --> 00:13:45.360 align:start position:19%
+following the other person that's going
+to be a string and we'll have another
+
+00:13:42.420 --> 00:13:49.740 align:start position:19%
+the actual follow ER I think I misspoke
+when I was describing followey so the
+
+00:13:47.399 --> 00:13:54.240 align:start position:19%
+follower is the person that's following
+the following the follow e is the one
+
+00:13:51.959 --> 00:13:59.160 align:start position:19%
+that's being followed now assuming that
+this is a table and remember for a user
+
+00:13:57.000 --> 00:14:03.779 align:start position:19%
+we want to get all the tweets of people
+that this person follows so they're the
+
+00:14:01.620 --> 00:14:08.639 align:start position:19%
+follower and they want all the tweets of
+their followers how would we Index this
+
+00:14:06.240 --> 00:14:13.279 align:start position:19%
+table we'd probably want to index based
+on the follower because then all records
+
+00:14:11.100 --> 00:14:18.720 align:start position:19%
+in that table will be grouped together
+based on the follower so all the people
+
+00:14:16.139 --> 00:14:22.800 align:start position:19%
+that this guy follows will be grouped
+together in the table it'll just be a
+
+00:14:20.639 --> 00:14:27.120 align:start position:19%
+range query so assuming this is our
+table all records for this person will
+
+00:14:24.959 --> 00:14:31.380 align:start position:19%
+be grouped together in a particular
+range over here I think it's worth
+
+00:14:29.160 --> 00:14:35.940 align:start position:19%
+mentioning that we would favor indexing
+based on the follower if we have a read
+
+00:14:33.480 --> 00:14:38.579 align:start position:19%
+heavy system now for the Tweet itself we
+kind of briefly talked about it of
+
+00:14:37.260 --> 00:14:42.899 align:start position:19%
+course we're gonna have the Tweet ID
+we're going to have the time stamp we're
+
+00:14:40.920 --> 00:14:46.199 align:start position:19%
+gonna have the user ID of the person who
+created it and we're gonna have the
+
+00:14:44.279 --> 00:14:51.060 align:start position:19%
+content of the Tweet whether it's the
+text which technically could be empty if
+
+00:14:48.660 --> 00:14:54.300 align:start position:19%
+we have some media attached to it but we
+actually won't be storing the media
+
+00:14:52.380 --> 00:14:58.620 align:start position:19%
+itself in the database we'll have a
+reference to that media that references
+
+00:14:56.579 --> 00:15:03.000 align:start position:19%
+the object store now the bigger problem
+with our storage is we're going to be
+
+00:15:00.540 --> 00:15:05.760 align:start position:19%
+storing a massive amount of data if you
+went through the calculation that I
+
+00:15:04.320 --> 00:15:10.860 align:start position:19%
+mentioned earlier you would have gotten
+to I think roughly 50 gigabytes of data
+
+00:15:08.339 --> 00:15:13.980 align:start position:19%
+are going to be written per day to our
+relational database if we're not
+
+00:15:12.120 --> 00:15:19.260 align:start position:19%
+including the media so that's a lot of
+data in a month we'll have I think 1.5
+
+00:15:16.740 --> 00:15:23.760 align:start position:19%
+terabytes in the course of a year will
+have roughly 18 terabytes so it is a
+
+00:15:22.139 --> 00:15:27.180 align:start position:19%
+large amount of data but it's actually
+reasonable and the good thing about
+
+00:15:25.380 --> 00:15:32.220 align:start position:19%
+Twitter is that tweets are relatively
+small but the problem is we're going to
+
+00:15:29.220 --> 00:15:36.180 align:start position:19%
+be having so many reads hitting this
+database a person is going to be reading
+
+00:15:33.899 --> 00:15:40.620 align:start position:19%
+a hundred tweets per day and we have 200
+million of them so the first approach
+
+00:15:38.399 --> 00:15:46.199 align:start position:19%
+and the obvious thing to do is to have
+read only replicas of this database if
+
+00:15:44.279 --> 00:15:50.399 align:start position:19%
+reads are the bottleneck it's not hard
+to just add additional database
+
+00:15:48.060 --> 00:15:54.720 align:start position:19%
+instances now the problem will be when a
+user actually creates a tweet if we have
+
+00:15:52.440 --> 00:15:59.880 align:start position:19%
+single leader replication all those
+rights are going to be hitting a single
+
+00:15:57.240 --> 00:16:04.440 align:start position:19%
+database and remember if we have 50
+million writes per day you divide that
+
+00:16:02.699 --> 00:16:10.320 align:start position:19%
+by a hundred thousand which is roughly
+the amount of seconds in a day we get
+
+00:16:06.680 --> 00:16:14.100 align:start position:19%
+500 rights per second well probably even
+more than that but at the same time
+
+00:16:12.120 --> 00:16:18.120 align:start position:19%
+there's gonna be moments where we have
+traffic this is the average but Peak
+
+00:16:16.500 --> 00:16:22.199 align:start position:19%
+could be much higher I mean Peak could
+be even 10 times this amount depending
+
+00:16:20.220 --> 00:16:27.180 align:start position:19%
+on what's going on maybe Elon Musk does
+something crazy so ideally we should be
+
+00:16:24.240 --> 00:16:31.800 align:start position:19%
+able to scale our rights as well and the
+obvious way to do this is by using
+
+00:16:29.100 --> 00:16:35.279 align:start position:19%
+sharding but the question is how are we
+going to be implementing this sharding
+
+00:16:33.600 --> 00:16:41.579 align:start position:19%
+before we get into that I forgot to
+mention if we do have read-only replicas
+
+00:16:38.100 --> 00:16:45.899 align:start position:19%
+it's okay if a single instance gets the
+rights and then asynchronously populates
+
+00:16:43.740 --> 00:16:50.339 align:start position:19%
+the read-only replicas with the data
+because in the case that a user ends up
+
+00:16:48.180 --> 00:16:54.779 align:start position:19%
+hitting one of the replicas and gets
+some stale data it's okay if it takes
+
+00:16:52.560 --> 00:16:58.920 align:start position:19%
+five seconds after a tweet is created
+before a user actually gets that tweet
+
+00:16:57.120 --> 00:17:02.339 align:start position:19%
+or it might even take 20 seconds that
+would wouldn't be ideal but it's not the
+
+00:17:00.959 --> 00:17:06.419 align:start position:19%
+end of the world with something like
+Twitter now the question is how are we
+
+00:17:04.500 --> 00:17:10.860 align:start position:19%
+actually going to be sharding this what
+type of Shard key are we going to be
+
+00:17:08.400 --> 00:17:15.120 align:start position:19%
+using I think the most obvious and easy
+way would be to do it based on user ID
+
+00:17:13.500 --> 00:17:20.100 align:start position:19%
+because that's kind of the whole point
+of our design the way we scoped it out a
+
+00:17:17.400 --> 00:17:23.160 align:start position:19%
+user only cares about a subset of users
+they don't care about every user it
+
+00:17:21.600 --> 00:17:29.520 align:start position:19%
+doesn't make a lot of sense to do it
+based on tweet ID because what we want
+
+00:17:26.100 --> 00:17:35.580 align:start position:19%
+is to break up our database into pieces
+and we want a particular user to ideally
+
+00:17:33.299 --> 00:17:40.020 align:start position:19%
+only have to hit one of these pieces
+with the logic of our system especially
+
+00:17:37.740 --> 00:17:44.460 align:start position:19%
+the sharding logic a user should know
+which people they follow and then we can
+
+00:17:42.480 --> 00:17:49.260 align:start position:19%
+route the request to the appropriate
+shards that contain the tweets of the
+
+00:17:47.280 --> 00:17:53.940 align:start position:19%
+people that they follow and we'll know
+that because we can use our Shard key to
+
+00:17:51.780 --> 00:17:58.980 align:start position:19%
+determine that but if we break up the
+tweets based on tweet ID we actually
+
+00:17:56.640 --> 00:18:03.120 align:start position:19%
+don't know which Shard contains the
+tweets of the people that they follow so
+
+00:18:00.960 --> 00:18:08.520 align:start position:19%
+we'd have to query all the shards that
+kind of defeats the purpose so we'll be
+
+00:18:05.220 --> 00:18:12.780 align:start position:19%
+choosing to do this based on user ID and
+since we don't actually have complex
+
+00:18:10.380 --> 00:18:16.980 align:start position:19%
+queries and joins that we're doing to
+actually retrieve the tweets how will we
+
+00:18:15.000 --> 00:18:21.660 align:start position:19%
+get the people that they follow well if
+we Shard that based on user ID as well
+
+00:18:19.320 --> 00:18:26.400 align:start position:19%
+all the people that this guy follows
+should be on A Single Shard now a
+
+00:18:24.780 --> 00:18:30.000 align:start position:19%
+potential problem is that we will
+actually have to order the tweets just
+
+00:18:28.140 --> 00:18:33.539 align:start position:19%
+fetching the tweets is not enough we
+will actually have to query them and
+
+00:18:31.380 --> 00:18:37.559 align:start position:19%
+then order them based on the time that
+they were created and of course how many
+
+00:18:35.580 --> 00:18:41.700 align:start position:19%
+tweets are we looking for if we're just
+looking for a small number like 20 what
+
+00:18:39.780 --> 00:18:45.900 align:start position:19%
+if the user wants to scroll down in
+their feed and we want 20 more tweets we
+
+00:18:43.919 --> 00:18:50.400 align:start position:19%
+don't necessarily need to get all tweets
+immediately we need to wait for the user
+
+00:18:48.179 --> 00:18:54.539 align:start position:19%
+to actually scroll or maybe we can
+actually get all the tweets immediately
+
+00:18:52.440 --> 00:18:58.860 align:start position:19%
+but before I even get into that let's
+quickly look at how our current system
+
+00:18:56.880 --> 00:19:03.120 align:start position:19%
+is going to work when a user creates an
+essentially it will go through the
+
+00:19:00.840 --> 00:19:07.320 align:start position:19%
+server based on the user ID we will find
+the appropriate Shard and then store the
+
+00:19:05.100 --> 00:19:12.179 align:start position:19%
+tweet on that Shard and then any images
+and media on object storage as users
+
+00:19:09.900 --> 00:19:17.340 align:start position:19%
+view their feed we may have to query
+multiple shards to find all the relevant
+
+00:19:15.120 --> 00:19:20.940 align:start position:19%
+tweets and then order them and then send
+them back to the user that could
+
+00:19:18.960 --> 00:19:25.679 align:start position:19%
+definitely be very slow that's clearly
+the bottleneck here now we do have a
+
+00:19:23.400 --> 00:19:30.900 align:start position:19%
+caching layer and in theory the most
+popular tweets will be stored already on
+
+00:19:29.100 --> 00:19:35.280 align:start position:19%
+this caching layer and if they're not
+then we can have some type of lru
+
+00:19:33.419 --> 00:19:38.760 align:start position:19%
+algorithm working here because we care
+about the most recent tweets most likely
+
+00:19:37.320 --> 00:19:42.900 align:start position:19%
+people aren't going to be viewing tweets
+from a year ago even if they had like a
+
+00:19:40.980 --> 00:19:46.919 align:start position:19%
+billion views after a while people get
+tired of them lru might be better here
+
+00:19:44.640 --> 00:19:51.600 align:start position:19%
+and in theory caching should definitely
+help us lower the latency but remember
+
+00:19:49.620 --> 00:19:56.039 align:start position:19%
+different people will have different
+tweets we definitely can't guarantee
+
+00:19:53.940 --> 00:20:00.960 align:start position:19%
+that all 20 tweets that this person
+wants to see are already going to be
+
+00:19:58.440 --> 00:20:06.059 align:start position:19%
+cached what if 19 of them are already
+cashed and then that last one tweet we
+
+00:20:03.660 --> 00:20:10.200 align:start position:19%
+still have to go and read disk to get
+that tweet and while you're scrolling
+
+00:20:07.860 --> 00:20:13.799 align:start position:19%
+maybe all your tweets are loaded but one
+tweet in the middle is taking a few
+
+00:20:11.820 --> 00:20:18.179 align:start position:19%
+extra seconds that's not a great user
+experience so the problem we're running
+
+00:20:15.780 --> 00:20:22.559 align:start position:19%
+into is not really scalability it's
+latency and caching helps with that and
+
+00:20:20.880 --> 00:20:26.340 align:start position:19%
+sharding also helps with that that's
+kind of the point of sharding with
+
+00:20:24.419 --> 00:20:31.260 align:start position:19%
+read-only replicas we're able to handle
+scale but as we break up the data into
+
+00:20:28.919 --> 00:20:35.340 align:start position:19%
+smaller chunks then we can also lower
+latency because we're going to be
+
+00:20:32.520 --> 00:20:40.020 align:start position:19%
+querying a smaller amount of data but we
+still may have to query multiple shards
+
+00:20:37.559 --> 00:20:44.900 align:start position:19%
+to get this latency even lower we can
+get pretty creative and we can actually
+
+00:20:42.179 --> 00:20:50.160 align:start position:19%
+generate the news feed of users
+asynchronously and we would do that for
+
+00:20:47.460 --> 00:20:54.600 align:start position:19%
+every single user in theory because we
+know a large amount of the users 200
+
+00:20:52.200 --> 00:20:58.799 align:start position:19%
+million out of 500 million are actually
+active it makes sense to generate the
+
+00:20:56.700 --> 00:21:02.280 align:start position:19%
+news feed for all of them even if 60
+percent of them aren't going to actually
+
+00:21:00.000 --> 00:21:06.600 align:start position:19%
+view it it's not a ton of wasted work
+and we could also tune it such that we
+
+00:21:04.559 --> 00:21:10.799 align:start position:19%
+only regenerate the news feed for people
+that are actually active within the last
+
+00:21:08.160 --> 00:21:16.559 align:start position:19%
+30 days now at a very high level what we
+can do is have some kind of message
+
+00:21:13.020 --> 00:21:21.660 align:start position:19%
+queue or Pub sub system which will take
+every new tweet that is created will
+
+00:21:19.620 --> 00:21:26.580 align:start position:19%
+also not just be written to the database
+but it will be sent from the app servers
+
+00:21:23.760 --> 00:21:32.039 align:start position:19%
+to the pub sub queue and this queue will
+feed into a cluster something like a
+
+00:21:29.820 --> 00:21:36.720 align:start position:19%
+spark cluster but the point is that
+these workers will in parallel process
+
+00:21:35.100 --> 00:21:40.860 align:start position:19%
+all the messages that we're getting
+which will include every time there's a
+
+00:21:39.120 --> 00:21:44.580 align:start position:19%
+new tweet that is generated there could
+be a lot so we need to do this
+
+00:21:42.419 --> 00:21:50.039 align:start position:19%
+asynchronously and the point of this is
+that these will basically feed into a
+
+00:21:47.700 --> 00:21:54.960 align:start position:19%
+new cache and this cache will be
+responsible for actually storing the
+
+00:21:52.320 --> 00:21:59.280 align:start position:19%
+user feed so now when a user loads their
+home page and gets their list of 20
+
+00:21:57.059 --> 00:22:04.080 align:start position:19%
+tweets the application server will will
+actually be hitting this feed cache
+
+00:22:01.440 --> 00:22:08.220 align:start position:19%
+maybe this cache is used for individual
+tweets that are maybe embedded on
+
+00:22:06.000 --> 00:22:12.780 align:start position:19%
+websites or sometimes you just open up
+an individual tweet not in the context
+
+00:22:10.260 --> 00:22:16.320 align:start position:19%
+of a user feed and you want to maybe
+look at the replies of that tweet but
+
+00:22:15.000 --> 00:22:19.740 align:start position:19%
+this is starting to make a little bit
+less sense or even having this cache so
+
+00:22:18.360 --> 00:22:24.539 align:start position:19%
+I'm just kind of giving some possible
+use cases but this is the cache that
+
+00:22:21.960 --> 00:22:29.820 align:start position:19%
+will actually have a feed for every
+single user so if this is in memory it
+
+00:22:27.480 --> 00:22:33.960 align:start position:19%
+may have a large amount of data now we
+have 200 million users and if we want to
+
+00:22:31.980 --> 00:22:37.799 align:start position:19%
+have 100 tweets for every single user it
+could be a very large amount so we
+
+00:22:35.640 --> 00:22:41.580 align:start position:19%
+probably want to Shard this similar to
+how we did with our relational database
+
+00:22:39.659 --> 00:22:45.900 align:start position:19%
+but the point is that this will
+definitely lower the latency because the
+
+00:22:43.860 --> 00:22:49.440 align:start position:19%
+feeds are not generated as a user
+actually requests to actually get the
+
+00:22:47.820 --> 00:22:53.100 align:start position:19%
+feed we don't have to actually run a
+complex query on our relational database
+
+00:22:51.299 --> 00:22:56.460 align:start position:19%
+having to query multiple shards and then
+joining the results together based on
+
+00:22:54.840 --> 00:23:00.299 align:start position:19%
+the time that they were created and then
+ordering them like that the feed will
+
+00:22:58.200 --> 00:23:03.480 align:start position:19%
+actually all already be created now the
+complicated part is actually updating
+
+00:23:01.860 --> 00:23:07.380 align:start position:19%
+the Tweet we kind of went through the
+flow of when a tweet is created it will
+
+00:23:05.940 --> 00:23:14.039 align:start position:19%
+be added to the message queue and then
+for that individual tweet these workers
+
+00:23:10.080 --> 00:23:19.020 align:start position:19%
+will add that tweet to all the feeds of
+people that are following the author of
+
+00:23:16.679 --> 00:23:23.220 align:start position:19%
+that tweet but now the problem is if
+somebody has a hundred followers then
+
+00:23:21.120 --> 00:23:26.880 align:start position:19%
+these workers will have to update a
+hundred feeds but what about somebody
+
+00:23:24.900 --> 00:23:31.980 align:start position:19%
+like Kim Kardashian who has maybe a
+hundred million followers updating a
+
+00:23:28.919 --> 00:23:38.039 align:start position:19%
+hundred million feeds every single time
+somebody popular like that makes a tweet
+
+00:23:34.620 --> 00:23:42.780 align:start position:19%
+is very very expensive maybe in that
+case it's not the end of the world for
+
+00:23:40.320 --> 00:23:46.500 align:start position:19%
+us to actually have to update the feed
+of that user at the time that they
+
+00:23:44.820 --> 00:23:51.480 align:start position:19%
+actually request it big somebody could
+have a hundred million followers and us
+
+00:23:49.080 --> 00:23:56.039 align:start position:19%
+having to update 100 million feeds every
+time they make a tweet is pretty
+
+00:23:52.919 --> 00:24:00.659 align:start position:19%
+expensive but not all 100 million of
+those followers are even loading their
+
+00:23:58.320 --> 00:24:05.340 align:start position:19%
+feed every single day so it'd probably
+be easier to do that work as it's needed
+
+00:24:03.360 --> 00:24:09.840 align:start position:19%
+so when a user makes a request they get
+their feed but maybe in parallel to that
+
+00:24:07.740 --> 00:24:13.500 align:start position:19%
+our app server could look for other
+tweets probably a popular tweet by
+
+00:24:11.760 --> 00:24:17.640 align:start position:19%
+somebody like that is already cached
+here so then at that point our
+
+00:24:15.539 --> 00:24:22.320 align:start position:19%
+application server would also update the
+feed of that user now what gets even
+
+00:24:19.740 --> 00:24:27.120 align:start position:19%
+more complicated is what happens when a
+user follows somebody new their feed has
+
+00:24:24.960 --> 00:24:31.320 align:start position:19%
+to be updated in that case as well now
+it's okay we can tolerate a few seconds
+
+00:24:29.340 --> 00:24:35.760 align:start position:19%
+maybe five or ten seconds before their
+feed is actually updated but it does
+
+00:24:33.480 --> 00:24:39.840 align:start position:19%
+have to get updated nonetheless and we
+would have sort of a similar mechanism
+
+00:24:37.380 --> 00:24:44.460 align:start position:19%
+where a user follows somebody new we add
+a message to a message queue we have a
+
+00:24:42.480 --> 00:24:48.539 align:start position:19%
+bunch of workers that then have to
+update the feed cache of the person who
+
+00:24:46.799 --> 00:24:52.320 align:start position:19%
+just followed somebody else and by the
+way this cluster of course is going to
+
+00:24:50.220 --> 00:24:56.580 align:start position:19%
+actually have to read our database as
+well which actually has the tweets
+
+00:24:53.820 --> 00:25:00.900 align:start position:19%
+themselves remember the whole point of
+doing this is to lower the latent agency
+
+00:24:58.980 --> 00:25:05.700 align:start position:19%
+when somebody opens up their home page
+and they want to see 20 tweets we want
+
+00:25:03.000 --> 00:25:10.140 align:start position:19%
+it to be as quick as possible and all
+this complexity arises from that if we
+
+00:25:08.100 --> 00:25:14.640 align:start position:19%
+can tolerate a few more seconds we can
+simplify our design but as long as this
+
+00:25:12.659 --> 00:25:18.720 align:start position:19%
+discussion has already been I want to
+say that all of this has actually been
+
+00:25:16.740 --> 00:25:22.980 align:start position:19%
+pretty high level things can get much
+more complicated and this is actually
+
+00:25:20.280 --> 00:25:26.700 align:start position:19%
+definitely not exactly how Twitter is
+designed there are actually problems
+
+00:25:24.659 --> 00:25:29.880 align:start position:19%
+with this design as well there could be
+concurrent updates to our cache there's
+
+00:25:28.679 --> 00:25:34.080 align:start position:19%
+a lot of details that we haven't
+discussed how would the ordering of the
+
+00:25:32.039 --> 00:25:38.640 align:start position:19%
+feed even be in this case when somebody
+loads 20 tweets they want to see 20 more
+
+00:25:36.539 --> 00:25:42.059 align:start position:19%
+we obviously have to paginate that and
+there's a ton more details that we could
+
+00:25:40.140 --> 00:25:46.860 align:start position:19%
+have gone into the main takeaway though
+here is that Twitter definitely cannot
+
+00:25:44.279 --> 00:25:52.140 align:start position:19%
+be designed or built in a weekend
+designing these large-scale systems is a
+
+00:25:49.919 --> 00:25:55.860 align:start position:19%
+very complicated task even Engineers who
+worked at Twitter for years still ran
+
+00:25:54.299 --> 00:26:00.000 align:start position:19%
+into issues where they had to modify
+designs and if you read some of the
+
+00:25:57.600 --> 00:26:03.299 align:start position:19%
+white papers from 2 2010 up until now
+they actually did they changed parts of
+
+00:26:01.919 --> 00:26:06.840 align:start position:19%
+their database how they were storing
+relations how they were storing who
+
+00:26:04.860 --> 00:26:10.679 align:start position:19%
+follows who so with that I encourage you
+to read some of the official papers that
+
+00:26:08.940 --> 00:26:13.919 align:start position:19%
+the engineering teams at Twitter have
+written if you'd like to learn more
+
+00:26:12.179 --> 00:26:17.720 align:start position:19%
+because while things can get complicated
+they are still pretty interesting
+

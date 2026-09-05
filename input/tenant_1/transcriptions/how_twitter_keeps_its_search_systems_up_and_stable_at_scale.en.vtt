@@ -1,0 +1,816 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.120 --> 00:00:06.420 align:start position:19%
+so search is one of the most important
+services for any product and at Twitter
+
+00:00:04.440 --> 00:00:10.500 align:start position:19%
+scale it becomes Ultra important but
+what does it take to maintain search at
+
+00:00:08.460 --> 00:00:13.980 align:start position:19%
+scale how can we ensure that a search
+service continues to function no matter
+
+00:00:12.179 --> 00:00:19.260 align:start position:19%
+what kind of load hits the system in
+this video we dive deep into how Twitter
+
+00:00:16.800 --> 00:00:23.820 align:start position:19%
+built its tooling around elasticsearch
+that helps them handle massive surges in
+
+00:00:21.600 --> 00:00:29.880 align:start position:19%
+search traffic do real time ingestion
+and ingest hundreds of terabytes of data
+
+00:00:27.539 --> 00:00:32.880 align:start position:19%
+in backfill but before we move forward
+I'd like to talk to you about a course
+
+00:00:31.500 --> 00:00:36.600 align:start position:19%
+on system design that I've been running
+for over a year and a half now the
+
+00:00:35.040 --> 00:00:40.379 align:start position:19%
+course is a code based course which
+means I won't be rambling a solution and
+
+00:00:38.399 --> 00:00:44.700 align:start position:19%
+it will not be a monologue at all
+instead a small focused group of 50 to
+
+00:00:42.960 --> 00:00:49.500 align:start position:19%
+16 genus will be brainstorming the
+systems and designing it together this
+
+00:00:46.920 --> 00:00:53.879 align:start position:19%
+way we build a very solid system and
+learn from each other's experiences the
+
+00:00:51.480 --> 00:00:57.360 align:start position:19%
+course is enrolled by 800 plus ingenious
+spanning 12 codes and 12 countries
+
+00:00:55.860 --> 00:01:02.699 align:start position:19%
+ingenious from companies like Google
+Microsoft GitHub slack Facebook Tesla
+
+00:00:59.940 --> 00:01:06.659 align:start position:19%
+Yelp Flipkart dream11 and many many many
+more have taken this course and have
+
+00:01:04.619 --> 00:01:10.860 align:start position:19%
+some wonderful things to say the course
+is focused on Building Systems the way
+
+00:01:08.880 --> 00:01:15.240 align:start position:19%
+they are built in the real world they
+will be focusing heavily on building the
+
+00:01:13.260 --> 00:01:20.040 align:start position:19%
+right intuition so that you are ready to
+build any and every system out there we
+
+00:01:18.360 --> 00:01:24.659 align:start position:19%
+will be discussing the trade-offs of
+every single decision we make just like
+
+00:01:22.259 --> 00:01:27.900 align:start position:19%
+how you do in your team we cover topics
+ranging from Real Time text
+
+00:01:25.920 --> 00:01:32.580 align:start position:19%
+communication for slack to designing our
+own toilet balance live text commentary
+
+00:01:30.659 --> 00:01:37.020 align:start position:19%
+to doing impressions counting at scale
+in all we would be covering roughly 28
+
+00:01:35.340 --> 00:01:41.640 align:start position:19%
+systems and the detailed curriculum
+split week by week can be found in the
+
+00:01:40.020 --> 00:01:45.299 align:start position:19%
+course page linked in the description
+down below so if you are looking to
+
+00:01:44.040 --> 00:01:49.740 align:start position:19%
+learn system design from the first
+principles you will love this course I
+
+00:01:47.640 --> 00:01:53.880 align:start position:19%
+have two offerings for you the first one
+is the live cohort based course and the
+
+00:01:51.600 --> 00:01:58.079 align:start position:19%
+second one is the recorded offering the
+Live code base course happens once every
+
+00:01:56.280 --> 00:02:01.560 align:start position:19%
+two months and will go on for eight
+weeks while the recorded course contains
+
+00:02:00.000 --> 00:02:06.000 align:start position:19%
+the recordings from one of the past
+cohorts as is if you are in a hurry and
+
+00:02:04.140 --> 00:02:10.080 align:start position:19%
+want to learn and want to binge learn
+system design I would recommend going
+
+00:02:07.860 --> 00:02:14.760 align:start position:19%
+you for the recorded one otherwise the
+Live code is where you can participate
+
+00:02:12.180 --> 00:02:18.900 align:start position:19%
+and discuss the systems and its design
+life with me and the entire cohort the
+
+00:02:16.980 --> 00:02:23.160 align:start position:19%
+decision is totally up to you the course
+details prerequisites testimonials can
+
+00:02:21.180 --> 00:02:27.959 align:start position:19%
+be found on the course page arpitbani
+dot me slash masterclass I repeat
+
+00:02:24.920 --> 00:02:31.860 align:start position:19%
+arpitbani dot me slash masterclass and I
+would highly recommend you to check that
+
+00:02:29.520 --> 00:02:35.280 align:start position:19%
+out I've also put the link of this
+course page in the description down
+
+00:02:33.239 --> 00:02:39.360 align:start position:19%
+below and I'm looking forward to see you
+in my next cohort
+
+00:02:37.020 --> 00:02:43.319 align:start position:19%
+so Twitter uses elasticsearch to power
+search of their tweets users and direct
+
+00:02:41.760 --> 00:02:48.780 align:start position:19%
+messages but why elasticsearch
+elasticsearch provides speed it provides
+
+00:02:46.440 --> 00:02:52.800 align:start position:19%
+scalability it is distributed in nature
+which means scaling out is just adding
+
+00:02:50.220 --> 00:02:57.599 align:start position:19%
+more nodes and more importantly it
+provides very simple rest interface to
+
+00:02:54.959 --> 00:03:01.620 align:start position:19%
+interface with it right because of the
+simple rest apis what happens is you
+
+00:02:59.940 --> 00:03:06.599 align:start position:19%
+just need a simple HTTP client to talk
+to elasticsearch servers and it makes it
+
+00:03:03.599 --> 00:03:10.500 align:start position:19%
+super easy to do so now before all the
+tooling that they built at Twitter what
+
+00:03:08.640 --> 00:03:14.099 align:start position:19%
+happened so every team was allowed to
+spin up their elasticsearch clusters to
+
+00:03:12.180 --> 00:03:17.400 align:start position:19%
+get their things done it's not just for
+search but maybe for other use cases
+
+00:03:15.599 --> 00:03:19.620 align:start position:19%
+they might use it for example real-time
+aggregation real-time analytics and
+
+00:03:18.780 --> 00:03:24.540 align:start position:19%
+whatnot
+but because there were many clusters
+
+00:03:21.780 --> 00:03:30.000 align:start position:19%
+like this the team owning that cluster
+had the responsibility to set things up
+
+00:03:27.000 --> 00:03:33.599 align:start position:19%
+correctly for example the because there
+are multiple clusters there are multiple
+
+00:03:31.500 --> 00:03:37.980 align:start position:19%
+teams owning it now who takes care of
+sanitization some team enabled logs on
+
+00:03:36.060 --> 00:03:41.879 align:start position:19%
+some clusters some team did not logs but
+in a particular format there was no
+
+00:03:39.659 --> 00:03:45.959 align:start position:19%
+throttling no rate limiting one team
+interfacing with other like one team
+
+00:03:44.040 --> 00:03:51.299 align:start position:19%
+abusing a cluster takes a cluster down
+affects end users and whatnot so there
+
+00:03:48.420 --> 00:03:55.560 align:start position:19%
+was a clear need that there had to be a
+standardized way to set up a cluster
+
+00:03:53.459 --> 00:03:59.760 align:start position:19%
+right but instead of just focusing on
+setting up it is also about how people
+
+00:03:57.540 --> 00:04:04.260 align:start position:19%
+are accessing the cluster so which is
+where the first tooling that Twitter
+
+00:04:01.200 --> 00:04:10.560 align:start position:19%
+built is an elasticsearch proxy now this
+proxy sits between the client and the
+
+00:04:08.519 --> 00:04:13.500 align:start position:19%
+elasticsearch cluster right so whoever
+wants to talk to this elasticsearch
+
+00:04:12.180 --> 00:04:17.699 align:start position:19%
+cluster cannot talk to this
+elasticsearch cluster directly but has
+
+00:04:14.939 --> 00:04:22.979 align:start position:19%
+to go through a proxy now this proxy is
+a very simple HTTP client and but
+
+00:04:21.000 --> 00:04:27.060 align:start position:19%
+because it is a simple HTTP client it
+can piggyback a lot of stuff for example
+
+00:04:25.020 --> 00:04:31.440 align:start position:19%
+this proxy because you know that all the
+requests will go through this proxy to
+
+00:04:28.919 --> 00:04:35.460 align:start position:19%
+any elasticsearch cluster now this proxy
+you put in all sorts of metrics all
+
+00:04:33.900 --> 00:04:40.259 align:start position:19%
+sorts of standardization that you would
+need to do for example thirdly right you
+
+00:04:38.460 --> 00:04:44.699 align:start position:19%
+don't want a lot of request coming from
+a particular client to to take down the
+
+00:04:42.900 --> 00:04:49.500 align:start position:19%
+elasticsearch cluster which is where
+this proxy comes in which has a rate
+
+00:04:46.440 --> 00:04:53.880 align:start position:19%
+limiter inbuilt right then routing you
+might have multiple clusters who like
+
+00:04:51.600 --> 00:04:58.259 align:start position:19%
+routing which request to wear take it's
+taken care by this proxy right security
+
+00:04:56.000 --> 00:05:01.979 align:start position:19%
+authentication right and more
+importantly monitoring when it comes to
+
+00:05:00.180 --> 00:05:05.699 align:start position:19%
+monitoring because this is a single
+point of entry for anyone to talk to
+
+00:05:03.720 --> 00:05:09.419 align:start position:19%
+elasticsearch now what happens you can
+dump key metrics out of this proxy for
+
+00:05:07.979 --> 00:05:13.080 align:start position:19%
+example what is the cluster Health what
+is the success rate what is a failure
+
+00:05:10.800 --> 00:05:17.160 align:start position:19%
+rate what is latencies and what not this
+proxy's job was really important this
+
+00:05:14.940 --> 00:05:23.100 align:start position:19%
+one layer that was added in within
+obviously it shot the response time by a
+
+00:05:19.440 --> 00:05:28.919 align:start position:19%
+fraction but this one centralized layer
+helps them ensure that the access to
+
+00:05:25.860 --> 00:05:32.340 align:start position:19%
+Cluster is standardized The Matrix that
+are published are standardized the
+
+00:05:30.419 --> 00:05:37.320 align:start position:19%
+logging is standardized authentication
+standardized right this makes their this
+
+00:05:35.400 --> 00:05:40.440 align:start position:19%
+increases the stability of the cluster
+because not people are not directly
+
+00:05:38.580 --> 00:05:45.660 align:start position:19%
+interfacing with elasticsearch right
+really important now second thing that
+
+00:05:42.900 --> 00:05:50.639 align:start position:19%
+can affect elasticsearch is injection
+because given at Twitter scale there
+
+00:05:48.360 --> 00:05:54.960 align:start position:19%
+would be huge amount of load coming onto
+this elasticsearch clustered when a new
+
+00:05:53.160 --> 00:05:59.280 align:start position:19%
+like for example a new tweet is posted
+where right rather when a tweet is
+
+00:05:57.240 --> 00:06:03.060 align:start position:19%
+posted it needs to be index in elastic
+search right now there are millions of
+
+00:06:01.080 --> 00:06:06.780 align:start position:19%
+tweets posted every minute now all of
+those gets indexed in elasticsearch so
+
+00:06:04.919 --> 00:06:11.180 align:start position:19%
+this means that there would be surge in
+traffic Whenever there is a spike in
+
+00:06:08.460 --> 00:06:18.300 align:start position:19%
+traffic at Twitter's usage right now
+elasticsearch is little tricky to handle
+
+00:06:14.880 --> 00:06:23.699 align:start position:19%
+such spikes and what happens is when
+there is a sudden Spike elastic surge
+
+00:06:20.759 --> 00:06:27.180 align:start position:19%
+does not get time to like like we do not
+get time to spin up more nodes very
+
+00:06:25.620 --> 00:06:31.199 align:start position:19%
+quickly because it takes time for the
+data to move from here to there right
+
+00:06:29.160 --> 00:06:35.819 align:start position:19%
+and elasticsearch is bad at handling
+such searches two things that happen
+
+00:06:33.240 --> 00:06:39.840 align:start position:19%
+typically is the indexing latency shoots
+up and the query latency shoots up so it
+
+00:06:38.160 --> 00:06:43.500 align:start position:19%
+like indexing the data into
+elasticsearch becomes slower and firing
+
+00:06:41.940 --> 00:06:49.520 align:start position:19%
+the search query on elasticsearch
+becomes slower so all the key operations
+
+00:06:45.300 --> 00:06:54.960 align:start position:19%
+take a hit now but at Twitter scale
+spikes or surges are natural for example
+
+00:06:52.800 --> 00:06:59.280 align:start position:19%
+if there is an event happening you would
+see a lot of people tweeting about it at
+
+00:06:57.120 --> 00:07:03.479 align:start position:19%
+that moment so there would be surge in
+traffic depending on how real world
+
+00:07:01.080 --> 00:07:06.479 align:start position:19%
+mimics but real world you cannot predict
+what's happening in what would happen in
+
+00:07:05.160 --> 00:07:11.100 align:start position:19%
+real world what would Trend at a
+particular time so that is where Twitter
+
+00:07:08.880 --> 00:07:16.560 align:start position:19%
+had to be very sure about handling
+spikes handling searches so what did you
+
+00:07:13.199 --> 00:07:21.419 align:start position:19%
+do instead of letting that thing
+directly get ingested into elastic surge
+
+00:07:18.780 --> 00:07:28.319 align:start position:19%
+they did it in an asynchronous way so
+any right coming to be put into elastic
+
+00:07:25.440 --> 00:07:32.160 align:start position:19%
+search now here it's more about that how
+it used to happen was people used to
+
+00:07:30.479 --> 00:07:34.979 align:start position:19%
+like directly call a pillar so the
+client used to directly call
+
+00:07:33.120 --> 00:07:40.620 align:start position:19%
+elasticsearch endpoint and used to put
+the data but now there is one more layer
+
+00:07:37.259 --> 00:07:45.300 align:start position:19%
+sitting before that which is like a
+normal single topic Kafka that you have
+
+00:07:43.440 --> 00:07:49.500 align:start position:19%
+like one topic for each cluster this is
+what they have configured and the rights
+
+00:07:47.460 --> 00:07:53.880 align:start position:19%
+are put into Kafka later to be consumed
+by workers and then indexed it to
+
+00:07:51.419 --> 00:07:58.979 align:start position:19%
+elasticsearch now what this ensures like
+there might be one more Kafka before
+
+00:07:56.039 --> 00:08:03.660 align:start position:19%
+that before it even comes here like
+maybe from API server one Kafka taken to
+
+00:08:01.500 --> 00:08:08.280 align:start position:19%
+this this is a proxy like so this is
+what is done by the proxiliant so proxy
+
+00:08:06.240 --> 00:08:13.560 align:start position:19%
+puts it in Kafka later to be consumed by
+workers right so there is no direct
+
+00:08:10.740 --> 00:08:19.080 align:start position:19%
+ingestion happening in elastic search
+so this one step one step deferred is
+
+00:08:16.500 --> 00:08:23.520 align:start position:19%
+what they did here it ensures that that
+we are putting in data in a correct
+
+00:08:21.539 --> 00:08:27.660 align:start position:19%
+streamlined way to elastic Source rather
+than relying on something else so few
+
+00:08:25.680 --> 00:08:32.940 align:start position:19%
+advantages over here first is request
+matching you can very clearly see how we
+
+00:08:30.180 --> 00:08:37.380 align:start position:19%
+have per topic uh one topic for each
+elasticsearch cluster when you put in a
+
+00:08:34.800 --> 00:08:40.500 align:start position:19%
+bulk of indexing request you can take
+few at a time and make bulk calls to
+
+00:08:39.060 --> 00:08:45.360 align:start position:19%
+elasticsearch reducing the lowest
+non-elastic search second back pressure
+
+00:08:42.719 --> 00:08:50.040 align:start position:19%
+given that if elastic search is slowing
+due to any reason the workers can slow
+
+00:08:48.120 --> 00:08:52.980 align:start position:19%
+things down very easily because elastic
+search is not responding they can just
+
+00:08:51.540 --> 00:08:57.240 align:start position:19%
+wait for some time before they start to
+readjust the data right then retrace in
+
+00:08:55.920 --> 00:09:02.220 align:start position:19%
+case there is a failure in case elastic
+searches are due to any reason the right
+
+00:08:59.339 --> 00:09:06.060 align:start position:19%
+request the injection is law is
+basically queued up in this Kafka and
+
+00:09:04.080 --> 00:09:09.899 align:start position:19%
+again later be consumed to be put into
+elastic search so you get resiliency
+
+00:09:07.920 --> 00:09:15.180 align:start position:19%
+just by adding this one more layer of
+Kafka in between it ensures that we are
+
+00:09:12.600 --> 00:09:19.500 align:start position:19%
+streamlining a consumption and ingestion
+into elastic search right the next
+
+00:09:17.640 --> 00:09:22.920 align:start position:19%
+service and really interesting one which
+is where we see the entire architecture
+
+00:09:20.880 --> 00:09:27.240 align:start position:19%
+together is a backfill service now it's
+a very common requirement across
+
+00:09:25.320 --> 00:09:30.660 align:start position:19%
+organizations that you will have to
+backfill a lot of data into
+
+00:09:28.320 --> 00:09:34.740 align:start position:19%
+elasticsearch this typically happens how
+so for example you have a job which is
+
+00:09:33.060 --> 00:09:38.760 align:start position:19%
+running which takes data from multiple
+data sources and it wants to index them
+
+00:09:36.899 --> 00:09:42.660 align:start position:19%
+into elasticsearch so typically what you
+do you write a simple mapreduce job this
+
+00:09:40.800 --> 00:09:47.100 align:start position:19%
+map reduce job would take data from
+multiple sources and make calls like
+
+00:09:44.820 --> 00:09:50.820 align:start position:19%
+each reducer will call elasticsearch
+endpoints to get it indexed now this is
+
+00:09:49.380 --> 00:09:55.140 align:start position:19%
+where the problem starts to creep in
+when you have large number of reducers
+
+00:09:52.740 --> 00:09:58.500 align:start position:19%
+running which is taking a lot of data
+mappers taking a lot of data passing it
+
+00:09:56.760 --> 00:10:03.420 align:start position:19%
+to reducers reduces ingesting into it
+into elasticsearch in synchronous call
+
+00:10:00.839 --> 00:10:06.380 align:start position:19%
+it would put load onto elasticsearch now
+imagine transferring hundreds of
+
+00:10:04.920 --> 00:10:10.920 align:start position:19%
+terabytes of data
+elasticsearch would cry it is not
+
+00:10:08.880 --> 00:10:14.700 align:start position:19%
+possible for elastic search to handle
+such high like such huge ingestion in a
+
+00:10:13.620 --> 00:10:18.959 align:start position:19%
+single chart
+so which is where you have to do it in a
+
+00:10:16.560 --> 00:10:22.740 align:start position:19%
+staggered way so how do you do it so
+they already had a service which was a
+
+00:10:21.300 --> 00:10:27.540 align:start position:19%
+map reduce job
+whose job was to read data from multiple
+
+00:10:25.500 --> 00:10:31.019 align:start position:19%
+sources when it was a backfill to read
+data from multiple sources and the
+
+00:10:29.519 --> 00:10:35.459 align:start position:19%
+reducers used to directly write to
+elasticsearch but now what they do is
+
+00:10:33.600 --> 00:10:39.720 align:start position:19%
+they read the data from multiple sources
+the reducer instead of writing it
+
+00:10:37.500 --> 00:10:44.459 align:start position:19%
+directly to elasticsearch they flush it
+into an hdfs hello distributed file
+
+00:10:42.240 --> 00:10:49.500 align:start position:19%
+system S3 any any compliant file system
+would work hdfs S3 GCS pick your
+
+00:10:47.220 --> 00:10:53.820 align:start position:19%
+favorite right so instead of their
+service the map reduce instead of
+
+00:10:51.300 --> 00:10:59.820 align:start position:19%
+writing it directly to elasticsearch
+what this job did is this job it put it
+
+00:10:57.779 --> 00:11:04.140 align:start position:19%
+into an hdfs
+and then there were consumers who were
+
+00:11:02.279 --> 00:11:08.279 align:start position:19%
+reading from it and then protected to
+elasticsearch these are massive
+
+00:11:05.459 --> 00:11:11.700 align:start position:19%
+ingestion happened right so let me walk
+you through this architecture now how
+
+00:11:09.660 --> 00:11:16.019 align:start position:19%
+how it beautifully solves the problem so
+what they have is they created a proxy
+
+00:11:13.920 --> 00:11:21.000 align:start position:19%
+for elasticsearch right so whenever
+someone wants to talk to elasticsearch
+
+00:11:17.760 --> 00:11:25.079 align:start position:19%
+it has to talk through this proxy so
+request comes to this proxy proxy sees
+
+00:11:22.980 --> 00:11:30.779 align:start position:19%
+if it's a read request read request
+directly goes to elasticsearch right
+
+00:11:27.540 --> 00:11:34.380 align:start position:19%
+there is no no points there you have to
+because you your you want answer to your
+
+00:11:32.820 --> 00:11:38.579 align:start position:19%
+query it will can only happen through
+elasticsears so read directly goes to
+
+00:11:36.300 --> 00:11:42.300 align:start position:19%
+elasticsearch now there is a write that
+is happening in real time for example a
+
+00:11:40.320 --> 00:11:47.100 align:start position:19%
+new tweet is created you want to ingest
+this tweet in real time into
+
+00:11:43.560 --> 00:11:50.760 align:start position:19%
+elasticsearch now some API server let's
+say this is API server API server is
+
+00:11:48.839 --> 00:11:53.519 align:start position:19%
+making a call to elasticsearch but what
+it's doing it is not directly making
+
+00:11:52.260 --> 00:11:58.200 align:start position:19%
+call to elasticsear because it's not
+allowed to do so it is making a call to
+
+00:11:55.320 --> 00:12:03.180 align:start position:19%
+the HTTP proxy a HTTP proxy instead of
+directly writing to elasticsearch it
+
+00:12:00.420 --> 00:12:08.399 align:start position:19%
+writes it it puts an event into Kafka
+from this Kafka workers consume and it
+
+00:12:05.640 --> 00:12:12.959 align:start position:19%
+puts it into elasticsearch right this
+way real time ingestion happens in a
+
+00:12:11.100 --> 00:12:18.240 align:start position:19%
+staggered way protecting an elastic
+search cluster right so
+
+00:12:15.660 --> 00:12:22.320 align:start position:19%
+like how users would a normally index
+directly to elasticsearch is now changed
+
+00:12:20.339 --> 00:12:26.880 align:start position:19%
+via this proxy which has very similar
+interfaces elasticsearch but now it
+
+00:12:24.540 --> 00:12:30.300 align:start position:19%
+happens in a staggered way and the more
+important part around backfill where
+
+00:12:28.680 --> 00:12:35.160 align:start position:19%
+they already had mapreduce job running
+which was directly putting it into
+
+00:12:31.740 --> 00:12:39.360 align:start position:19%
+elasticsearch now it takes like the HTTP
+request that we're making to index the
+
+00:12:36.899 --> 00:12:43.920 align:start position:19%
+data into elasticsearch now that same
+request with that exact same payload
+
+00:12:41.399 --> 00:12:49.440 align:start position:19%
+gets dumped into hdfs
+from these workers pickup and then they
+
+00:12:46.980 --> 00:12:53.940 align:start position:19%
+fire it into elasticsearch so there is
+no there is not a lot of change to be
+
+00:12:51.959 --> 00:12:59.399 align:start position:19%
+done from on the developer side of
+things it's all seamless like no need to
+
+00:12:57.180 --> 00:13:02.220 align:start position:19%
+change this map reduce job the only
+thing like one small change that needs
+
+00:13:01.019 --> 00:13:06.180 align:start position:19%
+to happen the map reducer where the
+reducer is used to directly put it into
+
+00:13:03.720 --> 00:13:10.980 align:start position:19%
+elasticsearch now they put it into hdfs
+and a bunch of workers are spun
+
+00:13:08.660 --> 00:13:15.300 align:start position:19%
+depending on the load or depending on
+the data that was created the
+
+00:13:12.540 --> 00:13:21.600 align:start position:19%
+orchestrator creates those very workers
+and they consume the data from the https
+
+00:13:18.660 --> 00:13:26.639 align:start position:19%
+and put it into elasticsearch right a
+very seamless way now here you see a
+
+00:13:24.000 --> 00:13:29.880 align:start position:19%
+pattern that the rights are always
+deferred the rights are always made
+
+00:13:28.260 --> 00:13:33.540 align:start position:19%
+asynchronous while the reads happen
+synchronously and this is one of the
+
+00:13:31.560 --> 00:13:38.639 align:start position:19%
+most common ways to build a scalable
+system the way you do it is let the
+
+00:13:36.120 --> 00:13:42.480 align:start position:19%
+Rights happen eventually but let the
+reads happen synchronously especially in
+
+00:13:40.800 --> 00:13:48.060 align:start position:19%
+a workload like this if it is a
+non-transactional use case you defer it
+
+00:13:44.760 --> 00:13:52.500 align:start position:19%
+all the time right so just to give you a
+gist read happens synchronously to
+
+00:13:50.040 --> 00:13:56.100 align:start position:19%
+elasticsearch Via this proxy the right
+through this proxy goes through Kafka
+
+00:13:54.600 --> 00:14:00.779 align:start position:19%
+consumed by workers put into
+elasticsearch while the backfill the job
+
+00:13:59.040 --> 00:14:05.579 align:start position:19%
+the map reduce job that used to directly
+write it to elasticsearch now flushes it
+
+00:14:03.180 --> 00:14:10.079 align:start position:19%
+into an hdfs which is consumed by
+workers fund direct spun dynamically
+
+00:14:08.100 --> 00:14:14.459 align:start position:19%
+using orchestrator and put into
+elasticsearch right this is such a
+
+00:14:12.779 --> 00:14:21.240 align:start position:19%
+beautiful piece of learning where we see
+how rights which are differed makes your
+
+00:14:17.820 --> 00:14:25.800 align:start position:19%
+system handle scale while reads happen
+synchronously right you basically there
+
+00:14:23.339 --> 00:14:30.899 align:start position:19%
+is no other way to do so right this is
+such a beautiful piece of thing like how
+
+00:14:28.440 --> 00:14:34.800 align:start position:19%
+Twitter at scale of Twitter how they are
+ensuring that their elasticsearch
+
+00:14:32.459 --> 00:14:39.420 align:start position:19%
+clusters don't go down while ensuring a
+very nice standardization by adding this
+
+00:14:36.720 --> 00:14:42.959 align:start position:19%
+proxiliary in front of it right great
+this is all what I wanted to cover I
+
+00:14:41.279 --> 00:14:47.380 align:start position:19%
+hope you found it interesting I hope you
+found it amazing that is it for this one
+
+00:14:45.180 --> 00:15:01.209 align:start position:19%
+I'll see you in the next one thanks
+[Music]
+
