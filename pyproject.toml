@@ -3,7 +3,10 @@ name = "technical-meeting-rag"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "anthropic>=0.40",
     "fastapi>=0.110",
+    "litellm>=1.50",
+    "openai>=1.0",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "structlog>=24.0",
