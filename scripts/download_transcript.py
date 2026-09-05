@@ -2,27 +2,27 @@
 """Descarga la transcripción de un vídeo de YouTube con yt-dlp.
 
 Uso:
-    python3 scripts/download_transcript.py <url_youtube> --tenant tenant_1 [--lang es,en]
-    python3 scripts/download_transcript.py --tenant tenant_1
-    python3 scripts/download_transcript.py --tenant tenant_1 --clean
+    python3 scripts/download_transcript.py <url_youtube> --session session_1 [--lang es,en]
+    python3 scripts/download_transcript.py --session session_1
+    python3 scripts/download_transcript.py --session session_1 --clean
 
-`--tenant` es obligatorio. Si no se pasa <url_youtube>, el script busca
-input/<tenant>/links.json y (re)descarga la transcripción de cada enlace que
-ya contiene, usando la configuración de ese mismo tenant — útil para
+`--session` es obligatorio. Si no se pasa <url_youtube>, el script busca
+input/<session>/links.json y (re)descarga la transcripción de cada enlace que
+ya contiene, usando la configuración de ese mismo session — útil para
 refrescar todas las transcripciones de golpe (p.ej. tras cambiar el idioma en
 config.json). Un fallo en un vídeo (borrado, sin subtítulos en ese idioma...)
 no aborta el resto del lote.
 
 El idioma a descargar se resuelve en este orden de
 prioridad: 1) --lang si se pasa explícitamente, 2) el campo "lang" de
-input/<tenant>/config.json si existe (p.ej. {"lang": "en"}), 3) "es,en" por
+input/<session>/config.json si existe (p.ej. {"lang": "en"}), 3) "es,en" por
 defecto. Prueba los idiomas resultantes en orden y se queda con el primero
 disponible (subtítulos manuales antes que automáticos). Guarda el .vtt en
-input/<tenant>/transcriptions/ y acumula {link, title, transcript_path,
-upload_date, description, channel_url} en input/<tenant>/links.json,
+input/<session>/transcriptions/ y acumula {link, title, transcript_path,
+upload_date, description, channel_url} en input/<session>/links.json,
 añadiendo o actualizando la entrada de cada vídeo.
 
-Es idempotente: volver a ejecutarlo con la misma URL y el mismo tenant
+Es idempotente: volver a ejecutarlo con la misma URL y el mismo session
 sobrescribe el mismo fichero .vtt y actualiza la misma entrada de links.json,
 sin acumular ficheros nuevos, aunque el título del vídeo haya cambiado entre
 ejecuciones. Si el idioma resuelto cambia respecto a la última descarga (p.ej.
@@ -30,8 +30,8 @@ cambiaste el "lang" de config.json), el nombre del fichero se recalcula para
 reflejar el nuevo idioma y el fichero antiguo se borra — nunca deja un
 `*.es.vtt` con contenido en otro idioma dentro.
 
---clean borra tanto input/<tenant>/links.json como todos los .vtt descargados
-en input/<tenant>/transcriptions/, para ese tenant únicamente.
+--clean borra tanto input/<session>/links.json como todos los .vtt descargados
+en input/<session>/transcriptions/, para ese session únicamente.
 """
 
 from __future__ import annotations
@@ -60,20 +60,20 @@ SCRIPT_NAME = os.path.basename(__file__)
 YDL_EXTRACTOR_ARGS = {"youtube": {"player_client": ["android"]}}
 
 
-def _transcriptions_dir(tenant: str) -> str:
-    return os.path.join(INPUT_ROOT, tenant, "transcriptions")
+def _transcriptions_dir(session: str) -> str:
+    return os.path.join(INPUT_ROOT, session, "transcriptions")
 
 
-def _links_file(tenant: str) -> str:
-    return os.path.join(INPUT_ROOT, tenant, "links.json")
+def _links_file(session: str) -> str:
+    return os.path.join(INPUT_ROOT, session, "links.json")
 
 
-def _config_file(tenant: str) -> str:
-    return os.path.join(INPUT_ROOT, tenant, "config.json")
+def _config_file(session: str) -> str:
+    return os.path.join(INPUT_ROOT, session, "config.json")
 
 
-def _load_tenant_config(tenant: str) -> dict:
-    path = _config_file(tenant)
+def _load_session_config(session: str) -> dict:
+    path = _config_file(session)
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -220,9 +220,9 @@ def _download_url(url: str, dest: str, ydl: "yt_dlp.YoutubeDL", retries: int = 5
             delay = min(delay * 2, 60)
 
 
-def download_transcript(url: str, langs: list[str], tenant: str) -> dict:
-    transcriptions_dir = _transcriptions_dir(tenant)
-    links_file = _links_file(tenant)
+def download_transcript(url: str, langs: list[str], session: str) -> dict:
+    transcriptions_dir = _transcriptions_dir(session)
+    links_file = _links_file(session)
     os.makedirs(transcriptions_dir, exist_ok=True)
 
     ydl_opts = {
@@ -254,7 +254,7 @@ def download_transcript(url: str, langs: list[str], tenant: str) -> dict:
         # overwritten in place instead of accumulating a new one (idempotent
         # even if the video's title, and therefore its slug, has changed) —
         # but only when the resolved language is unchanged. If it changed
-        # (e.g. the tenant's config.json now asks for a different language),
+        # (e.g. the session's config.json now asks for a different language),
         # the filename must change with it: reusing the old path would leave
         # a file whose name still claims the old language while its content
         # is actually in the new one. Compute a fresh, language-correct path
@@ -286,13 +286,13 @@ def download_transcript(url: str, langs: list[str], tenant: str) -> dict:
     return record
 
 
-def download_all(tenant: str, langs: list[str]) -> list[dict]:
-    """(Re)download every link already tracked in input/<tenant>/links.json.
+def download_all(session: str, langs: list[str]) -> list[dict]:
+    """(Re)download every link already tracked in input/<session>/links.json.
 
     A failure on one video is reported and skipped, not fatal to the batch.
     Returns one summary dict per link: {"link", "ok", "result" | "error"}.
     """
-    links_file = _links_file(tenant)
+    links_file = _links_file(session)
     records = _load_links(links_file)
 
     outcomes: list[dict] = []
@@ -301,7 +301,7 @@ def download_all(tenant: str, langs: list[str]) -> list[dict]:
         if not url:
             continue
         try:
-            result = download_transcript(url, langs, tenant)
+            result = download_transcript(url, langs, session)
             outcomes.append({"link": url, "ok": True, "result": result})
         except Exception as exc:  # keep going, one bad video shouldn't kill the batch
             outcomes.append({"link": url, "ok": False, "error": str(exc)})
@@ -312,27 +312,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download transcription")
     parser.add_argument("url", nargs="?", help="Video link")
     parser.add_argument(
-        "--tenant",
+        "--session",
         required=True,
-        help="Tenant owning this transcript. Reads/writes under input/<tenant>/.",
+        help="Session owning this transcript. Reads/writes under input/<session>/.",
     )
     parser.add_argument(
         "--lang",
         default=None,
         help=(
-            "Languages to try, comma-separated. Defaults to the tenant's "
-            "input/<tenant>/config.json \"lang\" field if present, otherwise 'es,en'."
+            "Languages to try, comma-separated. Defaults to the session's "
+            "input/<session>/config.json \"lang\" field if present, otherwise 'es,en'."
         ),
     )
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="clean input/<tenant>/links.json and every downloaded transcript in input/<tenant>/transcriptions/",
+        help="clean input/<session>/links.json and every downloaded transcript in input/<session>/transcriptions/",
     )
     args = parser.parse_args()
 
-    transcriptions_dir = _transcriptions_dir(args.tenant)
-    links_file = _links_file(args.tenant)
+    transcriptions_dir = _transcriptions_dir(args.session)
+    links_file = _links_file(args.session)
 
     if args.clean:
         removed = _clean_transcriptions(transcriptions_dir)
@@ -343,10 +343,10 @@ def main() -> None:
     if args.lang is not None:
         lang_str = args.lang
     else:
-        config = _load_tenant_config(args.tenant)
+        config = _load_session_config(args.session)
         lang_str = config.get("lang")
         if lang_str:
-            print(f"Usando idioma de {_config_file(args.tenant)}: {lang_str}", file=sys.stderr)
+            print(f"Usando idioma de {_config_file(args.session)}: {lang_str}", file=sys.stderr)
         else:
             lang_str = "es,en"
     langs = [lang.strip() for lang in lang_str.split(",") if lang.strip()]
@@ -356,17 +356,17 @@ def main() -> None:
 
     if args.url:
         try:
-            result = download_transcript(args.url, langs, args.tenant)
+            result = download_transcript(args.url, langs, args.session)
         except RuntimeError as exc:
             sys.exit(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    # No URL: bulk mode — refresh every link already tracked for this tenant.
+    # No URL: bulk mode — refresh every link already tracked for this session.
     if not os.path.exists(links_file):
         sys.exit(f"{links_file} no existe. Descarga al menos un vídeo con <url_youtube> primero.")
 
-    outcomes = download_all(args.tenant, langs)
+    outcomes = download_all(args.session, langs)
     if not outcomes:
         sys.exit(f"{links_file} no contiene ningún enlace que descargar.")
 

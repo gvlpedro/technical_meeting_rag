@@ -3,3 +3,4 @@ output/*
 scripts/__pycache__
 .download_transcript.pid
 .idea
+.tmp

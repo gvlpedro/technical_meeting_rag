@@ -2,7 +2,7 @@
   {
     "link": "https://www.youtube.com/watch?v=o5n85GRKuzk",
     "title": "Design Twitter - System Design Interview",
-    "transcript_path": "input/tenant_1/transcriptions/design_twitter_system_design_interview.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/design_twitter_system_design_interview.en.vtt",
     "lang": "en",
     "upload_date": "20221120",
     "description": "🚀 https://neetcode.io/ - Get lifetime access to every course I ever create!\n\n🥷 Discord: https://discord.gg/ddjKRXPqtk\n🐦 Twitter: https://twitter.com/neetcode1\n📷 Instagram: https://www.instagram.com/neetcodeio/\n🎵 TikTok: https://www.tiktok.com/@neetcode.io\n\n🐮 Support the channel: https://www.patreon.com/NEETcode\n\n⭐ BLIND-75 PLAYLIST: https://www.youtube.com/watch?v=KLlXCFG5TnA&list=PLot-Xpze53ldVwtstag2TL4HQhAnC8ATf\n💡 DYNAMIC PROGRAMMING PLAYLIST: https://www.youtube.com/watch?v=73r3KWiEvyk&list=PLot-Xpze53lcvx_tjrr_m2lgD2NsRHlNO&index=1\n\n0:00 - Intro\n0:49 - 1. Background\n1:55 - 2. Functional Requirements\n3:30 - 3. Non-functional Requirements\n7:40 - 4. High-Level Design\n11:39 - 5. Design Details\n13:25 - DB Schema\n15:30 - Scaling DB\n19:48 - News Feed Generation\n\n\n#system #design #twitter \n\nsystem design interview\ndesign twitter\ndesign instagram\ndesign facebook\ndesign news feed",
@@ -11,7 +11,7 @@
   {
     "link": "https://www.youtube.com/watch?v=Fy_Vo45P9xM",
     "title": "System Design Interview: Design Twitter (X)",
-    "transcript_path": "input/tenant_1/transcriptions/system_design_interview_design_twitter_x.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/system_design_interview_design_twitter_x.en.vtt",
     "lang": "en",
     "upload_date": "20240716",
     "description": "Become a senior software engineer with a job guarantee: https://go.hayksimonyan.com/pre-100\n\nLearn how to handle billions of tweets, followers, and massive data, and get ready to impress interviewers with your knowledge of designing social media platforms like Twitter.\n\nFree System Design Course: https://www.skool.com/web-dev-mastery\n\n🔖 Sections\n0:00 Background\n0:45 Functional Requirements\n1:32 Non-Functional Requirements\n3:08 API Design\n5:27 High-Level Design\n6:43 Database Schema\n7:50 Caching\n8:13 Storing Media Files\n9:10 Scaling the Database\n10:30 Separating the Read & Write APIs\n11:17 Handling the Peak Load",
@@ -20,7 +20,7 @@
   {
     "link": "https://www.youtube.com/watch?v=VsrcdRvMWhc",
     "title": "This Is How Twitter Works Internally",
-    "transcript_path": "input/tenant_1/transcriptions/this_is_how_twitter_works_internally.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/this_is_how_twitter_works_internally.en.vtt",
     "lang": "en",
     "upload_date": "20260515",
     "description": "Make sure you leave a like and subscribe to the channel!\n\nFollow me on:\nX https://x.com/mehulmpt\nInstagram https://instagram.com/mehulmpt\nLinkedIn https://www.linkedin.com/in/mehulmpt",
@@ -29,7 +29,7 @@
   {
     "link": "https://www.youtube.com/watch?v=J5auCY4ajK8&t=1547s",
     "title": "Real-Time Delivery Architecture at Twitter",
-    "transcript_path": "input/tenant_1/transcriptions/real_time_delivery_architecture_at_twitter.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/real_time_delivery_architecture_at_twitter.en.vtt",
     "lang": "en",
     "upload_date": "20160104",
     "description": "With hundreds of millions of users, Twitter operates one of the world's largest real-time delivery systems, large enough and pervasive enough to exert noticeable \"pressure\" on the overall internet itself. At steady state, Twitter receives thousands of tweets a second that it needs to deliver to disks, in-memory timelines, email, and mobile devices. The name of the game for Twitter is \"now\", so those deliveries, which multiply according to the graph of who follows whom, need to occur in real-time. In this session, we will dive into both the \"write path\" and \"read path\" of Twitter to understand the architecture which supports those tweets, and also how Twitter serves them through one of the world's largest web sites.\n\n\nAuthor:\nAttila Szegedi\nAttila Szegedi is a Principal Member of the Technical Staff at Oracle, working on dynamic language features on the Java platform and the Nashorn JavaScript runtime for the JVM. Before joining Oracle, Attila worked as a Staff Engineer in Twitter's Runtime Systems group. He is also known for his work on several Open Source projects, most notably he is a contributor to Mozilla Rhino, an earlier JavaScript runtime for the JVM, a contributor to Kiji, Twitter's server-optimized Ruby runtime, the author of Dynalink, the dynamic linker framework for languages on the JVM, as well as one of the principal developers of the FreeMarker templating language runtime.",
@@ -38,7 +38,7 @@
   {
     "link": "https://www.youtube.com/watch?v=dOyCq_mMtdI",
     "title": "How Twitter keeps its Search systems up and stable at scale",
-    "transcript_path": "input/tenant_1/transcriptions/how_twitter_keeps_its_search_systems_up_and_stable_at_scale.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/how_twitter_keeps_its_search_systems_up_and_stable_at_scale.en.vtt",
     "lang": "en",
     "upload_date": "20221225",
     "description": "Applied AI Course: https://arpitbhayani.me/applied-ai\nSystem Design for SDE-2 and above: https://arpitbhayani.me/masterclass\nSystem Design for Beginners: https://arpitbhayani.me/sys-design\n\nBuild Your Own Redis / DNS / BitTorrent / SQLite - with CodeCrafters.\nSign up and get 40% off - https://app.codecrafters.io/join?via=arpitbbhayani\n\n# Recommended videos and playlists\n\nIf you liked this video, you will find the following videos and playlists helpful\n\nRedis Internals: https://www.youtube.com/watch?v=h30k7YixrMo&list=PLsdq-3Z1EPT0eElcdOON9fdaeaQjlyXDt\nRedis Internals Reading Material: https://docs.google.com/document/d/1lHKI6bia3ZEPoAKgXWIm_SKv_Sii1qtN3EYMEdxKpEQ/edit?tab=t.0\n\nSystem Design: https://www.youtube.com/watch?v=o7qLKfILuD8&list=PLsdq-3Z1EPT27BuTnJ_trF7BsaTpYLqst\nDesigning Microservices: https://www.youtube.com/watch?v=JPj6mhVLQN0&list=PLsdq-3Z1EPT0ug8eizS71G6LZb6-4FAFt\nDatabase Engineering: https://www.youtube.com/watch?v=-htbah3eCYg&list=PLsdq-3Z1EPT2C-Da7Jscr7NptGcIZgQ2l&pp=gAQBiAQB\nConcurrency In-depth: https://www.youtube.com/watch?v=2PjlaUnrAMQ&list=PLsdq-3Z1EPT3VjDhjMb5yBsgn0wn2-fjp\nResearch paper dissections: https://www.youtube.com/watch?v=LXhgFAZroG8&list=PLsdq-3Z1EPT2XEJ0AmF02LBK1RFNd-jK8\nOutage Dissections: https://www.youtube.com/watch?v=LeT_s-UFw-U&list=PLsdq-3Z1EPT3_Z97svMs6S2y7tv1PcUmc\n\nHash Table Internals: https://www.youtube.com/watch?v=jjW8w8ED3Ns&list=PLsdq-3Z1EPT2UnueESBLReaVSLIo_BuAc\nBittorrent Internals: https://www.youtube.com/watch?v=v7cR0ZolaUA&list=PLsdq-3Z1EPT1rNeq2GXpnivaWINnOaCd0\n\n# Things you will find amusing\n\nBookshelf: https://arpitbhayani.me/bookshelf\nPapershelf: https://arpitbhayani.me/papershelf\n\n# Other socials\n\nI keep writing and sharing my practical experience and learnings every day, so if you resonate, then follow along. I keep it no fluff.\n\nLinkedIn: https://linkedin.com/in/arpitbhayani\nTwitter: https://twitter.com/arpit_bhayani\n\nThank you for watching and supporting! It means a ton.\n\nI am on a mission to bring out the best engineering stories from around the world and make you all fall in love with engineering. If you resonate with this, then follow along. I always keep it no-fluff.",
@@ -47,7 +47,7 @@
   {
     "link": "https://www.youtube.com/watch?v=04uC4zrU10k",
     "title": "Twitter Sentiment Analysis Project - Part 3 | Full code | Engineering Project | Machine learning",
-    "transcript_path": "input/tenant_1/transcriptions/twitter_sentiment_analysis_project_part_3_full_code_engineering_project_machine_learning.en.vtt",
+    "transcript_path": "input/session_1/transcriptions/twitter_sentiment_analysis_project_part_3_full_code_engineering_project_machine_learning.en.vtt",
     "lang": "en",
     "upload_date": "20211218",
     "description": "In this video I have explained the steps to install and run the project along with code explanation.\n\nFull code v2 (for Tweepy version 4.6.0) : https://drive.google.com/file/d/1UftCXkk4xlB4Q1KfzsfRiFftcscKf85B/view?usp=sharing\nCredits : @Megha Pai - for solving the error\n\nFull code v1 (for older version of Tweepy) : https://drive.google.com/file/d/18QG2OkePRR0h5RVLyMUcQuE2tSe7wt9j/view?usp=sharing\n\nPart 1 : https://youtu.be/63sGpIRnOL8 - demo of the project\nPart 2 : https://youtu.be/zIEnTGANpQs - twitter developer account creation\ngeeks for geeks explanation : https://www.geeksforgeeks.org/twitter-sentiment-analysis-using-python/",

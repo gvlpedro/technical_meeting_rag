@@ -68,11 +68,11 @@ Only to process real transcriptions that are very different from each other the 
 These transcripts will be processed to generate and compare the different perspectives, applying the same guardrails to identify missing information, inconsistencies, implementation status, and boundaries between profiles.
 
 ```
-# Add new link to tenant_1 and download the transcript
-python3 scripts/download_transcript.py --tenant tenant_1 "https://www.youtube.com/watch?v=04uC4zrU10k"
+# Add new link to session_1 and download the transcript
+python3 scripts/download_transcript.py --session session_1 "https://www.youtube.com/watch?v=04uC4zrU10k"
 
-# Download all links from tenant_1
-python3 scripts/download_transcript.py --tenant tenant_1
+# Download all links from session_1
+python3 scripts/download_transcript.py --session session_1
 ```
 
 ## Output
@@ -85,9 +85,10 @@ Then this will generate:
 
 ## User interface
 
-Once user authenticates in a tenant (isolating information) to show different tabs:
+Once user authenticates in a session (isolating information) to show different tabs:
 
 * Input transcription
+* Test  monitor
 * Pull request to clarify new information
 * Chat with RAG 
 

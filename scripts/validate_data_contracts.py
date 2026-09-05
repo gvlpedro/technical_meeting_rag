@@ -2,12 +2,12 @@
 """Valida los data contracts ODCS generados por prompting/roles/common/data_contracts.md.
 
 Uso:
-    python3 scripts/validate_data_contracts.py --tenant tenant_1
-    python3 scripts/validate_data_contracts.py --tenant tenant_1 --dir otro_output
+    python3 scripts/validate_data_contracts.py --session session_1
+    python3 scripts/validate_data_contracts.py --session session_1 --dir otro_output
     python3 scripts/validate_data_contracts.py archivo1.odcs.json archivo2.odcs.json
 
-`--tenant` es obligatorio salvo que pases ficheros concretos como argumentos:
-busca todos los `*.odcs.json` bajo `<dir>/<tenant>/data_contracts/`
+`--session` es obligatorio salvo que pases ficheros concretos como argumentos:
+busca todos los `*.odcs.json` bajo `<dir>/<session>/data_contracts/`
 """
 
 from __future__ import annotations
@@ -25,9 +25,9 @@ DEFAULT_ROOT = "output"
 CONTRACT_GLOB = "*.odcs.json"
 
 
-def find_contracts(root: str, tenant: str) -> list[Path]:
-    """Only look under <root>/<tenant>/data_contracts/ — never other tenants."""
-    base = Path(root) / tenant / "data_contracts"
+def find_contracts(root: str, session: str) -> list[Path]:
+    """Only look under <root>/<session>/data_contracts/ — never other sessions."""
+    base = Path(root) / session / "data_contracts"
     return sorted(base.rglob(CONTRACT_GLOB))
 
 
@@ -91,18 +91,18 @@ def main() -> None:
         help=f"Root directory to search under (default: {DEFAULT_ROOT})",
     )
     parser.add_argument(
-        "--tenant",
+        "--session",
         default=None,
         help=(
-            "Tenant to validate (e.g. tenant_1). Only contracts under "
-            "<dir>/<tenant>/data_contracts/ are looked at. Mandatory unless "
+            "Session to validate (e.g. session_1). Only contracts under "
+            "<dir>/<session>/data_contracts/ are looked at. Mandatory unless "
             "FILES are given explicitly."
         ),
     )
     args = parser.parse_args()
 
-    if not args.files and not args.tenant:
-        parser.error("--tenant is required when no explicit files are given")
+    if not args.files and not args.session:
+        parser.error("--session is required when no explicit files are given")
 
     if shutil.which(DATACONTRACT_BIN) is None:
         sys.exit(
@@ -110,7 +110,7 @@ def main() -> None:
             "Instálalo con: uv tool install datacontract-cli"
         )
 
-    contracts = [Path(f) for f in args.files] if args.files else find_contracts(args.dir, args.tenant)
+    contracts = [Path(f) for f in args.files] if args.files else find_contracts(args.dir, args.session)
 
     if not contracts:
         print("No se encontró ningún *.odcs.json para validar.")

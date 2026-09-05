@@ -121,19 +121,21 @@ following the structure in **ODCS mapping**.
 
 ### Step 5 — Write the files
 
-If a tenant identifier is provided, write each contract to:
+If a session identifier is provided, write each contract to:
 
 ```text
-output/{{tenant}}/data_contracts/<id>.odcs.json
+output/{{session}}/data_contracts/<id>.odcs.json
 ```
 
-If no tenant identifier is provided, write to:
+If no session identifier is provided, write to:
 
 ```text
 output/data_contracts/<id>.odcs.json
 ```
 
-and set the JSON `tenant` field to `"default"`.
+and set the JSON `tenant` field to `"default"`. Note: ODCS itself defines a `tenant` field at the
+document's top level — that key name comes from the external standard and must stay `tenant`
+regardless of this project's own "session" terminology; only its *value* is this run's session id.
 
 Do not print the JSON contents back in the response. After writing, report only which mode was
 used and the list of `<id>.odcs.json` files created (or, if zero contracts were found, say so
@@ -241,7 +243,7 @@ Populate this exact structure for every contract:
   "name": "<the contract's name — the {{...}} node's label in Mode A, or the action-based name chosen in Mode B>",
   "version": "0.1.0",
   "status": "draft",
-  "tenant": "<{{tenant}} if provided, otherwise \"default\">",
+  "tenant": "<{{session}} if provided, otherwise \"default\"; the key stays \"tenant\" — it is ODCS's own field name, not this project's>",
   "domain": "<producer profile> -> <consumer profile>",
   "description": {
     "purpose": "<one or two sentences: what this contract governs, based on the diagrams>",
@@ -372,7 +374,7 @@ Every gap must be visible in `description.limitations`, never silently filled in
   standard). That schema requires per-type fields on any `servers[]` entry you keep (see **Field
   inclusion policy**) — schema-validity is not optional, and neither is refusing to fabricate those
   fields, so omit the entry rather than let either one lose.
-* Output path is always `output/{{tenant}}/data_contracts/` when a tenant is given, or
+* Output path is always `output/{{session}}/data_contracts/` when a session is given, or
   `output/data_contracts/` when it is not — never written elsewhere.
 * This role produces files, not chat output — do not paste JSON into the response.
 
@@ -380,24 +382,24 @@ Every gap must be visible in `description.limitations`, never silently filled in
 
 # Input
 
-Below you will receive the diagrams directory this run applies to, an optional tenant identifier
-(omit the tag entirely if none is given — do not treat an empty tag as tenant `""`), and the
+Below you will receive the diagrams directory this run applies to, an optional session identifier
+(omit the tag entirely if none is given — do not treat an empty tag as session `""`), and the
 contents of whichever Mermaid diagrams exist in that directory. Any of the diagram tags may be
 absent if that file does not exist — infer the mode from what is actually present, per the
 **Scope** section above.
 
 By convention, the diagrams roles in `prompting/roles/mermaid/` write to
-`output/{{tenant}}/diagrams/<diagram_set>/<role>.mmd`, so `{{diagrams_directory}}` is typically
-`output/{{tenant}}/diagrams/<diagram_set>` — the same `{{tenant}}` used for this role's own output
-path in Step 5. When that convention holds, use the same tenant value for both.
+`output/{{session}}/diagrams/<diagram_set>/<role>.mmd`, so `{{diagrams_directory}}` is typically
+`output/{{session}}/diagrams/<diagram_set>` — the same `{{session}}` used for this role's own output
+path in Step 5. When that convention holds, use the same session value for both.
 
 <DIAGRAMS_DIRECTORY>
 {{diagrams_directory}}
 </DIAGRAMS_DIRECTORY>
 
-<TENANT>
-{{tenant}}
-</TENANT>
+<SESSION>
+{{session}}
+</SESSION>
 
 <CONTRACTS_DIAGRAM>
 {{contracts_diagram}}

@@ -526,13 +526,13 @@ Omit any of these comment blocks that would be empty. Do not add any other comme
 Write the diagram file to:
 
 ```text
-output/{{tenant}}/diagrams/{{diagram_set}}/frontend_engineer.mmd
+output/{{session}}/diagrams/{{diagram_set}}/frontend_engineer.mmd
 ```
 
 `{{diagram_set}}` is a short slug identifying the source material (e.g. the source transcript's
-filename without extension). If no `{{tenant}}` is given, write to
+filename without extension). If no `{{session}}` is given, write to
 `output/diagrams/{{diagram_set}}/frontend_engineer.mmd` instead. This is the same
-`output/{{tenant}}/diagrams/...` convention the sibling roles in this directory use, and that
+`output/{{session}}/diagrams/...` convention the sibling roles in this directory use, and that
 `prompting/roles/common/data_contracts.md` reads from.
 
 ---
