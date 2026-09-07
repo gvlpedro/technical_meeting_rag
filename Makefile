@@ -1,8 +1,15 @@
 PORT ?= 8010
 
-.PHONY: test up down
+.PHONY: test up down db migrate
 
-test:
+db:
+	docker compose up -d postgres
+	@until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+
+migrate: db
+	uv run alembic upgrade head
+
+test: migrate
 	uv run pytest
 
 down:

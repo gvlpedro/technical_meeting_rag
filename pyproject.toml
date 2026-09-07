@@ -3,13 +3,20 @@ name = "technical-meeting-rag"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic>=1.13",
     "anthropic>=0.40",
+    "asyncpg>=0.29",
     "fastapi>=0.110",
     "litellm>=1.50",
     "openai>=1.0",
+    "pgvector>=0.3",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
+    "sentence-transformers>=3.0",
+    "sqlalchemy[asyncio]>=2.0",
     "structlog>=24.0",
+    "tiktoken>=0.7.0",
+    "torch>=2.2",
     "uvicorn[standard]>=0.27",
     "yt-dlp>=2026.8.19",
 ]
@@ -19,6 +26,17 @@ dev = [
     "httpx2>=2.12.0",
     "pytest>=9.1.1",
 ]
+
+[tool.uv.sources]
+# This service runs on CPU only (no GPU in the container); the default PyPI
+# torch wheel drags in ~8GB of unused CUDA/NVIDIA packages. Pin it to PyTorch's
+# own CPU-only index instead.
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 filterwarnings = [

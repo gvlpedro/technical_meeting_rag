@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.routers.completions import router as completions_router
+from app.routers.ingestion import router as ingestion_router
 
 logging.basicConfig(level=settings.log_level, format="%(message)s")
 structlog.configure(
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(completions_router)
+app.include_router(ingestion_router)
 
 
 @app.get("/health")

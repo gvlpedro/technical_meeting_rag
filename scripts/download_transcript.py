@@ -2,36 +2,45 @@
 """Descarga la transcripción de un vídeo de YouTube con yt-dlp.
 
 Uso:
-    python3 scripts/download_transcript.py <url_youtube> --session session_1 [--lang es,en]
-    python3 scripts/download_transcript.py --session session_1
-    python3 scripts/download_transcript.py --session session_1 --clean
+    python3 scripts/download_transcript.py <url_youtube> [--lang es,en]
+    python3 scripts/download_transcript.py [--ingestion-date 20260906]
+    python3 scripts/download_transcript.py --clean [--ingestion-date 20260906]
 
-`--session` es obligatorio. Si no se pasa <url_youtube>, el script busca
-input/<session>/links.json y (re)descarga la transcripción de cada enlace que
-ya contiene, usando la configuración de ese mismo session — útil para
-refrescar todas las transcripciones de golpe (p.ej. tras cambiar el idioma en
-config.json). Un fallo en un vídeo (borrado, sin subtítulos en ese idioma...)
-no aborta el resto del lote.
+La fecha de ingesta de cada vídeo se deriva siempre de su propio metadato de
+YouTube `upload_date` (formato YYYYMMDD) — no se elige a mano. Un vídeo
+subido el 2026-09-06 se guarda en
+`input/transcriptions/ingestion_date=20260906/`; dos vídeos descargados en el
+mismo lote pero subidos en fechas distintas terminan en particiones
+distintas. `--ingestion-date` no se acepta junto a una URL por esa razón: no
+hay nada que decidir.
 
-El idioma a descargar se resuelve en este orden de
-prioridad: 1) --lang si se pasa explícitamente, 2) el campo "lang" de
-input/<session>/config.json si existe (p.ej. {"lang": "en"}), 3) "es,en" por
-defecto. Prueba los idiomas resultantes en orden y se queda con el primero
-disponible (subtítulos manuales antes que automáticos). Guarda el .vtt en
-input/<session>/transcriptions/ y acumula {link, title, transcript_path,
-upload_date, description, channel_url} en input/<session>/links.json,
-añadiendo o actualizando la entrada de cada vídeo.
+`config.json` y `links.json` viven en `input/` (globales, no por fecha).
+Sin URL, el script busca `input/links.json` y (re)descarga la transcripción
+de cada enlace que ya contiene — útil para refrescar todas las
+transcripciones de golpe (p.ej. tras cambiar el idioma en config.json). En
+este modo (y en `--clean`), `--ingestion-date <YYYYMMDD>` filtra la operación
+a solo los vídeos cuyo `upload_date` coincida; omitido, actúa sobre todos. Un
+fallo en un vídeo (borrado, sin subtítulos en ese idioma...) no aborta el
+resto del lote.
 
-Es idempotente: volver a ejecutarlo con la misma URL y el mismo session
-sobrescribe el mismo fichero .vtt y actualiza la misma entrada de links.json,
-sin acumular ficheros nuevos, aunque el título del vídeo haya cambiado entre
-ejecuciones. Si el idioma resuelto cambia respecto a la última descarga (p.ej.
-cambiaste el "lang" de config.json), el nombre del fichero se recalcula para
-reflejar el nuevo idioma y el fichero antiguo se borra — nunca deja un
-`*.es.vtt` con contenido en otro idioma dentro.
+El idioma a descargar se resuelve en este orden de prioridad: 1) --lang si se
+pasa explícitamente, 2) el campo "lang" de input/config.json si existe (p.ej.
+{"lang": "en"}), 3) "es,en" por defecto. Prueba los idiomas resultantes en
+orden y se queda con el primero disponible (subtítulos manuales antes que
+automáticos). Acumula {link, title, transcript_path, upload_date,
+description, channel_url} en input/links.json, añadiendo o actualizando la
+entrada de cada vídeo.
 
---clean borra tanto input/<session>/links.json como todos los .vtt descargados
-en input/<session>/transcriptions/, para ese session únicamente.
+Es idempotente: volver a ejecutarlo con la misma URL sobrescribe el mismo
+fichero .vtt y actualiza la misma entrada de links.json, sin acumular
+ficheros nuevos, aunque el título del vídeo haya cambiado entre ejecuciones.
+Si el idioma resuelto cambia (p.ej. cambiaste el "lang" de config.json), el
+nombre del fichero se recalcula para reflejar el nuevo idioma y el fichero
+antiguo se borra — nunca deja un `*.es.vtt` con contenido en otro idioma
+dentro.
+
+--clean borra las transcripciones descargadas y sus entradas de links.json;
+sin --ingestion-date, todo; con --ingestion-date=<YYYYMMDD>, solo esa fecha.
 """
 
 from __future__ import annotations
@@ -54,26 +63,27 @@ except ImportError:
     )
 
 INPUT_ROOT = "input"
+TRANSCRIPTIONS_ROOT = os.path.join(INPUT_ROOT, "transcriptions")
 LOCK_FILE = ".download_transcript.pid"
 SCRIPT_NAME = os.path.basename(__file__)
 
 YDL_EXTRACTOR_ARGS = {"youtube": {"player_client": ["android"]}}
 
 
-def _transcriptions_dir(session: str) -> str:
-    return os.path.join(INPUT_ROOT, session, "transcriptions")
+def _ingestion_date_dir(ingestion_date: str) -> str:
+    return os.path.join(TRANSCRIPTIONS_ROOT, f"ingestion_date={ingestion_date}")
 
 
-def _links_file(session: str) -> str:
-    return os.path.join(INPUT_ROOT, session, "links.json")
+def _links_file() -> str:
+    return os.path.join(INPUT_ROOT, "links.json")
 
 
-def _config_file(session: str) -> str:
-    return os.path.join(INPUT_ROOT, session, "config.json")
+def _config_file() -> str:
+    return os.path.join(INPUT_ROOT, "config.json")
 
 
-def _load_session_config(session: str) -> dict:
-    path = _config_file(session)
+def _load_config() -> dict:
+    path = _config_file()
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -163,6 +173,29 @@ def _clean_transcriptions(dir_path: str) -> int:
     return removed
 
 
+def _clean(ingestion_date: str | None) -> tuple[int, int]:
+    """Remove transcripts and their links.json entries. Returns (files_removed, records_removed)."""
+    links_file = _links_file()
+    records = _load_links(links_file)
+
+    if ingestion_date:
+        to_remove = [r for r in records if r.get("upload_date") == ingestion_date]
+        keep = [r for r in records if r.get("upload_date") != ingestion_date]
+        removed_files = _clean_transcriptions(_ingestion_date_dir(ingestion_date))
+        _save_links(links_file, keep)
+        return removed_files, len(to_remove)
+
+    removed_files = 0
+    if os.path.isdir(TRANSCRIPTIONS_ROOT):
+        for entry in os.listdir(TRANSCRIPTIONS_ROOT):
+            full = os.path.join(TRANSCRIPTIONS_ROOT, entry)
+            if os.path.isdir(full):
+                removed_files += _clean_transcriptions(full)
+    removed_records = len(records)
+    _save_links(links_file, [])
+    return removed_files, removed_records
+
+
 def _is_stale_script_process(pid: int) -> bool:
     """check active 'pid'"""
     try:
@@ -220,10 +253,10 @@ def _download_url(url: str, dest: str, ydl: "yt_dlp.YoutubeDL", retries: int = 5
             delay = min(delay * 2, 60)
 
 
-def download_transcript(url: str, langs: list[str], session: str) -> dict:
-    transcriptions_dir = _transcriptions_dir(session)
-    links_file = _links_file(session)
-    os.makedirs(transcriptions_dir, exist_ok=True)
+def download_transcript(url: str, langs: list[str]) -> dict:
+    links_file = _links_file()
+    records = _load_links(links_file)
+    existing = next((r for r in records if r.get("link") == url), None)
 
     ydl_opts = {
         "skip_download": True,
@@ -233,14 +266,19 @@ def download_transcript(url: str, langs: list[str], session: str) -> dict:
         "ignore_no_formats_error": True,
     }
 
-    records = _load_links(links_file)
-    existing = next((r for r in records if r.get("link") == url), None)
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
         video_id = info["id"]
         title = info.get("title", video_id)
+
+        upload_date = info.get("upload_date")
+        if not upload_date:
+            raise RuntimeError(
+                f"YouTube no reportó 'upload_date' para '{title}'; no se puede derivar su ingestion_date."
+            )
+        transcriptions_dir = _ingestion_date_dir(upload_date)
+        os.makedirs(transcriptions_dir, exist_ok=True)
 
         pick = _pick_subtitle(info, langs)
         if pick is None:
@@ -254,11 +292,11 @@ def download_transcript(url: str, langs: list[str], session: str) -> dict:
         # overwritten in place instead of accumulating a new one (idempotent
         # even if the video's title, and therefore its slug, has changed) —
         # but only when the resolved language is unchanged. If it changed
-        # (e.g. the session's config.json now asks for a different language),
-        # the filename must change with it: reusing the old path would leave
-        # a file whose name still claims the old language while its content
-        # is actually in the new one. Compute a fresh, language-correct path
-        # instead, and remove the now-stale file under the old name.
+        # (e.g. config.json now asks for a different language), the filename
+        # must change with it: reusing the old path would leave a file whose
+        # name still claims the old language while its content is actually
+        # in the new one. Compute a fresh, language-correct path instead, and
+        # remove the now-stale file under the old name.
         old_path = existing.get("transcript_path") if existing else None
         old_lang = existing.get("lang") if existing else None
         if old_path and old_lang == lang:
@@ -275,7 +313,7 @@ def download_transcript(url: str, langs: list[str], session: str) -> dict:
         "title": title,
         "transcript_path": transcript_path,
         "lang": lang,
-        "upload_date": info.get("upload_date"),
+        "upload_date": upload_date,
         "description": info.get("description"),
         "channel_url": info.get("channel_url"),
     }
@@ -286,14 +324,15 @@ def download_transcript(url: str, langs: list[str], session: str) -> dict:
     return record
 
 
-def download_all(session: str, langs: list[str]) -> list[dict]:
-    """(Re)download every link already tracked in input/<session>/links.json.
+def download_all(langs: list[str], ingestion_date: str | None = None) -> list[dict]:
+    """(Re)download links tracked in input/links.json, optionally filtered by `upload_date`.
 
     A failure on one video is reported and skipped, not fatal to the batch.
     Returns one summary dict per link: {"link", "ok", "result" | "error"}.
     """
-    links_file = _links_file(session)
-    records = _load_links(links_file)
+    records = _load_links(_links_file())
+    if ingestion_date:
+        records = [r for r in records if r.get("upload_date") == ingestion_date]
 
     outcomes: list[dict] = []
     for record in records:
@@ -301,7 +340,7 @@ def download_all(session: str, langs: list[str]) -> list[dict]:
         if not url:
             continue
         try:
-            result = download_transcript(url, langs, session)
+            result = download_transcript(url, langs)
             outcomes.append({"link": url, "ok": True, "result": result})
         except Exception as exc:  # keep going, one bad video shouldn't kill the batch
             outcomes.append({"link": url, "ok": False, "error": str(exc)})
@@ -312,41 +351,42 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download transcription")
     parser.add_argument("url", nargs="?", help="Video link")
     parser.add_argument(
-        "--session",
-        required=True,
-        help="Session owning this transcript. Reads/writes under input/<session>/.",
+        "--ingestion-date",
+        default=None,
+        help=(
+            "Filter by ingestion date (YYYYMMDD, matching videos' own YouTube upload_date). "
+            "Only applies to bulk re-download or --clean; not accepted together with a "
+            "single <url_youtube>, whose ingestion date is always derived from its own upload_date."
+        ),
     )
     parser.add_argument(
         "--lang",
         default=None,
         help=(
-            "Languages to try, comma-separated. Defaults to the session's "
-            "input/<session>/config.json \"lang\" field if present, otherwise 'es,en'."
+            "Languages to try, comma-separated. Defaults to input/config.json's "
+            "\"lang\" field if present, otherwise 'es,en'."
         ),
     )
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="clean input/<session>/links.json and every downloaded transcript in input/<session>/transcriptions/",
+        help="Remove downloaded transcripts and their links.json entries (see --ingestion-date).",
     )
     args = parser.parse_args()
 
-    transcriptions_dir = _transcriptions_dir(args.session)
-    links_file = _links_file(args.session)
-
-    if args.clean:
-        removed = _clean_transcriptions(transcriptions_dir)
-        _save_links(links_file, [])
-        print(f"{links_file} cleaned. Removed {removed} transcript file(s) from {transcriptions_dir}/.")
-        return
+    if args.url and args.ingestion_date:
+        sys.exit(
+            "--ingestion-date no se acepta junto a una URL: la fecha de ingesta se deriva del "
+            "upload_date propio de ese vídeo, no hay nada que elegir."
+        )
 
     if args.lang is not None:
         lang_str = args.lang
     else:
-        config = _load_session_config(args.session)
+        config = _load_config()
         lang_str = config.get("lang")
         if lang_str:
-            print(f"Usando idioma de {_config_file(args.session)}: {lang_str}", file=sys.stderr)
+            print(f"Usando idioma de {_config_file()}: {lang_str}", file=sys.stderr)
         else:
             lang_str = "es,en"
     langs = [lang.strip() for lang in lang_str.split(",") if lang.strip()]
@@ -354,21 +394,32 @@ def main() -> None:
     _kill_previous_instance(LOCK_FILE)
     _write_lock(LOCK_FILE)
 
+    if args.clean:
+        removed_files, removed_records = _clean(args.ingestion_date)
+        scope = f"ingestion_date={args.ingestion_date}" if args.ingestion_date else "todas las fechas"
+        print(
+            f"{_links_file()} actualizado ({removed_records} enlace(s) eliminado(s)). "
+            f"Borrados {removed_files} fichero(s) de transcripción de {scope}."
+        )
+        return
+
     if args.url:
         try:
-            result = download_transcript(args.url, langs, args.session)
+            result = download_transcript(args.url, langs)
         except RuntimeError as exc:
             sys.exit(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    # No URL: bulk mode — refresh every link already tracked for this session.
+    # No URL: bulk mode — refresh links already tracked, optionally filtered by ingestion date.
+    links_file = _links_file()
     if not os.path.exists(links_file):
         sys.exit(f"{links_file} no existe. Descarga al menos un vídeo con <url_youtube> primero.")
 
-    outcomes = download_all(args.session, langs)
+    outcomes = download_all(langs, args.ingestion_date)
     if not outcomes:
-        sys.exit(f"{links_file} no contiene ningún enlace que descargar.")
+        scope = f" para ingestion_date={args.ingestion_date}" if args.ingestion_date else ""
+        sys.exit(f"{links_file} no contiene ningún enlace{scope} que descargar.")
 
     ok_count = 0
     for outcome in outcomes:

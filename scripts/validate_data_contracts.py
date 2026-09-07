@@ -2,8 +2,8 @@
 """Valida los data contracts ODCS generados por prompting/roles/common/data_contracts.md.
 
 Uso:
-    python3 scripts/validate_data_contracts.py --session session_1
-    python3 scripts/validate_data_contracts.py --session session_1 --dir otro_output
+    python3 scripts/validate_data_contracts.py --session session_20260906
+    python3 scripts/validate_data_contracts.py --session session_20260906 --dir otro_output
     python3 scripts/validate_data_contracts.py archivo1.odcs.json archivo2.odcs.json
 
 `--session` es obligatorio salvo que pases ficheros concretos como argumentos:
@@ -94,7 +94,7 @@ def main() -> None:
         "--session",
         default=None,
         help=(
-            "Session to validate (e.g. session_1). Only contracts under "
+            "Session to validate (e.g. session_20260906). Only contracts under "
             "<dir>/<session>/data_contracts/ are looked at. Mandatory unless "
             "FILES are given explicitly."
         ),

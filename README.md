@@ -1,8 +1,8 @@
-# organization_meeting_rag
+# technical_meeting_rag
 
 Technical meetings about a system's architecture are scattered across many separate conversations, each told from a different angle — a backend engineer describing a service, a data engineer describing a pipeline, a frontend engineer describing a view — and each capturing only a partial, informal snapshot of the truth at that moment.
 
-This project builds a Retrieval-Augmented Generation (RAG) system that ingests transcripts and a more clarified version as queryable knowledge base.
+This project builds a **Medallion RAG Architecture** that ingests transcripts and a more clarified version as queryable knowledge base.
 
 # Problems to resolve
 
@@ -46,11 +46,43 @@ The goal is not simply to summarize a meeting, but to produce **consistent, role
 
 Input transcription > Clarification (LLM / Human) > Pull Request > Enrich RAG 
 
-## Expected questions
+Although the workflow shows how user understands the flow, internally data follows a layered approach in PostgreSQL due to raw transcriptions are processed to store the raw data and then we clarify the information in a silver layer and finally we cover a synthesis of the architecture in gold layer.
+
+```
+                    ┌──────────────────────┐
+                    │      RAW / Bronze    │
+                    │                      │
+Documents ─────────►│ original content     │
+                    │ metadata             │
+                    └──────────┬───────────┘
+                               │
+                               │ clarification agent process
+                               ▼
+                    ┌──────────────────────────┐
+                    │    SILVER / Syntesis     │
+                    │                          │
+                    │ Summary chunking         │
+                    │ metadata enritchment     │
+                    │ generated data contracts │
+                    └──────────┬───────────────┘
+                               │
+                               │ semantic refinement
+                               ▼
+                    ┌──────────────────────────┐
+                    │ GOLD / Arch. components  │
+                    │                          │
+                    │ Structure-aware chunking │
+                    │ metadata enritchment     │
+                    │ Component graph          │
+                    └──────────────────────────┘
+```
+
+## Expected questions to resolve
 
 * When the component X was introduced in the company?
 * Show me the architecture from Software Engineering perspective
 * Who is responsible for the component X?
+* Add a new component Y with [X, Z] dependencies and following model [...]
 * Let me know the list of persons talking about the component X
 * Let me know the details of the component X, including its dependencies and boundaries
 
@@ -68,11 +100,15 @@ Only to process real transcriptions that are very different from each other the 
 These transcripts will be processed to generate and compare the different perspectives, applying the same guardrails to identify missing information, inconsistencies, implementation status, and boundaries between profiles.
 
 ```
-# Add new link to session_1 and download the transcript
-python3 scripts/download_transcript.py --session session_1 "https://www.youtube.com/watch?v=04uC4zrU10k"
+# Download a video's transcript; its session is derived from the video's own
+# YouTube upload_date (input/transcriptions/session=<upload_date>/)
+python3 scripts/download_transcript.py "https://www.youtube.com/watch?v=04uC4zrU10k"
 
-# Download all links from session_1
-python3 scripts/download_transcript.py --session session_1
+# Re-download every link already tracked in input/links.json
+python3 scripts/download_transcript.py
+
+# ...or only the ones uploaded on a given date
+python3 scripts/download_transcript.py --session 20260906
 ```
 
 ## Output

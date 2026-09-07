@@ -9,6 +9,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY app ./app
 COPY llm ./llm
+COPY db ./db
+COPY ingestion ./ingestion
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
 COPY tests ./tests
 RUN uv sync --frozen --no-dev
 
