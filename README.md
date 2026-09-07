@@ -4,6 +4,10 @@ Technical meetings about a system's architecture are scattered across many separ
 
 This project builds a **Medallion RAG Architecture** that ingests transcripts and a more clarified version as queryable knowledge base.
 
+# Objective
+
+For every architecture component mentioned across meetings, clarify **what it is**, whether it is **new**, an **evolution** of something already known, or **unchanged**, and produce two things Gold makes: an **Architecture Decision Record (ADR)** per evolution — capturing the context that motivated it, the alternatives considered, the trade-offs accepted, and the decision itself — and a **versioned record of each component**, instead of a flat, undated summary of what was said.
+
 # Problems to resolve
 
 * **Fragmented knowledge:** the same architecture gets described across dozens of separate meetings, with no single place that reflects the current, agreed-upon picture.
@@ -17,19 +21,6 @@ This project builds a **Medallion RAG Architecture** that ingests transcripts an
 * **Lack of traceability:** once a meeting is summarized by hand, it is normally impossible to trace a statement back to who said it, when, and in which conversation.
 * **Manual alignment does not scale:** reconciling all of the above by hand, meeting after meeting, does not scale as the organization and its architecture grow.
 
-# Align different perspectives
-
-First of all, the expected result is an alignment between different profiles in the company, the input are transcriptions of meetings and the alignment will provide a consistent RAG (Retrieval-Augmented Generation) with all distilled information.
-
-This project aims to provide a dedicated perspective for each technical team:
-
-* **Business:** Only business-related details, requirements, and decisions.
-* **Software Engineering:** Only components, decisions, and information related to software engineering.
-* **Data Engineering:** Only components, decisions, and information related to data engineering and data analytics.
-* **Frontend Engineering:** Only components, decisions, and information related to frontend engineering and user experience.
-* **Data Contracts:** Common schemas (e.g. OCDS) defining the boundaries and shared items between the different profiles.
-
-
 # Clarification process: Agent & Human-in-the-loop collaboration
 
 The project refine the final understanding of the organization asking to clarify following points:
@@ -38,9 +29,11 @@ The project refine the final understanding of the organization asking to clarify
 2. **Clarify contradictions:** Ask for items that are inconsistent between the different perspectives and require clarification or resolution.
 3. **Clarify architecture evolution:** Clarify the timeline, components are described in different moments so project must order the evolution.
 4. **Clarify subsystems:** Some components are described as part of a bigger system, so project must ask the boundaries and dependencies between them.
-2. **Clarify implemented vs. planned:** Ask if components and capabilities that already exist and those that have not been implemented yet.
+5. **Clarify implemented vs. planned:** Ask if components and capabilities that already exist and those that have not been implemented yet.
 
 The goal is not simply to summarize a meeting, but to produce **consistent, role-specific views of the same organization**, while explicitly identifying gaps, boundaries, dependencies, and inconsistencies between those views.
+
+Check document [doc/silver_process.md](doc/silver_process.md) for more details.
 
 ## Workflow
 
@@ -58,23 +51,24 @@ Documents ─────────►│ original content     │
                                │
                                │ clarification agent process
                                ▼
-                    ┌──────────────────────────┐
-                    │    SILVER / Syntesis     │
-                    │                          │
-                    │ Summary chunking         │
-                    │ metadata enritchment     │
-                    │ generated data contracts │
-                    └──────────┬───────────────┘
+                    ┌───────────────────────────┐
+                    │ SILVER / Clarified input  │
+                    │                           │
+                    │ Summary chunking          │
+                    │ metadata enritchment      │
+                    │ generated data contracts  │
+                    └──────────┬────────────────┘
                                │
                                │ semantic refinement
                                ▼
-                    ┌──────────────────────────┐
-                    │ GOLD / Arch. components  │
-                    │                          │
-                    │ Structure-aware chunking │
-                    │ metadata enritchment     │
-                    │ Component graph          │
-                    └──────────────────────────┘
+                    ┌────────────────────────────────────┐
+                    │ GOLD / ADR: versioned components   │
+                    │                                    │
+                    │ Structure-aware chunking           │
+                    │ Pull request / versions            │
+                    │ metadata enritchment               │
+                    │ Component graph                    │
+                    └────────────────────────────────────┘
 ```
 
 ## Expected questions to resolve
@@ -164,6 +158,50 @@ Once user authenticates in a session (isolating information) to show different t
     "ragas>=0.2",
     "mermaid-py>=0.8.4",
     "open-data-contract-standard>=3.0.1"
+
+# Architecture
+
+A single FastAPI application backed by Postgres (`pgvector` for embeddings) and a LangGraph agent
+for the human-in-the-loop clarification step; Streamlit is the planned UI layer (see `## User
+interface` above — not yet wired, tracked in `.tmp/tasks.md`).
+
+Storage follows the Medallion layering shown in the diagram under `## Workflow` above, one Postgres
+table set per layer:
+
+| Layer  | Table(s)                            |
+| ------ |-------------------------------------|
+| Bronze | `bronze_documents`                  |
+| Silver | `silver_documents`, `silver_chunks` | 
+| Gold   | `adr`,`components`                  | 
+
+# Key Decisions
+
+Engineering decisions made for this project itself — not to be confused with the ADRs the pipeline
+produces *about the meetings it ingests* (that's the Objective above):
+
+* **Medallion layering (Bronze → Silver → Gold), not one flat store.** Each layer has a narrower,
+  independently-verifiable job — Bronze never interprets, Silver clarifies, Gold records the ADRs
+  (`adr`) and each component's version history (`components`)
+* **Clarification is LLM-first, human-in-the-loop only when needed.** One classification call
+  sorts every question into `answered` / `unknown` / `needs_clarification`; only the last group
+  reaches a human, batched into a single LangGraph `interrupt()` 
+* **LiteLLM router with OpenAI → Anthropic fallback**, so a single provider outage doesn't stop
+  ingestion or clarification.
+
+# Key Metrics
+
+Quality gates defined for the RAG pipeline (Phase 6 of `.tmp/tasks.md` — not yet implemented;
+tracked here so the target is explicit before the tests are written):
+
+| Metric                                       | What it catches                                                                    | Threshold |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- | --------- |
+| Top-k / distance-metric / filter correctness  | Off-by-one top-k, wrong similarity ordering, a profile/session filter letting the wrong chunks through | Exact match against hand-computed expectations |
+| ANN index recall@k vs. brute-force            | An under-tuned pgvector index (HNSW/IVFFlat) silently dropping the one chunk that mattered | ≥ 0.95 |
+| RAGAS faithfulness                            | The answer contains a claim the retrieved chunks don't support (hallucination)     | Documented per-metric minimum, gates merges (`eval/thresholds.yaml`) |
+| RAGAS context precision                       | Retrieved chunks are mostly irrelevant padding                                     | ″ |
+| RAGAS context recall                          | Retrieved chunks miss something the reference answer needed                        | ″ |
+| Guardrail leakage                             | A profile-restricted chunk reaches an answer generated for a different profile, even paraphrased | Zero tolerance — any leak is a fail, not a threshold |
+
 
 # Integration
 

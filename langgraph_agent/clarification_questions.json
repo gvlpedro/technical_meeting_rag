@@ -1,0 +1,19 @@
+{
+  "questions": [
+    "what is the project name, or are there multiple projects?",
+    "who are the responsible people or decision-makers involved in this project?",
+    "what problem or need motivates this architecture or these changes?",
+    "what alternatives were considered to solve this problem, and why were they discarded?",
+    "what trade-offs or consequences, positive and negative, were accepted with the decision taken?",
+    "what constraints (technical, business, compliance, cost, or timeline) shaped this decision?",
+    "which components interact with each other, and what data do they exchange?",
+    "which components are new, which are evolving, which are unchanged, and which are being removed or deprecated?",
+    "which discipline owns each component: software engineering, data engineering, or frontend engineering?",
+    "what data contracts exist between components, and what fields, format, or frequency do they define?",
+    "what is the status of the decision: proposed, accepted, in development, or already in production?",
+    "what SLA or non-functional expectations does each component have?",
+    "what is the purpose or responsibility of each component mentioned?",
+    "what risks did participants mention about this decision or architecture?",
+    "what assumptions are being made that, if wrong, would invalidate this decision?"
+  ]
+}
