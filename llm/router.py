@@ -21,11 +21,15 @@ class AllProvidersFailedError(RuntimeError):
         self.errors = errors
 
 
-async def complete(messages: list[dict[str, str]], **kwargs: Any) -> Any:
-    """Try each provider in `settings.llm_fallback_order`, in order, until one succeeds."""
+async def complete(
+    messages: list[dict[str, str]], providers: list[str] | None = None, **kwargs: Any
+) -> Any:
+    """Try each provider in `providers` (default: `settings.llm_fallback_order`), in order,
+    until one succeeds. Pass an explicit `providers` order to force a specific provider first
+    (e.g. an evaluator that must not run on the same model as the call it's judging)."""
     errors: list[tuple[str, Exception]] = []
 
-    for provider in settings.llm_fallback_order:
+    for provider in providers or settings.llm_fallback_order:
         model = getattr(settings, _PROVIDER_MODEL_FIELD[provider])
         api_key = getattr(settings, _PROVIDER_API_KEY_FIELD[provider])
         try:

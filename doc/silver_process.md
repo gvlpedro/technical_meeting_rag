@@ -10,10 +10,15 @@ output, not a defect. Written as **structured Markdown** in Postgres.
 **Idempotency:** at most one clarified document per source transcript. Re-running the process
 upserts that transcript's `silver_documents` row in place (unique on `source_component`, refreshed
 content) and replaces that transcript's `silver_chunks` rows rather than accumulating duplicates.
+`silver_clarifications` (below) is the deliberate exception: it's an append-only history, so
+re-running the process adds new rows to it instead of overwriting.
 
 ## 1. Storage
 
-**In Postgres** — two tables:
+**In Postgres** — the source of truth, three tables. `generate_questions` (§3 node 2) also writes a
+human-readable audit copy of its own output to `output/ingestion_date=<date>/questions/
+<transcription>.json` — the one on-disk artifact in Silver, and it's exactly that, an artifact:
+nothing downstream reads it back, `silver_clarifications` (below) stays the real record.
 
 ```
 silver_documents                       -- one row per source transcript's full clarified document
@@ -27,6 +32,24 @@ silver_documents                       -- one row per source transcript's full c
                                                  -- the clarification loop's answers allow (§3
                                                  -- node 5); unanswered sections stay as the
                                                  -- template's own placeholders, not fabricated
+
+silver_clarifications                  -- history of every clarification question and its answer
+  id                 pk
+  ingestion_date     date, not null, index
+  source_component   varchar, not null, index   -- which transcript this question was drafted
+                                                 -- against; matches silver_documents.source_component
+  question           text, not null
+  answer             text, nullable             -- null when the question was never actually
+                                                 -- answered (unknown / needs_clarification at write
+                                                 -- time)
+  answered_at        timestamptz                -- row insertion time, not "when a human typed the
+                                                 -- answer" — write_document (§3 node 6) inserts a
+                                                 -- fresh row per (source, question) on every run
+                                                 -- instead of upserting, so the same question
+                                                 -- answered differently across two runs keeps both
+                                                 -- answers on record, ordered by this column. Used
+                                                 -- to be silver_documents.clarifications (a jsonb
+                                                 -- column pooled per ingestion_date); isn't anymore.
 
 silver_chunks                          -- silver_documents.content, chunked + embedded for retrieval
   id                 pk
@@ -42,8 +65,13 @@ silver_chunks                          -- silver_documents.content, chunked + em
 
 ## 2. Clarification loop: the decision rule
 
-For each question in `langgraph_agent/clarification_questions.json` 
-(multiple questions to build a completed ADR), the loop lands on exactly one outcome:
+The question list itself isn't fixed anymore — it used to be a static, generic file
+(`agents/clarification_questions.json`, deleted); now `generate_questions` (§3 node 2) drafts it
+fresh per ingestion batch, reading the transcript against `doc/clarification_template.md` and
+asking one specific question per identified component instead of one generic question that
+implicitly spans all of them (`prompting/roles/common/clarification_questions.jinja` has the full
+rationale and the process that drafts it). For each question in that drafted list, the loop lands
+on exactly one outcome:
 
 | Outcome | Meaning | Action |
 |---|---|---|
@@ -56,8 +84,8 @@ re-asked.
 
 The loop should refine the final understanding of the organization asking to clarify following points:
 
-1. **Clarify ambiguities:** Ask for items that are not clear enough and require additional information to properly define each perspective.
-2. **Clarify contradictions:** Ask for items that are inconsistent between the different perspectives and require clarification or resolution.
+1. **Clarify ambiguities:** Ask for items that are not clear enough and require additional information to properly define each component.
+2. **Clarify contradictions:** Ask for items that are inconsistent between different tellings of the same component and require clarification or resolution.
 3. **Clarify architecture evolution:** Clarify the timeline, components are described in different moments so project must order the evolution.
 4. **Clarify subsystems:** Some components are described as part of a bigger system, so project must ask the boundaries and dependencies between them.
 5. **Clarify implemented vs. planned:** Ask if components and capabilities that already exist and those that have not been implemented yet.
@@ -79,15 +107,26 @@ class SilverState(TypedDict):
     ingestion_date: str
     bronze_documents: list[dict]
     transcript_text: str
-    clarifications: list[ClarificationItem]     # question, answer, status
+    generated_questions: list[GeneratedQuestion] # drafted fresh per batch — see node 2; id/scope/target/requirement/question
+    mentioned_components: list[MentionedComponentItem]  # name, status — same batch, fed into node 5
+    clarifications: list[ClarificationItem]     # id/scope/target/requirement/question, answer, status
     pending_questions: list[str]
-    human_answers: dict[str, str]
     known_gold_components: list[dict]           # name, description, profile — best-effort lookup
     documents: dict[str, str]                   # source_component -> synthesized Markdown (Actor)
     critiques: dict[str, list[CritiqueItem]]    # source_component -> [{claim, supported, rationale}]
     boss_verdicts: dict[str, str]               # source_component -> "ok" | "needs_human_review"
     revision_attempted: dict[str, bool]         # source_component -> already retried once?
+    active_sources: list[str]                   # sources synthesize/critic/boss are working on this pass
+    redraft_only: list[str] | None              # set by boss_decide to redraft just these sources
+    interrupt_origin: Literal["classify", "boss"]  # how ask_human should read its resume payload
 ```
+
+No `human_answers` field: `ask_human`'s resume payload arrives directly as the return value of
+`interrupt()` at the call site (LangGraph's own mechanism), so there's nothing to stage in state
+ahead of time — a separate field would just be a second, redundant place for the same value to
+live. `active_sources`/`redraft_only` exist because Actor-Critic-Boss operates per source
+transcript, not on the whole batch at once: `redraft_only` lets a Boss-escalated retry redraft just
+the flagged source instead of every source in the ingestion date.
 
 **Nodes:**
 
@@ -98,62 +137,106 @@ against its own sources, fix or escalate anything it can't back up, then save an
 1. **`load_bronze`** — *Gather what was said.* Pulls every Bronze row for this `ingestion_date` and
    concatenates it into `transcript_text`. Pure retrieval, nothing interpreted yet.
 
-2. **`classify_questions`** — One LLM call reads the whole transcript against every clarification 
-   question at once, sorting each into `answered`,`unknown`, or `needs_clarification` to know what we need to clarify
-    with a human.
+2. **`generate_questions`** — *Figure out what to even ask.* One LLM call reads the pooled
+   transcript — and, when one exists, a Mermaid diagram of the architecture already known as of
+   this transcript's own point in time — against `doc/clarification_template.md` (the
+   `ARCHITECTURE_CHANGES` specification the prompt derives its required-information model from),
+   and drafts two things fresh for this batch: `mentioned_components` (every component named,
+   each with a `new`/`modified`/`removed`/`unchanged`/`unknown` status relative to the known
+   architecture) and `questions` — each one a structured object (`id`, `scope`, `target`,
+   `requirement`, `question`) rather than a bare string, so `classify_questions` can match a
+   classification back to its question by `id` instead of by exact text. Questions span
+   components, architecture-level entities (source, target, mechanism, producer/consumer), data
+   contracts (identity, schema, quality, versioning/compatibility), change impact, and ADR-level
+   decision fields, scoped to what the specification actually requires and the transcript
+   actually leaves open — never a contract's own governance/bookkeeping. Full process and rules
+   — a real Jinja template, not this
+   project's own naive string-replace:
+   `prompting/roles/common/clarification_questions.jinja`.
+   `architecture_diagram` is **always empty today** —
+   no source exists yet for "the architecture as of this specific transcript's date" (Gold doesn't
+   version diagrams, §7) — so every run currently takes the prompt's own empty-architecture path:
+   every component defaults to new, which is correct for a first-time description. The prompt
+   already handles both cases; wiring a real diagram through is a future, separate change, not a
+   gap in this node. Also writes a human-readable copy of the drafted result to
+   `output/ingestion_date=<date>/questions/<transcription>.json` — one file per source transcript
+   in the batch (same pooled result in each, since it's pooled across the whole `ingestion_date` —
+   §2), named to mirror `input/transcriptions/ingestion_date=<date>/<transcription>.vtt`. Nothing
+   downstream reads this file back; it exists to be inspected, not to be a second source of truth.
 
-3. **`route_after_classify`** — Sends the graph to ask a human.
+3. **`classify_questions`** — One LLM call reads the whole transcript against every question
+   `generate_questions` just drafted, sorting each into `answered`, `unknown`, or
+   `needs_clarification` to know what we need to clarify with a human.
 
-4. **`ask_human`** — *Ask, once, only about what's genuinely unclear.* Pauses the graph with a
+4. **`route_after_classify`** — Sends the graph to ask a human.
+
+5. **`ask_human`** — *Ask, once, only about what's genuinely unclear.* Pauses the graph with a
    single `interrupt()` carrying every pending question together, not one interruption per
    question, relying on LangGraph's own Postgres-backed checkpointer to survive the pause. Whatever
    comes back on resume folds into `clarifications`, and the graph re-routes.
 
-5. **`synthesize_document`** — *Fill in the template, honestly.* One LLM call per source transcript
+6. **`synthesize_document`** — *Fill in the template, honestly.* One LLM call per source transcript
    writes directly into `doc/clarification_template.md`'s own structure — not a
-   separate, simplified shape — using everything now known: the transcript, the clarifications, and
-   a best-effort `SELECT` against Gold's `components` table. It fills whatever
-   `clarification_questions.json`'s answers actually support: Motivation and Context, Affected
-   Components (each tagged new / evolving / unchanged / unknown relative to what Gold already
-   knows, with a one-line reason), Data Contracts as ODCS drafts,, Alternatives, Consequences, 
-   Risks, and so on down the questions' coverage.
+   separate, simplified shape — using everything now known: the transcript, the clarifications,
+   `mentioned_components` (each already carrying the `new`/`modified`/`removed`/`unchanged`/
+   `unknown` status `generate_questions` determined), and a best-effort `SELECT` against Gold's
+   `components` table. It fills whatever the clarifications actually support: Motivation and
+   Context, Affected Components (each tagged with its status and a one-line reason — starting from
+   what's already known, only overriding an `unknown` a clarification resolved), Data Contracts as
+   ODCS drafts, Alternatives, Consequences, Risks, and so on down what got clarified.
 
-6. **`critic_document`** — *Check the document's own homework.* One LLM call per source transcript,
+7. **`critic_document`** — *Check the document's own homework.* One LLM call per source transcript,
    always run, reads the freshly drafted document back against the same transcript and
    clarifications the Actor saw, and flags any claim that isn't actually backed up — telling apart a
    thin claim (already honestly marked `evidenced: false`) from one that outright contradicts the
    transcript. Only the second kind matters to what comes next.
 
-7. **`boss_decide`** — *Decide what to do about the Critic's flags.* No LLM call — a rule, not a
+8. **`boss_decide`** — *Decide what to do about the Critic's flags.* No LLM call — a rule, not a
    second opinion. A thin claim gets quietly downgraded to `unknown` and the document moves on. A
    real contradiction gets escalated to a human, once, through the same `ask_human` mechanism
    already built, then the document is redrafted just for that one source. If it's still flagged
    after that single retry, it gets downgraded and let through rather than looping forever.
 
-8. **`write_document`** — *Make it official.* No LLM call: upserts the finished document into
-   `silver_documents` and the clarification audit trail into `clarifications.json`, both keyed so a
-   re-run overwrites cleanly instead of piling up duplicates.
+9. **`write_document`** — *Make it official.* No LLM call: upserts the finished document into
+   `silver_documents`, keyed on `source_component` so a re-run overwrites cleanly instead of piling
+   up duplicates, and separately appends this run's clarifications to `silver_clarifications` — one
+   row per (source, question), inserted fresh every run rather than upserted, building a history
+   instead of only the latest state. This node itself touches no disk — the one on-disk artifact in
+   Silver is `generate_questions`' (node 2).
 
-9. **`chunk_and_embed`** — *Make it retrievable.* No LLM call: clears any previous chunks for this
-   date, splits the document with the same chunker Bronze already uses, embeds each piece, and
-   inserts the fresh `silver_chunks` rows. `END`.
+10. **`chunk_and_embed`** — *Make it retrievable.* No LLM call: clears any previous chunks for this
+    date, splits the document with the same chunker Bronze already uses, embeds each piece, and
+    inserts the fresh `silver_chunks` rows. `END`.
 
-Three LLM calls per source transcript in the clean case — one `classify_questions`
-call shared by the whole batch, plus one `synthesize_document` and one `critic_document` call per
-transcript. `boss_decide` never adds an LLM call, only a human round-trip when the Critic finds a
-real contradiction, and never more than one retry per document.
+Four LLM calls per source transcript in the clean case — `generate_questions` and
+`classify_questions` each once, shared by the whole batch, plus one `synthesize_document` and one
+`critic_document` call per transcript. `boss_decide` never adds an LLM call, only a human
+round-trip when the Critic finds a real contradiction, and never more than one retry per document.
 
 ```
-load_bronze ──► classify_questions ──► route_after_classify ─┬─► synthesize_document ──► critic_document ──► boss_decide ─┬─► write_document ──► chunk_and_embed ──► END
+load_bronze ──► generate_questions ──► classify_questions ──► route_after_classify ─┬─► synthesize_document ──► critic_document ──► boss_decide ─┬─► write_document ──► chunk_and_embed ──► END
                                                              │                                                            │
                                                              └─► ask_human ──(interrupt)──(resume)──► route_after_classify
                                                                                                                           │
                                                                               (contradiction, first pass) └─► ask_human ──(interrupt)──(resume)──► synthesize_document [retry, this source only]
 ```
 
+**Tracing:** every node above shows up as its own span in Logfire, nested under one span per
+graph run — `agents/graph.py` sets LangGraph's built-in OpenTelemetry tracing (via its bundled
+LangSmith SDK) to route through `logfire.configure()`'s global tracer provider before `langgraph`
+itself is imported. No LangSmith account, exporter, or API key involved — just
+`LOGFIRE_TOKEN` (optional; unset stays local-only, console output, no network calls).
+
 
 ## 7. Explicit non-goals
 
+- **No point-in-time architecture diagrams yet.** `generate_questions`'s identity-matching (§3 node
+  2) is designed to compare a transcript against the architecture as it stood at that transcript's
+  own date, but nothing in this project stores or versions architecture diagrams by date — Gold's
+  `components` table (below) isn't diagram-shaped and isn't time-sliced either. Until that source
+  exists, `architecture_diagram` stays empty on every run, which the prompt already treats as
+  correct (a first-time description), not broken. Building that source is future, Gold-adjacent
+  work, not part of Silver.
 - **Gold's schema is decided, its process isn't.** Gold has two tables now — `adr` (evolution
   decisions) and `components` (each component's version history) — but structure-aware chunking,
   the component graph, and the actual "Pull request / versions" mechanism that populates and
@@ -165,6 +248,8 @@ load_bronze ──► classify_questions ──► route_after_classify ─┬�
   built, even though `adr`/`components` already exist as tables) may authoritatively decide a
   component's version history.
 - **Full template coverage isn't the goal — honest partial coverage is.** `synthesize_document`
-  fills exactly what `clarification_questions.json`'s questions can extract from a transcript
+  fills exactly what `generate_questions`'s drafted questions can extract from a transcript
   (context, alternatives, trade-offs, constraints, component purpose/lifecycle, risks,
-  assumptions, decision status).
+  assumptions, decision status) — and that prompt itself is scoped to never draft a question about
+  the sections nobody narrates in a meeting (`prompting/roles/common/clarification_questions.jinja`,
+  **Out of scope**).

@@ -1,0 +1,6 @@
+Bigger update today. We reworked SearchIndexer — it's evolving from the old version, still not
+sure exactly what changed under the hood. RankingModel is brand new, it consumes query logs
+from SearchIndexer to retrain. QueryGateway sits in front of both, unchanged from before. I
+don't know who owns RankingModel yet, might be the data science team or might be platform, we
+need to figure that out. SearchIndexer's owned by platform, that one's clear. There's also a
+CacheLayer someone mentioned briefly but I don't have details.

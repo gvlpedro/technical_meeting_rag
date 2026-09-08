@@ -7,9 +7,14 @@ dependencies = [
     "anthropic>=0.40",
     "asyncpg>=0.29",
     "fastapi>=0.110",
+    "jinja2>=3.1.6",
+    "langgraph>=1.2.11",
+    "langgraph-checkpoint-postgres>=3.1.2",
     "litellm>=1.50",
+    "logfire>=5.0.0",
     "openai>=1.0",
     "pgvector>=0.3",
+    "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "sentence-transformers>=3.0",
@@ -39,6 +44,10 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.pytest.ini_options]
+# Scopes plain `pytest`/`make test` to the fast, mocked-LLM suite only. Without this,
+# bare pytest discovery would also pick up testing_questions_acb/ (real LLM calls,
+# deliberately excluded from the default run — see that dir's own README).
+testpaths = ["tests"]
 filterwarnings = [
     # starlette 1.6.0 (latest available) still type-hints its TestClient with
     # anyio.abc.BlockingPortal internally; anyio flags that alias as deprecated

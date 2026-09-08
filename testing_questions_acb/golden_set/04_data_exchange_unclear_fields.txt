@@ -1,0 +1,4 @@
+InventoryTracker publishes a StockUpdated event whenever a warehouse count changes, and the
+WarehouseUI dashboard consumes it to refresh the screen in real time. I don't remember exactly
+what's inside that event though, we'd have to check with the team that built it.
+InventoryTracker is a new service we stood up this sprint.

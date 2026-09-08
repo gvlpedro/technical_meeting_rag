@@ -1,0 +1,5 @@
+Quick update on the notification pipeline. We have the NotifyGateway service, which is new —
+we just launched it. It receives a UserSignedUp event from the AuthService whenever someone
+creates an account, and the event contains the user's email address and their signup
+timestamp. NotifyGateway then sends a welcome email. AuthService already existed before this,
+nothing changed there.

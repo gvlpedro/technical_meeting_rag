@@ -1,0 +1,9 @@
+Lots to cover from the architecture review. Gateway is the entry point, unchanged. It routes
+to AuthService (unchanged) and to CatalogService (new). CatalogService pulls product data from
+a ProductDB and also calls PricingEngine — same PricingEngine from before I think, not sure if
+it's the same instance or a new deployment. There's a RecommendationEngine that's new, it
+consumes ClickStream events from Gateway, though nobody explained what fields are in a
+ClickStream event. RecommendationEngine writes its output somewhere, maybe back to
+CatalogService, maybe to its own store, that part wasn't clear in the meeting. We also
+mentioned a LegacyBatchJob that's being deprecated but is still running in production for now,
+and nobody could say when exactly it'll be turned off.

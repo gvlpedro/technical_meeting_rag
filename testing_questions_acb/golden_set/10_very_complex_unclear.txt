@@ -1,0 +1,13 @@
+Okay, this is a big one, a lot of moving parts and honestly the whiteboard session got pretty
+chaotic. So we've got the platform stuff — Gateway, obviously, that talks to a bunch of things
+downstream, some old some new, hard to say which is which honestly. There's the whole event
+mesh thing that a few different teams are touching — someone called it EventBus, someone else
+called it the message layer, might be the same thing. Data flows through there to at least
+three or four consumers, I lost track of which ones exactly, maybe InventorySync, maybe
+something with pricing too. On the frontend side there's a new BFF layer that a couple of the
+folks are building but it's not fully wired up yet — it might replace part of what Gateway
+does, or might just sit alongside it, that wasn't resolved. And then separately there's talk
+about a fraud detection thing, could be a new service, could be a feature bolted onto an
+existing one, genuinely unclear from how the conversation went. A lot of these talk to each
+other in ways nobody fully diagrammed, and several people used different names for what might
+be the same components. We really need someone to sit down and map this out properly.

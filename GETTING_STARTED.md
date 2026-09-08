@@ -14,10 +14,14 @@ In total there are 13 tests available
 make test
 ```
 
-## Useful endpoints
+## Useful commands
 
 Ingest all transcriptions in session date 2024-05-15 in Bronze :   
 ```bash 
-curl -X POST "http://localhost:8010/v1/ingest?session=20260515"
+make ingestion DATE=20260515
 ```
 
+Process clarifications in session date 2024-05-15 in Silver :
+```bash
+make clarify DATE=20260515 INTERACTIVE=1
+```

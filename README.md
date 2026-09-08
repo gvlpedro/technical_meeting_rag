@@ -11,7 +11,6 @@ For every architecture component mentioned across meetings, clarify **what it is
 # Problems to resolve
 
 * **Fragmented knowledge:** the same architecture gets described across dozens of separate meetings, with no single place that reflects the current, agreed-upon picture.
-* **Perspective mismatch:** a generic summary of a meeting is rarely useful on its own — Business, Software Engineering, Data Engineering, and Frontend each need a different, role-specific view of the same information.
 * **Ambiguity:** statements made in a meeting are often underspecified and cannot be trusted as a final definition of a component without further clarification.
 * **Contradictions:** different meetings — or different people in the same meeting — describe the same component inconsistently, and nothing flags the conflict.
 * **Architecture evolution over time:** components are described at different points in time; without ordering that timeline, it is unclear which description is still valid.
@@ -25,13 +24,13 @@ For every architecture component mentioned across meetings, clarify **what it is
 
 The project refine the final understanding of the organization asking to clarify following points:
 
-1. **Clarify ambiguities:** Ask for items that are not clear enough and require additional information to properly define each perspective.
-2. **Clarify contradictions:** Ask for items that are inconsistent between the different perspectives and require clarification or resolution.
+1. **Clarify ambiguities:** Ask for items that are not clear enough and require additional information to properly define each component.
+2. **Clarify contradictions:** Ask for items that are inconsistent between different tellings of the same component and require clarification or resolution.
 3. **Clarify architecture evolution:** Clarify the timeline, components are described in different moments so project must order the evolution.
 4. **Clarify subsystems:** Some components are described as part of a bigger system, so project must ask the boundaries and dependencies between them.
 5. **Clarify implemented vs. planned:** Ask if components and capabilities that already exist and those that have not been implemented yet.
 
-The goal is not simply to summarize a meeting, but to produce **consistent, role-specific views of the same organization**, while explicitly identifying gaps, boundaries, dependencies, and inconsistencies between those views.
+The goal is not simply to summarize a meeting, but to produce a **consistent, clarified record of the organization's architecture**, while explicitly identifying gaps, boundaries, dependencies, and inconsistencies.
 
 Check document [doc/silver_process.md](doc/silver_process.md) for more details.
 
@@ -74,7 +73,7 @@ Documents ─────────►│ original content     │
 ## Expected questions to resolve
 
 * When the component X was introduced in the company?
-* Show me the architecture from Software Engineering perspective
+* Show me the general architecture diagram
 * Who is responsible for the component X?
 * Add a new component Y with [X, Z] dependencies and following model [...]
 * Let me know the list of persons talking about the component X
@@ -91,7 +90,7 @@ Specific descriptions for managing unit tests and verify expected behavior from 
 
 ### Youtube
 Only to process real transcriptions that are very different from each other the youtube transcriptions will be used as input.
-These transcripts will be processed to generate and compare the different perspectives, applying the same guardrails to identify missing information, inconsistencies, implementation status, and boundaries between profiles.
+These transcripts will be processed to generate the clarified architecture record, applying the same guardrails to identify missing information, inconsistencies, implementation status, and boundaries between profiles.
 
 ```
 # Download a video's transcript; its session is derived from the video's own
@@ -110,8 +109,8 @@ python3 scripts/download_transcript.py --session 20260906
 First of all the project creates a 'Pull request' based on unclarified components, missing information and inconsistencies.
 
 Then this will generate:
-* One diagram per perspective
-* A complete documentation clasified per component, perspective and timeline
+* One general architecture diagram of the components discussed
+* A complete documentation clasified per component and timeline
 
 ## User interface
 
@@ -182,9 +181,13 @@ produces *about the meetings it ingests* (that's the Objective above):
 * **Medallion layering (Bronze → Silver → Gold), not one flat store.** Each layer has a narrower,
   independently-verifiable job — Bronze never interprets, Silver clarifies, Gold records the ADRs
   (`adr`) and each component's version history (`components`)
+* **Clarification questions are drafted per transcript, not read from a fixed list.** One LLM call
+  reads the transcript against `doc/clarification_template.md` and asks one specific question per
+  component actually named ("Is `X` new, evolving, or unchanged?"), instead of one generic question
+  that silently covers every component at once (`prompting/roles/common/clarification_questions.jinja`).
 * **Clarification is LLM-first, human-in-the-loop only when needed.** One classification call
-  sorts every question into `answered` / `unknown` / `needs_clarification`; only the last group
-  reaches a human, batched into a single LangGraph `interrupt()` 
+  sorts every drafted question into `answered` / `unknown` / `needs_clarification`; only the last
+  group reaches a human, batched into a single LangGraph `interrupt()`
 * **LiteLLM router with OpenAI → Anthropic fallback**, so a single provider outage doesn't stop
   ingestion or clarification.
 

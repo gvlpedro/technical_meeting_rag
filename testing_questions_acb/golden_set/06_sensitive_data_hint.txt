@@ -1,0 +1,4 @@
+CustomerProfileService stores customer info and shares a CustomerUpdated event with the
+MarketingSync service whenever someone changes their profile. Legal flagged that this event
+might contain personal data, so we need to be careful about what's actually in there before we
+ship this to production. Both services are new. Nobody's fully mapped out the payload yet.

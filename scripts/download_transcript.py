@@ -31,13 +31,14 @@ automáticos). Acumula {link, title, transcript_path, upload_date,
 description, channel_url} en input/links.json, añadiendo o actualizando la
 entrada de cada vídeo.
 
-Es idempotente: volver a ejecutarlo con la misma URL sobrescribe el mismo
-fichero .vtt y actualiza la misma entrada de links.json, sin acumular
-ficheros nuevos, aunque el título del vídeo haya cambiado entre ejecuciones.
-Si el idioma resuelto cambia (p.ej. cambiaste el "lang" de config.json), el
-nombre del fichero se recalcula para reflejar el nuevo idioma y el fichero
-antiguo se borra — nunca deja un `*.es.vtt` con contenido en otro idioma
-dentro.
+Cada descarga genera su propio fichero, marcado con el timestamp (UTC) del
+momento de la descarga (`<slug>.<lang>.<timestamp>.vtt`) — volver a ejecutarlo
+con la misma URL nunca sobrescribe ni borra un fichero anterior, siempre crea
+uno nuevo; esto evita también que dos vídeos distintos cuyo título produzca
+el mismo slug colisionen en el mismo nombre. `links.json` sí sigue teniendo
+una única entrada por URL, actualizada a la última descarga (título, idioma,
+`transcript_path` de la descarga más reciente) — el histórico de ficheros
+.vtt vive solo en disco, no en `links.json`.
 
 --clean borra las transcripciones descargadas y sus entradas de links.json;
 sin --ingestion-date, todo; con --ingestion-date=<YYYYMMDD>, solo esa fecha.
@@ -54,6 +55,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from datetime import datetime, timezone
 
 try:
     import yt_dlp
@@ -117,22 +119,16 @@ def _slugify(title: str) -> str:
     return slug or "untitled"
 
 
-def _unique_transcript_path(
-    slug: str, lang: str, url: str, records: list[dict], transcriptions_dir: str
-) -> str:
-    """Path `<transcriptions_dir>/<slug>.<lang>.vtt`"""
-    suffix = ""
-    n = 2
-    while True:
-        candidate = os.path.join(transcriptions_dir, f"{slug}{suffix}.{lang}.vtt")
-        clash = any(
-            r.get("transcript_path") == candidate and r.get("link") != url
-            for r in records
-        )
-        if not clash:
-            return candidate
-        suffix = f"_{n}"
-        n += 1
+def _download_timestamp() -> str:
+    """UTC timestamp of *now*, microsecond precision — used to give every downloaded
+    transcript its own filename, so re-downloading the same URL never overwrites a previous
+    snapshot and two different videos that happen to slugify the same way never collide."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + "Z"
+
+
+def _timestamped_transcript_path(slug: str, lang: str, transcriptions_dir: str) -> str:
+    """Path `<transcriptions_dir>/<slug>.<lang>.<download_timestamp>.vtt`"""
+    return os.path.join(transcriptions_dir, f"{slug}.{lang}.{_download_timestamp()}.vtt")
 
 
 def _load_links(path: str) -> list[dict]:
@@ -256,7 +252,6 @@ def _download_url(url: str, dest: str, ydl: "yt_dlp.YoutubeDL", retries: int = 5
 def download_transcript(url: str, langs: list[str]) -> dict:
     links_file = _links_file()
     records = _load_links(links_file)
-    existing = next((r for r in records if r.get("link") == url), None)
 
     ydl_opts = {
         "skip_download": True,
@@ -288,24 +283,10 @@ def download_transcript(url: str, langs: list[str]) -> dict:
             )
         lang, fmt = pick
 
-        # Re-run for the same URL reuses its existing path, so the file is
-        # overwritten in place instead of accumulating a new one (idempotent
-        # even if the video's title, and therefore its slug, has changed) —
-        # but only when the resolved language is unchanged. If it changed
-        # (e.g. config.json now asks for a different language), the filename
-        # must change with it: reusing the old path would leave a file whose
-        # name still claims the old language while its content is actually
-        # in the new one. Compute a fresh, language-correct path instead, and
-        # remove the now-stale file under the old name.
-        old_path = existing.get("transcript_path") if existing else None
-        old_lang = existing.get("lang") if existing else None
-        if old_path and old_lang == lang:
-            transcript_path = old_path
-        else:
-            slug = _slugify(title)
-            transcript_path = _unique_transcript_path(slug, lang, url, records, transcriptions_dir)
-            if old_path and old_path != transcript_path and os.path.exists(old_path):
-                os.remove(old_path)
+        # Every download gets its own timestamped file — re-downloading the same URL never
+        # overwrites or removes a previous snapshot, it just adds a new one.
+        slug = _slugify(title)
+        transcript_path = _timestamped_transcript_path(slug, lang, transcriptions_dir)
         _download_url(fmt["url"], transcript_path, ydl)
 
     record = {

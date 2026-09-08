@@ -17,12 +17,17 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-3-5-sonnet-20241022"
     llm_fallback_order: list[Literal["openai", "anthropic"]] = ["openai", "anthropic"]
 
+    # No token -> logfire.configure(send_to_logfire="if-token-present") stays local-only
+    # (console output, no network calls) — safe default for dev and CI.
+    logfire_token: str | None = None
+
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/technical_meeting_rag"
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dim: int = 384
     chunk_size_tokens: int = 400
     chunk_overlap_tokens: int = 50
     input_dir: str = "input"
+    output_dir: str = "output"
 
 
 settings = Settings()

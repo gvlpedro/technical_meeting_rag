@@ -1,0 +1,5 @@
+So this quarter we touched three things. First, the BillingCore service — I think it's
+basically the same as before, just some internal changes maybe? Second, we added a new
+PaymentRetryWorker that picks up failed charges from BillingCore and retries them. And third,
+there's this LedgerSync thing that someone mentioned syncs data somewhere, but I wasn't in
+that conversation so I don't know much about it.

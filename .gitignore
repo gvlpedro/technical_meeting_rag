@@ -5,3 +5,4 @@ __pycache__/
 .download_transcript.pid
 .idea
 .tmp
+/testing_questions_acb/output/

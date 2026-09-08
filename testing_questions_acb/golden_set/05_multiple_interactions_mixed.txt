@@ -1,0 +1,6 @@
+Let's go over the order flow. OrderService takes the incoming order and calls PricingEngine
+to calculate the total — that call includes the cart items and a customer ID, and gets back a
+computed price. Then OrderService writes to OrdersDB, which is just a Postgres table, nothing
+fancy. Separately, FulfillmentPlanner picks up new orders from OrdersDB — I'm not sure if it's
+polling or subscribed to something — and decides which warehouse should ship it. PricingEngine
+has existed for a while. OrderService and FulfillmentPlanner are both new this quarter.
