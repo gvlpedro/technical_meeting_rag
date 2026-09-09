@@ -1,8 +1,12 @@
-from agents.prompts import build_adr_generation_prompt, build_question_generation_prompt
+from agents.prompts import (
+    build_adr_generation_prompt,
+    build_architecture_question_generation_prompt,
+    build_data_contract_question_generation_prompt,
+)
 
 
-def test_question_generation_prompt_with_no_architecture_says_none_known():
-    messages = build_question_generation_prompt("TEMPLATE", "TRANSCRIPT", architecture_diagram="")
+def test_architecture_question_prompt_with_no_architecture_says_none_known():
+    messages = build_architecture_question_generation_prompt("TEMPLATE", "TRANSCRIPT", architecture_diagram="")
     content = messages[0]["content"]
 
     assert "TEMPLATE" in content
@@ -11,19 +15,30 @@ def test_question_generation_prompt_with_no_architecture_says_none_known():
     assert "flowchart" not in content
 
 
-def test_question_generation_prompt_with_architecture_includes_the_diagram_verbatim():
+def test_architecture_question_prompt_with_architecture_includes_the_diagram_verbatim():
     diagram = "flowchart LR\n  thunder[Thunder] --> phoenix[Phoenix]"
-    messages = build_question_generation_prompt("TEMPLATE", "TRANSCRIPT", architecture_diagram=diagram)
+    messages = build_architecture_question_generation_prompt(
+        "TEMPLATE", "TRANSCRIPT", architecture_diagram=diagram
+    )
     content = messages[0]["content"]
 
     assert diagram in content
     assert "No existing architecture was provided." not in content
 
 
-def test_question_generation_prompt_covers_data_contract_depth_and_restrains_padding():
-    content = build_question_generation_prompt("TEMPLATE", "TRANSCRIPT", architecture_diagram="")[0][
-        "content"
-    ]
+def test_architecture_question_prompt_identifies_but_does_not_specify_data_contracts():
+    content = build_architecture_question_generation_prompt("TEMPLATE", "TRANSCRIPT", architecture_diagram="")[
+        0
+    ]["content"]
+
+    # stage 1 identifies contracts (name/producer/consumer/action)...
+    assert "mentioned_data_contracts" in content
+    # ...but explicitly defers full ODCS depth to the next stage
+    assert "next stage" in content.lower()
+
+
+def test_data_contract_question_prompt_covers_odcs_depth_and_restrains_padding():
+    content = build_data_contract_question_generation_prompt("REQUIREMENTS", "TRANSCRIPT", [])[0]["content"]
 
     # the ODCS-shaped categories a data-contract question should be able to cover: versioning
     # (previous/new version, breaking changes, affected consumers), schema depth (required/
@@ -40,9 +55,22 @@ def test_question_generation_prompt_covers_data_contract_depth_and_restrains_pad
     ):
         assert expected in content
 
-    # no denylist of governance/bookkeeping fields in this version of the prompt — instead a
-    # general restraint: don't ask about an ODCS property just because ODCS has it
+    # no denylist of governance/bookkeeping fields in this prompt — instead a general
+    # restraint: don't ask about an ODCS property just because ODCS has it
     assert "Do not ask for generic ODCS properties merely because they exist" in content
+
+
+def test_data_contract_question_prompt_includes_identified_contracts():
+    messages = build_data_contract_question_generation_prompt(
+        "REQUIREMENTS",
+        "TRANSCRIPT",
+        [{"name": "processed-event", "producer": "Event Processor", "consumer": "Analytics", "action": "modified"}],
+    )
+    content = messages[0]["content"]
+
+    assert "processed-event" in content
+    assert "Event Processor" in content
+    assert "Analytics" in content
 
 
 def test_adr_generation_prompt_includes_transcript_and_answered_clarifications():

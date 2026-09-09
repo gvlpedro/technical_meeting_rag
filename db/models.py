@@ -37,7 +37,7 @@ class BronzeDocument(Base):
 class SilverDocument(Base):
     """One clarified ADR document per (source transcript, version) — Silver layer.
 
-    Shaped as `prompting/roles/common/adr_generator.jinja` produces it, filled in as
+    Shaped as `prompts/adr_generator.jinja` produces it, filled in as
     far as the clarification loop's answers allow — see `doc/silver_process.md` §1-2.
     `content` is the whole document, not chunked; `SilverChunk` below holds the single
     retrievable chunk cut from it. Silver stores nothing on disk at all — the

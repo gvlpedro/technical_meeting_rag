@@ -5,6 +5,7 @@ __pycache__/
 .download_transcript.pid
 .idea
 .tmp
-/testing_questions_acb/output/
+/testing_arch_questions_acb/output/
+/testing_data_contract_questions_acb/output/
 /testing_adr_acb/output/
 /testing_questions_for_one_component/output/

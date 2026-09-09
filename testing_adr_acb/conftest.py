@@ -3,7 +3,7 @@ input_tokens, output_tokens, estimated_euro_cost}` — a summary, not the full g
 into `testing_adr_acb/output/result.json` once the whole run finishes. The full generated
 document for a case is written separately, alongside this summary, at
 `output/<case-name>/adr.md` (see `test_golden_set.py`), so `result.json` stays a small
-at-a-glance table across the whole golden set. Mirrors `testing_questions_acb/conftest.py`'s
+at-a-glance table across the whole golden set. Mirrors `testing_arch_questions_acb/conftest.py`'s
 own shape.
 """
 

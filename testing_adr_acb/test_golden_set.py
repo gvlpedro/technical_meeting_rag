@@ -1,4 +1,4 @@
-"""Real-LLM golden-set collection for `prompting/roles/common/adr_generator.jinja` — the
+"""Real-LLM golden-set collection for `prompts/adr_generator.jinja` — the
 Actor drafts a complete ADR (`doc/adr_example.md`'s shape) from a transcript plus its already
 -resolved clarifications, for three cases of increasing difficulty:
 
@@ -13,7 +13,7 @@ Actor drafts a complete ADR (`doc/adr_example.md`'s shape) from a transcript plu
     at once: an out-of-scope component, an unanswered detail for an otherwise-in-scope
     component, and a data contract whose existence is confirmed but whose schema isn't.
 
-Two independent things happen per case, mirroring `testing_questions_acb`'s own split:
+Two independent things happen per case, mirroring `testing_arch_questions_acb` (formerly `testing_questions_acb`)'s own split:
 
   - **Free, deterministic checks** — no placeholder markers left in the document, every
     `expected_components` name actually discussed, no `excluded_components` name tagged with
@@ -28,7 +28,7 @@ Two independent things happen per case, mirroring `testing_questions_acb`'s own 
     contracts" for case 01; "this exact contract, this exact version bump, no contract for
     LoyaltyService" for case 02). The Critic reports each checklist item individually
     (`checklist_results`), not just an overall verdict — recorded for information only, a
-    probabilistic judge deciding pass/fail is exactly what made `testing_questions_acb` flaky
+    probabilistic judge deciding pass/fail is exactly what made `testing_arch_questions_acb` (formerly `testing_questions_acb`) flaky
     before (see its own README), so only the deterministic checks above gate this suite too.
 
 Deliberately excluded from `pytest`/`make test` (`testpaths = ["tests"]` in pyproject.toml) —
@@ -85,7 +85,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture
 def _track_llm_cost(monkeypatch: pytest.MonkeyPatch) -> dict:
-    """See `testing_questions_acb/test_golden_set.py`'s identical fixture for the rationale —
+    """See `testing_arch_questions_acb/test_golden_set.py`'s identical fixture for the rationale —
     wraps the real `litellm.acompletion` to meter every call this test case makes (Actor +
     Critic), function-scoped so each case gets fresh counters."""
     usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
@@ -183,7 +183,7 @@ def _golden_set_cases() -> list[tuple[str, Path]]:
 def _load_critic_prompt_template() -> str:
     """`testing_adr_acb/critic_prompt.jinja`'s raw text — the Critic's own prompt, kept as a
     real Jinja template here (not inline in this module) so it can be edited/reviewed like any
-    other prompt in this repo (see `prompting/roles/common/*.jinja`), just scoped to this test
+    other prompt in this repo (see `prompts/*.jinja`), just scoped to this test
     suite rather than production."""
     return _CRITIC_PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -214,7 +214,7 @@ async def _critique(
         providers=CRITIC_PROVIDER_ORDER,
         response_format=AdrCritiqueResult,
         temperature=0,
-        # see testing_questions_acb/test_golden_set.py's identical comment: required for a
+        # see testing_arch_questions_acb/test_golden_set.py's identical comment: required for a
         # reasoning-locked OpenAI model to accept temperature=0; Anthropic's reasoning-locked
         # models have no equivalent, so CRITIC_PROVIDER_ORDER's Anthropic-first attempt now
         # fails every time and falls through to OpenAI, ending up on the same provider as the

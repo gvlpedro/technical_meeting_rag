@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Valida los data contracts ODCS generados por prompting/roles/common/data_contracts.md.
+"""Valida los data contracts ODCS generados por prompts/data_contracts.md.
 
 Uso:
     python3 scripts/validate_data_contracts.py --session session_20260906

@@ -1,0 +1,7 @@
+Three data flows to cover. AnalyticsCollector sends a PageView event to the DataWarehouse
+pipeline every time a user loads a page — that one's near real-time I believe, though I'm not
+100% sure how many seconds of delay. Separately, DataWarehouse retains raw PageView data for
+compliance reasons, someone said a specific number of days but I forget what it was. Then
+there's a nightly batch job, ReportBuilder, which reads aggregated data from DataWarehouse to
+build the exec dashboard — that one's clearly once a day. AnalyticsCollector and ReportBuilder
+are new; DataWarehouse already existed.

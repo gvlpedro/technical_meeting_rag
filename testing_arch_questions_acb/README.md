@@ -1,7 +1,7 @@
 # Golden-set question collection
 
-Real-LLM run of `agents.service.generate_questions_for_batch` — the exact production
-function `agents/graph.py`'s `generate_questions` node and `make questions` both call,
+Real-LLM run of `agents.service.generate_architecture_questions_for_batch` — the exact production
+function `agents/graph.py`'s `generate_architecture_questions` node and `make questions` both call,
 nothing mocked — against ten synthetic transcripts of increasing complexity, from one
 clean, single-component description (`01_single_component.txt`) to a deliberately
 chaotic, ambiguously-named ten-plus-component mess (`10_very_complex_unclear.txt`).
@@ -24,10 +24,10 @@ Only if those pass does the **Critic** run — a second, independent LLM call sc
 whether a human answering every drafted question would leave the architecture change
 fully and accurately documented, plus a one-paragraph `reason`. Its prompt lives in this
 directory's own `critic_prompt.jinja` (rendered via `_build_evaluation_prompt`), not inline
-in the test module — the same convention `prompting/roles/common/*.jinja` uses for
+in the test module — the same convention `prompts/*.jinja` uses for
 production prompts, just scoped to this test suite. It's written against general
 principles (completeness against what the transcript actually raises, no padding), not
-against `clarification_questions.jinja`'s own internal structure — an earlier version of
+against `architecture_questions.jinja`'s own internal structure — an earlier version of
 this rubric was tied to a specific, heavily-specified prompt and went stale the moment the
 prompt got rewritten. `score`/`reason` are recorded for information only; a probabilistic
 judge deciding pass/fail is exactly what made this suite flaky before, so only the
@@ -39,7 +39,7 @@ deterministic checks above gate it now.
 make test-questions-acb
 
 # stricter floor on question count:
-MIN_QUESTIONS=15 uv run pytest testing_questions_acb/ -v
+MIN_QUESTIONS=15 uv run pytest testing_arch_questions_acb/ -v
 ```
 
 ## Output
@@ -48,7 +48,7 @@ Everything lands under this directory's own `output/` (gitignored), never the re
 one — `conftest.py` redirects `settings.output_dir` for the run, so this can't pollute
 real ingestion data. Each transcript gets the **full** drafted result at its usual
 question file, `output/ingestion_date=golden-<name>/questions/<name>.json`,
-byte-for-byte what a real `generate_questions` run would write —
+byte-for-byte what a real `generate_architecture_questions` run would write —
 `{"mentioned_components": [{"name": ..., "status": ...}, ...], "questions": [{"id": ...,
 "scope": ..., "target": ..., "requirement": ..., "question": ...}, ...]}`. That's where
 to go to actually read the drafted questions.

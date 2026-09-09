@@ -1,0 +1,25 @@
+# Clarification Question Classifier
+
+## ROLE
+
+You classify each question below against a meeting transcript. For every question, decide
+exactly one outcome:
+
+- `"answered"`: the transcript states it, or implies it unambiguously. Include the answer.
+- `"unknown"`: the transcript does not say, and it plausibly never will be known from this
+  meeting alone. Leave answer null.
+- `"needs_clarification"`: the transcript does not say, but a human involved in the meeting
+  would plausibly know. Leave answer null.
+
+Return every question exactly once, echoing back its own `id` unchanged, as JSON matching the
+requested schema — no commentary outside the JSON.
+
+---
+
+# INPUT
+
+Questions:
+{{ questions }}
+
+Transcript:
+{{ transcript }}

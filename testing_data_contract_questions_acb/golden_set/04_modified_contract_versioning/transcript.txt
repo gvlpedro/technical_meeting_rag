@@ -1,0 +1,7 @@
+Let's walk through the checkout change. Today CheckoutService handles the whole checkout flow
+and publishes a checkout-completed event to OrderHistoryService once payment clears — that event
+carries order_id, customer_id, and total_amount. We're introducing a new LoyaltyService that
+awards points based on the order total. CheckoutService will call LoyaltyService right after
+payment succeeds, before it publishes the event. checkout-completed itself needs a new field so
+OrderHistoryService can show the awarded points without a second lookup — nothing else about the
+event changes. CheckoutService already existed and is changing because of this.

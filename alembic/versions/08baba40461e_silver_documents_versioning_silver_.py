@@ -22,7 +22,7 @@ def upgrade() -> None:
     """Upgrade schema.
 
     silver_documents/silver_chunks change shape here: synthesize_document now writes
-    ADR-shaped content (prompting/roles/common/adr_generator.jinja) instead of
+    ADR-shaped content (prompts/roles/common/adr_generator.jinja) instead of
     clarification_template.md's shape, silver_documents gains (source_component,
     version) identity instead of source_component alone, and silver_chunks moves from
     many token-split chunks per document to exactly one chunk per document version.

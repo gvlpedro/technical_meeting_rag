@@ -178,13 +178,20 @@ table set per layer:
 Engineering decisions made for this project itself — not to be confused with the ADRs the pipeline
 produces *about the meetings it ingests* (that's the Objective above):
 
-* **Medallion layering (Bronze → Silver → Gold), not one flat store.** Each layer has a narrower,
-  independently-verifiable job — Bronze never interprets, Silver clarifies, Gold records the ADRs
-  (`adr`) and each component's version history (`components`)
-* **Clarification questions are drafted per transcript, not read from a fixed list.** One LLM call
-  reads the transcript against `prompting/roles/common/clarification_template.md` and asks one specific question per
-  component actually named ("Is `X` new, evolving, or unchanged?"), instead of one generic question
-  that silently covers every component at once (`prompting/roles/common/clarification_questions.jinja`).
+* **Medallion layering (Bronze → Silver), Gold not built yet.** Bronze never interprets, Silver
+  clarifies and produces the versioned ADR per transcript; Gold (cross-meeting reconciliation, a
+  real component graph) is future, unscoped work — no Gold tables or module exist in this
+  codebase today.
+* **Question generation is two sequential stages, not one.** The first LLM call reads the
+  transcript against `prompts/architecture_template.md` and asks one specific
+  question per component actually named ("Is `X` new, evolving, or unchanged?"), plus
+  *identifies* (never fully specifies) every data contract in play
+  (`prompts/architecture_questions.jinja`). The second takes exactly those
+  identified contracts and drafts the full ODCS-completeness question set for each one
+  (`prompts/data_contract_questions.jinja` against
+  `prompts/data_contract_template.md`) — splitting them fixed a real, observed
+  failure mode where a single combined pass regularly under-covered data contracts (see
+  `doc/cost_analysis.md`).
 * **Clarification is LLM-first, human-in-the-loop only when needed.** One classification call
   sorts every drafted question into `answered` / `unknown` / `needs_clarification`; only the last
   group reaches a human, batched into a single LangGraph `interrupt()`

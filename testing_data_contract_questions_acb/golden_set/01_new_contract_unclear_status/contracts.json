@@ -1,0 +1,8 @@
+[
+  {
+    "name": "UserSignedUp",
+    "producer": "AuthService",
+    "consumer": "NotifyGateway",
+    "action": "unknown"
+  }
+]

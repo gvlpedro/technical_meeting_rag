@@ -44,26 +44,39 @@ def _make_fake_acompletion(
     critique_queue: list[dict],
     generated_questions: list[dict] | None = None,
     mentioned_components: list[dict] | None = None,
+    mentioned_data_contracts: list[dict] | None = None,
+    data_contract_questions: list[dict] | None = None,
 ):
-    """Dispatches on which prompt was sent (generate / classify / synthesize /
-    critic). `generate_questions` sends its whole prompt as a single `user` message
-    (loaded verbatim from `prompting/roles/common/clarification_questions.jinja`), the
-    other three still use a `system` + `user` pair — check `messages[0]["content"]`
-    either way. `synthesis_queue` and `critique_queue` are consumed in call order —
-    one entry per synthesize_document/critic_document invocation, in the order the
-    graph actually makes them (first pass, then one more per redraft).
+    """Dispatches on which prompt was sent (architecture questions / data-contract
+    questions / classify / synthesize / critic). Each question-generation stage and
+    `classify_questions` send their whole prompt as a single `user` message (loaded
+    verbatim from `prompts/architecture_questions.jinja`/
+    `data_contract_questions.jinja` for the first two), synthesize/critic still use a
+    `system` + `user` pair — check `messages[0]["content"]` either way. `synthesis_queue`
+    and `critique_queue` are consumed in call order — one entry per
+    synthesize_document/critic_document invocation, in the order the graph actually makes
+    them (first pass, then one more per redraft).
 
     `classification`'s entries are matched back to `generated_questions` by `id` (see
     `agents.graph.classify_questions`), so a test overriding one must override the
     other consistently — the default single placeholder question/classification pair
-    is enough for tests that don't care about specific question text or ids."""
+    is enough for tests that don't care about specific question text or ids. Leaving
+    `mentioned_data_contracts` at its default (empty) means the data-contract stage skips
+    its LLM call entirely (`generate_data_contract_questions_for_batch`'s own short
+    circuit) — most tests below never need to fake that prompt at all."""
     questions = generated_questions if generated_questions is not None else [_DEFAULT_QUESTION]
     components = mentioned_components if mentioned_components is not None else []
+    contracts = mentioned_data_contracts if mentioned_data_contracts is not None else []
+    contract_questions = data_contract_questions if data_contract_questions is not None else []
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         content_in = messages[0]["content"]
         if "Senior Software Architecture Requirements Analyst" in content_in:
-            content = json.dumps({"mentioned_components": components, "questions": questions})
+            content = json.dumps(
+                {"mentioned_components": components, "mentioned_data_contracts": contracts, "questions": questions}
+            )
+        elif "Senior Data Governance Requirements Analyst" in content_in:
+            content = json.dumps({"questions": contract_questions})
         elif "You classify each question" in content_in:
             content = json.dumps(classification)
         elif "Architecture Decision Record" in content_in:
@@ -126,11 +139,72 @@ DATE_CLASSIFY_INTERRUPT = date(2026, 6, 2)
 DATE_CONTRADICTION = date(2026, 6, 3)
 DATE_LOW_SEVERITY = date(2026, 6, 4)
 DATE_BOUNDED_RETRY = date(2026, 6, 5)
+DATE_DATA_CONTRACT_QUESTIONS = date(2026, 6, 7)
+
+
+async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
+    """The two question-generation stages both feed `generated_questions` —
+    `generate_data_contract_questions` must append onto what `generate_architecture_questions`
+    already drafted, not replace it, so `classify_questions` sees the union of both."""
+    await _insert_bronze(
+        DATE_DATA_CONTRACT_QUESTIONS, "meeting_g.en.vtt", ["Checkout publishes checkout-completed."]
+    )
+    try:
+        architecture_question = {
+            "id": "component.checkout_service.status",
+            "scope": "component",
+            "target": "checkout service",
+            "requirement": "status",
+            "question": "Is the checkout service new or existing?",
+        }
+        contract_question = {
+            "id": "contract.checkout_completed.schema",
+            "scope": "data_contract",
+            "target": "checkout-completed",
+            "requirement": "schema",
+            "question": "What fields does checkout-completed carry?",
+        }
+        seen_ids: list[str] = []
+
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=["# ADR — Checkout\n\nUnchanged."],
+            critique_queue=[[]],
+            generated_questions=[architecture_question],
+            mentioned_components=[{"name": "checkout service", "status": "unknown"}],
+            mentioned_data_contracts=[
+                {
+                    "name": "checkout-completed",
+                    "producer": "checkout service",
+                    "consumer": "unknown",
+                    "action": "unknown",
+                }
+            ],
+            data_contract_questions=[contract_question],
+        )
+
+        async def tracking_fake(*, model, api_key, messages, **kwargs):
+            if "You classify each question" in messages[0]["content"]:
+                seen_ids.extend(
+                    line.split("id: ", 1)[1]
+                    for line in messages[0]["content"].splitlines()
+                    if line.strip().startswith("- id:")
+                )
+            return await fake(model=model, api_key=api_key, messages=messages, **kwargs)
+
+        monkeypatch.setattr(litellm, "acompletion", tracking_fake)
+
+        result = await _run("data-contract-questions-1", initial_state("20260607"))
+        assert "__interrupt__" not in result
+
+        assert seen_ids == ["component.checkout_service.status", "contract.checkout_completed.schema"]
+    finally:
+        await _cleanup_date(DATE_DATA_CONTRACT_QUESTIONS)
 
 
 async def test_generate_questions_output_is_what_classify_questions_actually_sees(monkeypatch):
-    """generate_questions drafts per-component questions from the transcript
-    (prompting/roles/common/clarification_questions.jinja); classify_questions must
+    """generate_architecture_questions drafts per-component questions from the transcript
+    (prompts/architecture_questions.jinja); classify_questions must
     receive exactly that list, not some other/fixed one."""
     await _insert_bronze(
         DATE_GENERATED_QUESTIONS, "meeting_f.en.vtt", ["The checkout service was discussed."]
@@ -162,11 +236,15 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
                 assert "# Architecture Description / Evolution" in content_in  # got the real template
                 return _fake_response(
                     json.dumps(
-                        {"mentioned_components": mentioned_components, "questions": per_component_questions}
+                        {
+                            "mentioned_components": mentioned_components,
+                            "mentioned_data_contracts": [],
+                            "questions": per_component_questions,
+                        }
                     )
                 )
             if "You classify each question" in content_in:
-                seen_questions_blocks.append(messages[1]["content"])
+                seen_questions_blocks.append(messages[0]["content"])
                 return _fake_response(json.dumps({"classifications": []}))
             if "Architecture Decision Record" in content_in:
                 return _fake_response("# ADR — Checkout Service\n\nCheckout: unchanged.")
@@ -191,6 +269,7 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
         assert questions_file.is_file()
         assert json.loads(questions_file.read_text()) == {
             "mentioned_components": mentioned_components,
+            "mentioned_data_contracts": [],
             "questions": per_component_questions,
         }
     finally:

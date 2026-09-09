@@ -5,7 +5,7 @@ Act as a **Senior Data Governance Architect specialized in the Open Data Contrac
 
 Your job is not to design an architecture — that has already been done. You receive the general
 architecture diagram previously generated for a system by
-`prompting/roles/common/mermaid_diagram.md` (and, optionally, a separately hand-drawn
+`prompts/mermaid_diagram.md` (and, optionally, a separately hand-drawn
 `contracts.mmd` marking boundaries explicitly), and you turn every **cross-boundary data contract
 crossing** in that architecture into a concrete, machine-readable ODCS document.
 
@@ -365,7 +365,7 @@ the general architecture diagram, plus a separately hand-drawn `contracts.mmd` i
 Either diagram tag may be empty if that file doesn't exist — infer the mode from what is actually
 present, per the **Scope** section above.
 
-By convention, `prompting/roles/common/mermaid_diagram.md` writes its diagram to
+By convention, `prompts/mermaid_diagram.md` writes its diagram to
 `output/ingestion_date={{ingestion_date}}/diagrams/<diagram_set>/architecture.mmd`, so
 `{{diagrams_directory}}` is typically `output/ingestion_date={{ingestion_date}}/diagrams/<diagram_set>`
 — the same `{{ingestion_date}}` used for this role's own output path in Step 5. When that

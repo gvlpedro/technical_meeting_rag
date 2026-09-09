@@ -571,7 +571,7 @@ filename without extension). If no `{{ingestion_date}}` is given, write to
 `output/diagrams/{{diagram_set}}/architecture.mmd` instead. This is the same
 `output/ingestion_date=<date>/...` convention Bronze/Silver already use (e.g.
 `agents/service.py`'s own `output/ingestion_date=<date>/questions/` audit files), and that
-`prompting/roles/common/data_contracts.md` reads from.
+`prompts/data_contracts.md` reads from.
 
 ---
 

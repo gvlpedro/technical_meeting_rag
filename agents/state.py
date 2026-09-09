@@ -4,8 +4,11 @@ ClarificationStatus = Literal["answered", "unknown", "needs_clarification", "hum
 
 
 class GeneratedQuestion(TypedDict):
-    """One question as drafted by `generate_questions` — see `agents.schemas.QuestionItem`.
-    `id` is what `classify_questions` matches a classification back to, not question text."""
+    """One question as drafted by `generate_architecture_questions` or
+    `generate_data_contract_questions` — see `agents.schemas.QuestionItem`. `id` is what
+    `classify_questions` matches a classification back to, not question text. Both
+    generation stages append into the same `generated_questions` list — `classify_questions`
+    classifies their union in one pass."""
 
     id: str
     scope: str
@@ -16,10 +19,21 @@ class GeneratedQuestion(TypedDict):
 
 class MentionedComponentItem(TypedDict):
     """See `agents.schemas.MentionedComponent` — the Actor's own lifecycle read for a
-    component the transcript names, threaded into `synthesize_document`'s prompt below."""
+    component the transcript names, drafted by `generate_architecture_questions`."""
 
     name: str
     status: str
+
+
+class MentionedDataContractItem(TypedDict):
+    """See `agents.schemas.MentionedDataContract` — a data contract
+    `generate_architecture_questions` identified (name/producer/consumer/action only), fed
+    into `generate_data_contract_questions` as its fixed `IDENTIFIED_DATA_CONTRACTS` input."""
+
+    name: str
+    producer: str
+    consumer: str
+    action: str
 
 
 class ClarificationItem(TypedDict):
@@ -35,12 +49,6 @@ class ClarificationItem(TypedDict):
 class BronzeRow(TypedDict):
     source_component: str
     content: str
-
-
-class GoldComponentSnapshot(TypedDict):
-    name: str
-    description: str
-    profile: str
 
 
 class CritiqueItem(TypedDict):
@@ -63,11 +71,11 @@ class SilverState(TypedDict):
     ingestion_date: str
     bronze_documents: list[BronzeRow]
     transcript_text: str
-    generated_questions: list[GeneratedQuestion]  # drafted fresh per batch — see generate_questions
-    mentioned_components: list[MentionedComponentItem]  # same batch — fed into synthesize_document
+    generated_questions: list[GeneratedQuestion]  # union of both generation stages, this batch
+    mentioned_components: list[MentionedComponentItem]  # drafted by generate_architecture_questions
+    mentioned_data_contracts: list[MentionedDataContractItem]  # same stage; feeds the next one
     clarifications: list[ClarificationItem]
     pending_questions: list[str]
-    known_gold_components: list[GoldComponentSnapshot]
     documents: dict[str, str]  # source_component -> synthesized ADR Markdown (Actor)
     document_versions: dict[str, int]  # source_component -> version write_document just wrote
     critiques: dict[str, list[CritiqueItem]]  # source_component -> Critic's findings
@@ -85,9 +93,9 @@ def initial_state(ingestion_date: str) -> SilverState:
         "transcript_text": "",
         "generated_questions": [],
         "mentioned_components": [],
+        "mentioned_data_contracts": [],
         "clarifications": [],
         "pending_questions": [],
-        "known_gold_components": [],
         "documents": {},
         "document_versions": {},
         "critiques": {},

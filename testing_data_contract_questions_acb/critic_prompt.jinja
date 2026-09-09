@@ -1,0 +1,28 @@
+You are grading a list of ODCS-completeness clarification questions drafted for the data
+contracts below, given the meeting transcript they were identified from.
+
+Score from 0 to 100: if a data governance engineer answered every one of these questions, would
+each contract in `Identified contracts` end up with a complete ODCS v3.0.0 specification —
+identity, description, schema, quality/SLA where relevant, servers/interfaces where relevant,
+support/ownership, and versioning where the contract is modified/deprecated?
+
+0 means answering them would leave the contracts about as unspecified as the raw transcript
+already leaves them. 100 means answering them would leave nothing material still missing for
+any contract in the list.
+
+Penalize three things specifically: a contract in the list that gets little or no coverage,
+padding — a question about a field or property the transcript gives no reason to believe exists
+(not evidenced, not structurally necessary), and a question about a contract that is NOT in
+`Identified contracts` (this stage must never introduce a contract of its own).
+
+Transcript:
+{{ transcript }}
+
+Identified contracts:
+{{ contracts }}
+
+Drafted questions:
+{{ questions }}
+
+Return JSON exactly like {"score": <integer 0-100>, "rationale": "<one paragraph explaining
+what the questions cover well and what they miss or pad, contract by contract>"}. Nothing else.

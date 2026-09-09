@@ -10,18 +10,33 @@ from typing import Literal
 from pydantic import BaseModel
 
 ComponentStatus = Literal["new", "modified", "removed", "unchanged", "unknown"]
+ContractAction = Literal["new", "modified", "unchanged", "deprecated", "removed", "unknown"]
 QuestionScope = Literal[
     "metadata", "component", "architecture", "data_contract", "adr", "change_impact", "migration"
 ]
 
 
 class MentionedComponent(BaseModel):
-    """One entry of `QuestionListResult.mentioned_components` — a component the transcript
-    names, plus the Actor's own read of its lifecycle status relative to `KNOWN_ARCHITECTURE`
-    (see prompting/roles/common/clarification_questions.jinja, COMPONENT STATUS)."""
+    """One entry of `ArchitectureQuestionListResult.mentioned_components` — a component the
+    transcript names, plus the Actor's own read of its lifecycle status relative to
+    `KNOWN_ARCHITECTURE` (see prompts/architecture_questions.jinja, COMPONENT
+    STATUS)."""
 
     name: str
     status: ComponentStatus
+
+
+class MentionedDataContract(BaseModel):
+    """One entry of `ArchitectureQuestionListResult.mentioned_data_contracts` — a data contract
+    the architecture stage identified (name/producer/consumer/action only, never full schema).
+    This is the fixed list `prompts/data_contract_questions.jinja`'s
+    `IDENTIFIED_DATA_CONTRACTS` input is built from — the data-contract stage never discovers a
+    contract on its own, only this stage does."""
+
+    name: str
+    producer: str
+    consumer: str
+    action: ContractAction
 
 
 class QuestionItem(BaseModel):
@@ -36,16 +51,32 @@ class QuestionItem(BaseModel):
     question: str
 
 
-class QuestionListResult(BaseModel):
-    """`generate_questions`'s output — see prompting/roles/common/clarification_questions.jinja.
-    Exactly two top-level fields — the prompt itself is explicit that no others are allowed.
+class ArchitectureQuestionListResult(BaseModel):
+    """`generate_architecture_questions`'s output — see
+    prompts/architecture_questions.jinja (question-generation stage 1 of 2: ADR,
+    components, and data-contract *identification* — never full ODCS detail, that's
+    `DataContractQuestionListResult`'s job). Exactly three top-level fields — the prompt itself
+    is explicit that no others are allowed.
 
-    `mentioned_components` is checked mechanically (not just trusted) against the transcript by
-    `testing_questions_acb`'s golden-set test — each name must appear in the transcript verbatim,
-    catching an invented or paraphrased component name deterministically, without an LLM judge.
+    `mentioned_components` is checked mechanically (not just trusted) against the transcript —
+    each name must appear in the transcript verbatim, catching an invented or paraphrased
+    component name deterministically, without an LLM judge. `mentioned_data_contracts` feeds
+    directly into stage 2 as its fixed `IDENTIFIED_DATA_CONTRACTS` list.
     """
 
     mentioned_components: list[MentionedComponent]
+    mentioned_data_contracts: list[MentionedDataContract]
+    questions: list[QuestionItem]
+
+
+class DataContractQuestionListResult(BaseModel):
+    """`generate_data_contract_questions`'s output — see
+    prompts/data_contract_questions.jinja (question-generation stage 2 of 2: full
+    ODCS-completeness questions for each contract `ArchitectureQuestionListResult.
+    mentioned_data_contracts` already identified). Every `questions[].scope` is `data_contract`
+    and every `questions[].target` must match one of the contracts it was given — checked
+    mechanically, same principle as stage 1's component grounding check."""
+
     questions: list[QuestionItem]
 
 

@@ -1,9 +1,16 @@
 # Cost Analysis — Clarification Question Generation
 
-Comparative analysis of LLM model choice for `agents.service.generate_questions_for_batch`,
-based on real runs of `testing_questions_acb/`'s golden set (10 transcripts, real OpenAI/
-Anthropic API calls, nothing mocked). `score` is the Critic's 0-100 judgment (completeness
-minus padding); `price` is the metered cost of the full 10-case suite (Actor + Critic calls).
+> **Historical**: measured against the single-pass question-generation prompt
+> (`agents.service.generate_questions_for_batch`, `testing_questions_acb/`) before it was split
+> into `generate_architecture_questions_for_batch` + `generate_data_contract_questions_for_batch`
+> (`testing_arch_questions_acb/` + `testing_data_contract_questions_acb/`). The model comparison
+> and recommendation below are still the current production config — only the question-generation
+> prompt/test-project structure they were measured against has since changed.
+
+Comparative analysis of LLM model choice for question generation, based on real runs of
+`testing_questions_acb/`'s golden set (10 transcripts, real OpenAI/Anthropic API calls, nothing
+mocked). `score` is the Critic's 0-100 judgment (completeness minus padding); `price` is the
+metered cost of the full 10-case suite (Actor + Critic calls).
 
 ## Comparative (test suite: `testing_questions_acb`)
 

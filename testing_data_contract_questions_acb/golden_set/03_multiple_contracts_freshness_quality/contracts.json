@@ -1,0 +1,14 @@
+[
+  {
+    "name": "PageView",
+    "producer": "AnalyticsCollector",
+    "consumer": "DataWarehouse",
+    "action": "new"
+  },
+  {
+    "name": "aggregated-page-data",
+    "producer": "DataWarehouse",
+    "consumer": "ReportBuilder",
+    "action": "new"
+  }
+]

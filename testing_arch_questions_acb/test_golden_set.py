@@ -1,26 +1,26 @@
 """Real-LLM golden-set collection: for each transcript in `golden_set/` (increasing
 complexity from one clean component to a deliberately chaotic ten-plus-component mess),
-runs the Actor — `agents.service.generate_questions_for_batch`, the exact function
-`agents/graph.py`'s `generate_questions` node and `make questions` both call — and
-records a summary of each run into `testing_questions_acb/output/result.json`. The full
+runs the Actor — `agents.service.generate_architecture_questions_for_batch`, the exact function
+`agents/graph.py`'s `generate_architecture_questions` node and `make questions` both call — and
+records a summary of each run into `testing_arch_questions_acb/output/result.json`. The full
 drafted `mentioned_components`/`questions` for a case aren't duplicated there — they
 already live in that case's own `output/ingestion_date=golden-<name>/questions/
-<name>.json`, written by `generate_questions_for_batch` itself; `result.json` is the
+<name>.json`, written by `generate_architecture_questions_for_batch` itself; `result.json` is the
 at-a-glance table across the whole golden set, not a second copy of the same content.
 
 Two independent things happen per case, and only one of them can fail the test:
 
   - **Free, deterministic checks** (`_check_structural_quality` /
-    `_check_mentioned_components_are_grounded`) — mechanical integrity checks on the
-    collection itself (empty output, duplicate ids, duplicate/malformed question text, a
-    hallucinated component name), at zero LLM cost. `passed` in `result.json` is this
-    outcome, and it's what the test actually asserts on.
+    `_check_mentioned_components_are_grounded` / `_check_mentioned_data_contracts_are_grounded`)
+    — mechanical integrity checks on the collection itself (empty output, duplicate ids,
+    duplicate/malformed question text, a hallucinated component or contract name), at zero LLM
+    cost. `passed` in `result.json` is this outcome, and it's what the test actually asserts on.
   - **The Critic** — a second, independent LLM call scoring 0-100 how completely the
     drafted questions would document the architecture change if a human answered every
     one of them, plus a one-paragraph `reason`. Its prompt lives in this directory's own
     `critic_prompt.jinja` (rendered via `_build_evaluation_prompt`), deliberately written
     against general principles (completeness, grounding), not against
-    `clarification_questions.jinja`'s own internal structure — an earlier version of this
+    `architecture_questions.jinja`'s own internal structure — an earlier version of this
     rubric was tied to a specific, heavily-specified prompt and went stale the moment the
     prompt was rewritten. `score`/`reason` are recorded for information only; they do
     **not** gate the test. A probabilistic judge deciding pass/fail turned this suite
@@ -32,16 +32,16 @@ in pyproject.toml) — this hits the real LLM twice per case (Actor + Critic), o
 to see the actual prompt's real-world output, not a mocked one.
 
 Run:
-    uv run pytest testing_questions_acb/ -v
-    MIN_QUESTIONS=15 uv run pytest testing_questions_acb/ -v   # stricter floor
+    uv run pytest testing_arch_questions_acb/ -v
+    MIN_QUESTIONS=15 uv run pytest testing_arch_questions_acb/ -v   # stricter floor
 
 Needs a real OPENAI_API_KEY/ANTHROPIC_API_KEY (same as any other real run against
 llm.router.complete) — no server, no Postgres, no LangGraph needed.
 
 Every case's `{name, question_count, passed, score, reason, input_tokens, output_tokens,
-estimated_euro_cost}` is written to `testing_questions_acb/output/result.json` once the
+estimated_euro_cost}` is written to `testing_arch_questions_acb/output/result.json` once the
 whole run finishes (`conftest.py`'s `pytest_sessionfinish`), alongside the same
-per-transcript question JSON files a real `generate_questions` run would produce. That
+per-transcript question JSON files a real `generate_architecture_questions` run would produce. That
 file's content is then printed to the terminal via `conftest.py`'s
 `pytest_terminal_summary` hook, visible without needing `-s`.
 
@@ -60,13 +60,13 @@ import litellm
 import pytest
 from pydantic import BaseModel
 
-from agents.schemas import MentionedComponent, QuestionItem
-from agents.service import generate_questions_for_batch
+from agents.schemas import MentionedComponent, MentionedDataContract, QuestionItem
+from agents.service import generate_architecture_questions_for_batch
 from agents.template import load_json_response
 from app.config import settings
 from llm import router
 
-from testing_questions_acb.conftest import record_result
+from testing_arch_questions_acb.conftest import record_result
 
 MIN_QUESTIONS = int(os.environ.get("MIN_QUESTIONS", "2"))
 CRITIC_PROVIDER_ORDER = list(reversed(settings.llm_fallback_order))
@@ -155,6 +155,20 @@ def _check_mentioned_components_are_grounded(
     return violations
 
 
+def _check_mentioned_data_contracts_are_grounded(
+    mentioned_data_contracts: list[MentionedDataContract], transcript: str
+) -> list[str]:
+    """Same principle as `_check_mentioned_components_are_grounded`, applied to this stage's
+    other identification output: every claimed contract `name` must appear in the transcript
+    verbatim (case-insensitive) — this stage identifies contracts, it doesn't invent them, and
+    an invented one here would feed straight into the data-contract stage as if it were real."""
+    transcript_lower = transcript.lower()
+    ungrounded = [c.name for c in mentioned_data_contracts if c.name.lower() not in transcript_lower]
+    if ungrounded:
+        return [f"{len(ungrounded)} mentioned_data_contracts not found in the transcript: {ungrounded}"]
+    return []
+
+
 def _golden_set_cases() -> list[tuple[str, str]]:
     """[(name, transcript_text), ...], sorted by filename so 01_.. runs before 10_.."""
     return [(f.stem, f.read_text(encoding="utf-8")) for f in sorted(GOLDEN_SET_DIR.glob("*.txt"))]
@@ -169,9 +183,9 @@ def _questions_block(questions: list[QuestionItem]) -> str:
 
 
 def _load_critic_prompt_template() -> str:
-    """`testing_questions_acb/critic_prompt.jinja`'s raw text — the Critic's own prompt, kept
+    """`testing_arch_questions_acb/critic_prompt.jinja`'s raw text — the Critic's own prompt, kept
     as a real Jinja template here (not inline in this module) so it can be edited/reviewed like
-    any other prompt in this repo (see `prompting/roles/common/*.jinja`), just scoped to this
+    any other prompt in this repo (see `prompts/*.jinja`), just scoped to this
     test suite rather than production."""
     return _CRITIC_PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -204,14 +218,15 @@ async def _evaluate(transcript: str, questions: list[QuestionItem]) -> Evaluatio
     "name,transcript", _golden_set_cases(), ids=[name for name, _ in _golden_set_cases()]
 )
 async def test_golden_set_question_collection(name: str, transcript: str, _track_llm_cost: dict) -> None:
-    # Actor — the exact function `generate_questions` (the graph node) and `make
+    # Actor — the exact function `generate_architecture_questions` (the graph node) and `make
     # questions` both call; also writes ingestion_date=<date>/questions/<name>.json
     # under this directory's own output/ (conftest.py redirects settings.output_dir).
     ingestion_date = f"golden-{name}"
-    result = await generate_questions_for_batch(ingestion_date, _bronze_documents_for(name, transcript))
+    result = await generate_architecture_questions_for_batch(ingestion_date, _bronze_documents_for(name, transcript))
 
     violations = _check_structural_quality(result.questions)
     violations += _check_mentioned_components_are_grounded(result.mentioned_components, transcript)
+    violations += _check_mentioned_data_contracts_are_grounded(result.mentioned_data_contracts, transcript)
 
     if violations:
         # Broken/near-empty output isn't worth spending a Critic call to score.

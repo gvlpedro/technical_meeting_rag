@@ -1,9 +1,9 @@
 # Golden-set ADR generation
 
 Real-LLM run of `agents.prompts.build_adr_generation_prompt` — which renders
-`prompting/roles/common/adr_generator.jinja` — against three cases: a real meeting transcript
+`prompts/adr_generator.jinja` — against three cases: a real meeting transcript
 with a human review pass, and two synthetic cases of increasing complexity. Mirrors
-`testing_questions_acb/`'s own structure and philosophy, one stage later in the pipeline:
+`testing_arch_questions_acb/`'s own structure and philosophy, one stage later in the pipeline:
 that project tests turning a transcript into clarification *questions*; this one tests turning
 a transcript plus its already-*answered* clarifications into the final ADR document, shaped
 like `doc/adr_example.md`.
@@ -52,7 +52,7 @@ line of that case's own `checklist.txt`, reported individually as
 line tagged `[DETERMINISTIC]` has one factually correct answer and is judged strictly; one
 tagged `[JUDGMENT]` allows reasonable latitude in wording. `critic_passes`/`critic_reason`
 (which appends any failed checklist items) are recorded for information only — a probabilistic
-judge deciding pass/fail is exactly what made `testing_questions_acb` flaky before (see that
+judge deciding pass/fail is exactly what made `testing_arch_questions_acb` (formerly `testing_questions_acb`) flaky before (see that
 project's own README), so only the deterministic checks above gate this suite too.
 
 ## Run

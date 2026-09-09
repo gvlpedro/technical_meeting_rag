@@ -1,6 +1,6 @@
 """The Silver clarification loop, end-to-end — `doc/silver_process.md` §3 turned into code.
 
-One deliberately large module instead of one file per node: the nine nodes below only
+One deliberately large module instead of one file per node: the ten nodes below only
 make sense wired together (see `.tmp/tasks.md` Task 6 for why splitting the commit
 would mean landing broken intermediate states).
 """
@@ -32,7 +32,8 @@ from agents.schemas import ClassificationResult, CritiqueResult
 from agents.service import (
     NoBronzeDocumentsError,
     distinct_sources,
-    generate_questions_for_batch,
+    generate_architecture_questions_for_batch,
+    generate_data_contract_questions_for_batch,
     load_bronze_rows,
     source_content,
     transcription_base_name,
@@ -55,33 +56,35 @@ logfire.configure(
 _DECLINE_PHRASES = {"", "no sé", "no se", "unknown", "n/a", "idk", "i don't know"}
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
 
-# Caps how many questions ask_human ever presents to a human in one batch — a transcript
-# can realistically draft far more than 20 needs_clarification items (see
-# doc/cost_analysis.md's golden-set numbers, some cases well past 100 questions total),
-# and nobody actually wants to answer that many in one terminal session. Ranked by scope,
-# most load-bearing first (adr/component/architecture — what actually needs to get built)
-# down to least (metadata — bookkeeping); deterministic and free, no extra LLM call.
-MAX_PENDING_QUESTIONS = 20
-_SCOPE_PRIORITY = {
-    "adr": 0,
+_QUESTIONS_PRIORITIES = {
+    "adr": 0,      # Decisions
     "component": 1,
     "architecture": 2,
-    "data_contract": 3,
-    "change_impact": 4,
-    "migration": 5,
-    "metadata": 6,
+    "change_impact": 3,
+    "migration": 4,
+    "metadata": 5,
 }
 
 
 def _top_questions(questions: list[str], scopes: dict[str, str] | None = None) -> list[str]:
-    """Truncates to `MAX_PENDING_QUESTIONS`. When `scopes` (question text -> scope) is
-    given, sorts by `_SCOPE_PRIORITY` first — used for classify-origin questions, which
-    carry a real scope. Boss-origin escalations (see `boss_decide`) have no scope of
+    """When `scopes` (question text -> scope) is given — classify-origin questions, which carry
+    a real scope — splits into the architecture bucket (everything except `data_contract`,
+    ranked by `_QUESTIONS_PRIORITIES`, capped at `settings.max_architecture_pending_questions`) and
+    the data-contract bucket (capped at `settings.max_data_contract_pending_questions`,
+    truncated in drafted order). Boss-origin escalations (see `boss_decide`) have no scope of
     their own (synthesized ad hoc from a Critic claim) and are already naturally few, so
-    they're just truncated in their existing order."""
-    if scopes is not None:
-        questions = sorted(questions, key=lambda q: _SCOPE_PRIORITY.get(scopes.get(q, ""), len(_SCOPE_PRIORITY)))
-    return questions[:MAX_PENDING_QUESTIONS]
+    without `scopes` they're just truncated to the architecture cap in their existing order."""
+    if scopes is None:
+        return questions[: settings.max_architecture_pending_questions]
+
+    architecture_qs = [q for q in questions if scopes.get(q) != "data_contract"]
+    data_contract_qs = [q for q in questions if scopes.get(q) == "data_contract"]
+    architecture_qs.sort(key=lambda q: _QUESTIONS_PRIORITIES.get(scopes.get(q, ""), len(_QUESTIONS_PRIORITIES)))
+
+    return (
+        architecture_qs[: settings.max_architecture_pending_questions]
+        + data_contract_qs[: settings.max_data_contract_pending_questions]
+    )
 
 
 def checkpointer_dsn() -> str:
@@ -99,11 +102,6 @@ def _downgrade_claim(content: str, claim: str) -> str:
     return content.replace(claim, marked, 1)
 
 
-# --- Nodes -------------------------------------------------------------------
-# load_bronze and generate_questions are thin wrappers — their actual logic lives in
-# agents/service.py, callable directly (make questions, unit tests) without a graph.
-
-
 async def load_bronze(state: SilverState) -> dict:
     async with async_session_factory() as session:
         rows = await load_bronze_rows(state["ingestion_date"], session)
@@ -114,15 +112,25 @@ async def load_bronze(state: SilverState) -> dict:
     }
 
 
-async def generate_questions(state: SilverState) -> dict:
-    """See `agents.service.generate_questions_for_batch` for what this actually does
-    (`doc/silver_process.md` §3 node 2) — this node just supplies the graph's state."""
-    result = await generate_questions_for_batch(
+async def generate_architecture_questions(state: SilverState) -> dict:
+    """Architecture questions and mentions"""
+    result = await generate_architecture_questions_for_batch(
         state["ingestion_date"], state["bronze_documents"], architecture_diagram=""
     )
     return {
         "generated_questions": [q.model_dump() for q in result.questions],
         "mentioned_components": [c.model_dump() for c in result.mentioned_components],
+        "mentioned_data_contracts": [c.model_dump() for c in result.mentioned_data_contracts],
+    }
+
+
+async def generate_data_contract_questions(state: SilverState) -> dict:
+    """Data contracts questions and mentions"""
+    result = await generate_data_contract_questions_for_batch(
+        state["ingestion_date"], state["bronze_documents"], state["mentioned_data_contracts"]
+    )
+    return {
+        "generated_questions": state["generated_questions"] + [q.model_dump() for q in result.questions],
     }
 
 
@@ -217,11 +225,11 @@ def ask_human(state: SilverState) -> dict:
 
 async def synthesize_document(state: SilverState) -> dict:
     """The Actor. One LLM call per distinct source, writing the final ADR directly —
-    `prompting/roles/common/adr_generator.jinja`'s structure, not
-    `prompting/roles/common/clarification_template.md`'s (`doc/silver_process.md` §3 node 5). Takes a flat
-    question/answer list, not the graph's own richer `ClarificationItem` shape — see
-    `agents.prompts.QaPair` — so `id`/`scope`/`target`/`requirement` are dropped here;
-    the ADR prompt only ever reads the question text and its answer."""
+    `prompts/adr_generator.jinja`'s own structure (`doc/silver_process.md`
+    §3 node 6). Takes a flat question/answer list, not the graph's own richer
+    `ClarificationItem` shape — see `agents.prompts.QaPair` — so
+    `id`/`scope`/`target`/`requirement` are dropped here; the ADR prompt only ever reads
+    the question text and its answer."""
     sources = state["redraft_only"] or distinct_sources(state["bronze_documents"])
     qa_pairs = [{"question": c["question"], "answer": c["answer"]} for c in state["clarifications"]]
 
@@ -365,8 +373,8 @@ async def _persist_document_version(
 def _write_adr_audit_file(ingestion_date_str: str, source_component: str, content: str) -> None:
     """Writes `output/ingestion_date=<date>/adr/<transcription>.md` — a human-inspectable
     audit copy of the ADR `write_document` just persisted, same convention
-    `generate_questions_for_batch`'s own `_write_generated_questions` already uses for its
-    own audit file (`doc/silver_process.md` §1). Always reflects this run's latest
+    `agents.service._write_json_audit_file` already uses for the two question-generation
+    stages' own audit files (`doc/silver_process.md` §1). Always reflects this run's latest
     content, unversioned on disk — only `silver_documents` keeps version history; this
     file exists to be read by a human, not by anything downstream."""
     adr_dir = Path(settings.output_dir) / f"ingestion_date={ingestion_date_str}" / "adr"
@@ -443,7 +451,8 @@ def build_graph(checkpointer) -> CompiledStateGraph:
     graph = StateGraph(SilverState)
 
     graph.add_node("load_bronze", load_bronze)
-    graph.add_node("generate_questions", generate_questions)
+    graph.add_node("generate_architecture_questions", generate_architecture_questions)
+    graph.add_node("generate_data_contract_questions", generate_data_contract_questions)
     graph.add_node("classify_questions", classify_questions)
     graph.add_node("ask_human", ask_human)
     graph.add_node("synthesize_document", synthesize_document)
@@ -453,8 +462,9 @@ def build_graph(checkpointer) -> CompiledStateGraph:
     graph.add_node("chunk_and_embed", chunk_and_embed)
 
     graph.add_edge(START, "load_bronze")
-    graph.add_edge("load_bronze", "generate_questions")
-    graph.add_edge("generate_questions", "classify_questions")
+    graph.add_edge("load_bronze", "generate_architecture_questions")
+    graph.add_edge("generate_architecture_questions", "generate_data_contract_questions")
+    graph.add_edge("generate_data_contract_questions", "classify_questions")
     graph.add_conditional_edges(
         "classify_questions",
         route_after_classify,

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "pricing-calculation",
+    "producer": "OrderService",
+    "consumer": "PricingEngine",
+    "action": "new"
+  }
+]
