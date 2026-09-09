@@ -1,0 +1,6 @@
+{
+  "name": "02_checkout_loyalty_integration",
+  "description": "Synthetic, fully-resolved case: every component status and the one data contract's version evolution are confirmed by the clarifications, with no unanswered questions and no unconfirmed components. Exercises the full document structure, including a populated ODCS section — the counterpoint to case 01's partial-information handling.",
+  "expected_components": ["CheckoutService", "LoyaltyService", "OrderHistoryService"],
+  "excluded_components": []
+}

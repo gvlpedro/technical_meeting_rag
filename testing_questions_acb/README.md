@@ -22,13 +22,16 @@ test actually asserts on.
 
 Only if those pass does the **Critic** run — a second, independent LLM call scoring 0-100
 whether a human answering every drafted question would leave the architecture change
-fully and accurately documented, plus a one-paragraph `reason`. It's written against
-general principles (completeness against what the transcript actually raises, no
-padding), not against `clarification_questions.jinja`'s own internal structure — an
-earlier version of this rubric was tied to a specific, heavily-specified prompt and went
-stale the moment the prompt got rewritten. `score`/`reason` are recorded for information
-only; a probabilistic judge deciding pass/fail is exactly what made this suite flaky
-before, so only the deterministic checks above gate it now.
+fully and accurately documented, plus a one-paragraph `reason`. Its prompt lives in this
+directory's own `critic_prompt.jinja` (rendered via `_build_evaluation_prompt`), not inline
+in the test module — the same convention `prompting/roles/common/*.jinja` uses for
+production prompts, just scoped to this test suite. It's written against general
+principles (completeness against what the transcript actually raises, no padding), not
+against `clarification_questions.jinja`'s own internal structure — an earlier version of
+this rubric was tied to a specific, heavily-specified prompt and went stale the moment the
+prompt got rewritten. `score`/`reason` are recorded for information only; a probabilistic
+judge deciding pass/fail is exactly what made this suite flaky before, so only the
+deterministic checks above gate it now.
 
 ## Run
 

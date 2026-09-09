@@ -68,7 +68,8 @@ class SilverState(TypedDict):
     clarifications: list[ClarificationItem]
     pending_questions: list[str]
     known_gold_components: list[GoldComponentSnapshot]
-    documents: dict[str, str]  # source_component -> synthesized Markdown (Actor)
+    documents: dict[str, str]  # source_component -> synthesized ADR Markdown (Actor)
+    document_versions: dict[str, int]  # source_component -> version write_document just wrote
     critiques: dict[str, list[CritiqueItem]]  # source_component -> Critic's findings
     boss_verdicts: dict[str, str]  # source_component -> "ok" | "needs_human_review"
     revision_attempted: dict[str, bool]  # source_component -> already retried once?
@@ -88,6 +89,7 @@ def initial_state(ingestion_date: str) -> SilverState:
         "pending_questions": [],
         "known_gold_components": [],
         "documents": {},
+        "document_versions": {},
         "critiques": {},
         "boss_verdicts": {},
         "revision_attempted": {},

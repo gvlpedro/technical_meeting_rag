@@ -1,0 +1,57 @@
+CHECKLIST — 01_twitter_real_time_delivery
+
+Case-specific ground truth this ADR must reflect, derived directly from this case's own
+clarifications.json (36 factual-verification questions, "Is it accurate that..." / "Yes/No,
+[cited detail]" — a description of the CURRENT system, not a proposed change to it). Items
+marked [DETERMINISTIC] are yes/no, mechanically checkable against the document text with no
+judgment call — verify these first and weight them most heavily. Items marked [JUDGMENT]
+require reading intent/nuance and allow some latitude in wording.
+
+1. [DETERMINISTIC] Section 4 (Affected Components) contains ONLY the prescribed one-sentence
+   "no component's status was confirmed" note — no table, no rows. None of the 36
+   clarifications assert a NEW/MODIFIED/REMOVED/UNCHANGED lifecycle status for any component;
+   every one of them confirms a factual detail about how the system already works.
+
+2. [DETERMINISTIC] None of these names appear anywhere in the document tagged with
+   NEW/MODIFIED/REMOVED/UNCHANGED: Write API, Social Graph Service, Redis, Timeline Service,
+   Ingestor, Early Bird, Blender, Hose Bird. Each may appear freely in prose (Context, Previous
+   Architecture) — only a status tag next to the name is a violation.
+
+3. [DETERMINISTIC] Section 5 (Affected Data Contracts) and section 6 (ODCS Data Contract
+   Specifications) each contain only the prescribed "no data contract changes were confirmed"
+   note. The 36th clarification explicitly states no formal data-contract definitions (schemas,
+   ownership, versioning, SLAs) were established for anything in this transcript.
+
+4. [DETERMINISTIC] Section 7 (ODCS Artifacts) is omitted entirely, matching an empty section 6.
+
+5. [DETERMINISTIC] The Decision subsection of section 1 (ADR) contains only the prescribed
+   one-sentence "no decision confirmed" note, not a bullet list of actions — nothing in the 36
+   clarifications proposes or confirms a change; all of them describe the existing system.
+
+6. [JUDGMENT] Section 2 (Previous Architecture) has substantial real content: Write API as the
+   asynchronous entry point fanning out to timeline delivery / search indexing / push delivery,
+   Social Graph Service, Redis's replicated timeline cache, the Ingestor → Early Bird → Blender
+   search path, and Hose Bird's cascading push cluster are all extensively confirmed facts about
+   the system as it exists today and should be represented.
+
+7. [JUDGMENT] Section 3 (Target Architecture) does not present a state different from section 2
+   — since no change is confirmed anywhere in the clarifications, it should use the "not
+   covered" note (or, at minimum, must not invent a target state that diverges from what section
+   2 already describes).
+
+8. [DETERMINISTIC] If Redis's fan-out mechanics are described at all, they must not contradict:
+   timelines replicated across three Redis instances, populated in batches of ~4,000 followers,
+   using RPUSHX to skip fan-out for timelines that aren't currently cached.
+
+9. [DETERMINISTIC] If cache-hit vs. cache-miss timeline read latency is discussed, the two
+   figures must not be swapped or altered: ~50ms for a cached read, ~3 seconds for a cache-miss
+   reconstruction via the Social Graph Service.
+
+10. [JUDGMENT] Storm is not presented as an adopted or confirmed part of the architecture — the
+    clarifications explicitly frame it as a possible/experimental idea. Likewise, the "hybrid
+    fan-out for celebrities" idea must not be presented as confirmed production behavior, and
+    "two million followers" must not be stated as a confirmed threshold — both are explicitly
+    framed as unconfirmed/example values, not settled facts.
+
+11. [DETERMINISTIC] Zero placeholder markers anywhere (`<!-- -->`, `TBD`, `TODO`, empty table
+    cells, bracketed template instructions, leftover template example text).

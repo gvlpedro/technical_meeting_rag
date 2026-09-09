@@ -1,0 +1,30 @@
+[
+  {
+    "question": "Is NotificationDispatcher's status modified, given it loses the direct provider call and gains a call to RegionRouter?",
+    "answer": "Yes, NotificationDispatcher is modified: it still receives notification-request unchanged, but it now forwards to RegionRouter instead of calling the third-party push provider directly."
+  },
+  {
+    "question": "Are RegionRouter, EuPushWorker, and UsPushWorker all new components?",
+    "answer": "Yes, all three are new components introduced by this change."
+  },
+  {
+    "question": "Is DeliveryTracker in scope for this change, and if so what is its status?",
+    "answer": "No — DeliveryTracker's role was discussed but never confirmed as part of this change. It should not be treated as an affected component here; it may be addressed in a future, separate ADR if it moves forward."
+  },
+  {
+    "question": "What determines which region RegionRouter routes a request to — is it derived from the notification-request payload itself, or does RegionRouter perform a separate customer lookup?",
+    "answer": null
+  },
+  {
+    "question": "Why was the delivery split into region-specific workers instead of keeping one worker that talks to the provider for every region?",
+    "answer": "The decision was made to isolate provider-specific handling per region so a provider outage or rate limit affecting one region doesn't block delivery in the other region."
+  },
+  {
+    "question": "Does notification-request itself change, and is a new data contract introduced between NotificationDispatcher and RegionRouter?",
+    "answer": "notification-request is unchanged — NotificationDispatcher still receives it exactly as before. A new internal event, region-notification-request, is introduced from NotificationDispatcher to RegionRouter, but its exact field list was not agreed on in the meeting beyond that it must let RegionRouter correlate the message back to the original notification."
+  },
+  {
+    "question": "What happens to the existing direct integration code between NotificationDispatcher and the third-party push provider?",
+    "answer": "It is being removed as part of this change. EuPushWorker and UsPushWorker become the only components that call the provider directly; NotificationDispatcher no longer holds that integration."
+  }
+]

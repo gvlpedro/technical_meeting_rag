@@ -1,17 +1,22 @@
-# Silver process is a clarification loop to store clarified documents in silver layer
+# Silver process is a clarification loop to store clarified ADRs in silver layer
 
 Bronze holds raw, unreviewed transcript chunks. Silver's job is to turn one ingestion batch
-(`bronze_documents` for a given `ingestion_date`) into **one clarified document per source
-transcript**, shaped as `doc/clarification_template.md` itself — the same
-document a human architect would fill with human/agent colaboration, filled in as far as the clarification loop's
-answers allow, **not necessarily complete** — a partially filled template is the expected, correct
-output, not a defect. Written as **structured Markdown** in Postgres.
+(`bronze_documents` for a given `ingestion_date`) into **one clarified ADR per source
+transcript**, shaped as `prompting/roles/common/adr_generator.jinja` produces it — filled in as
+far as the clarification loop's answers allow, **not necessarily complete** — a document with
+several sections collapsed to their "not covered" notes is the expected, correct output when a
+transcript doesn't establish a decision, not a defect. Written as **structured Markdown** in
+Postgres.
 
-**Idempotency:** at most one clarified document per source transcript. Re-running the process
-upserts that transcript's `silver_documents` row in place (unique on `source_component`, refreshed
-content) and replaces that transcript's `silver_chunks` rows rather than accumulating duplicates.
-`silver_clarifications` (below) is the deliberate exception: it's an append-only history, so
-re-running the process adds new rows to it instead of overwriting.
+**Idempotency, now versioned:** re-running the process for a source transcript compares the
+freshly generated ADR's content hash against the latest stored `silver_documents` row for that
+`source_component`. An identical hash overwrites that row in place (same `version`, no
+duplicate). A different hash — the transcript's clarifications genuinely changed the resulting
+ADR — inserts a new row at `version + 1` and leaves the older version's row and its
+`silver_chunks` row alone; both versions stay queryable. `(source_component, version)` is the
+real identity now, not `source_component` alone. `silver_clarifications` (below) remains the
+deliberate exception to all of this: it's an append-only history, so re-running the process
+always adds new rows to it instead of overwriting or versioning.
 
 ## 1. Storage
 
@@ -21,17 +26,25 @@ human-readable audit copy of its own output to `output/ingestion_date=<date>/que
 nothing downstream reads it back, `silver_clarifications` (below) stays the real record.
 
 ```
-silver_documents                       -- one row per source transcript's full clarified document
+silver_documents                       -- one row per (source transcript, version) clarified ADR
   id                 pk
   ingestion_date     date, not null, index
-  source_component   varchar, not null, unique   -- e.g. "design_twitter_system_design_interview.en"
+  source_component   varchar, not null, index    -- e.g. "design_twitter_system_design_interview.en"
                                                    -- — matches bronze_documents.source_component;
-                                                   -- unique so a re-run upserts this row instead of
-                                                   -- duplicating it (idempotency, §1)
-  content            text, not null              -- clarification_template.md, filled in as far as
-                                                 -- the clarification loop's answers allow (§3
-                                                 -- node 5); unanswered sections stay as the
-                                                 -- template's own placeholders, not fabricated
+                                                   -- no longer unique alone, see version below
+  version            integer, not null, default 1 -- 1, 2, 3... per source_component; bumped only
+                                                   -- when the generated content_hash actually
+                                                   -- changes from the latest stored version
+                                                   -- (write_document decides this, never the LLM)
+  content_hash       varchar(64), not null        -- sha256 hex of `content` — the deterministic
+                                                   -- "is this the same version" check
+  content            text, not null              -- prompting/roles/common/adr_generator.jinja's
+                                                 -- structure, filled in as far as the
+                                                 -- clarification loop's answers allow (§3 node
+                                                 -- 6); uncovered sections collapse to their
+                                                 -- prescribed one-sentence notes, never fabricated
+
+  UNIQUE (source_component, version)
 
 silver_clarifications                  -- history of every clarification question and its answer
   id                 pk
@@ -51,13 +64,17 @@ silver_clarifications                  -- history of every clarification questio
                                                  -- to be silver_documents.clarifications (a jsonb
                                                  -- column pooled per ingestion_date); isn't anymore.
 
-silver_chunks                          -- silver_documents.content, chunked + embedded for retrieval
+silver_chunks                          -- one row per silver_documents (source_component, version)
   id                 pk
   ingestion_date     date, not null, index
   source_component   varchar, not null      -- which silver_documents row this chunk came from; no
                                              -- FK, same flat pattern bronze_documents already uses
-  content            text, not null      -- one chunk of that document
+  version            integer, not null, default 1  -- matches the silver_documents row's version
+  content            text, not null      -- the WHOLE ADR, not a token-split fragment — an ADR is
+                                          -- retrieved whole, never split (§3 node 10)
   embedding          vector(settings.embedding_dim)
+
+  UNIQUE (source_component, version)
 ```
 
 
@@ -67,7 +84,7 @@ silver_chunks                          -- silver_documents.content, chunked + em
 
 The question list itself isn't fixed anymore — it used to be a static, generic file
 (`agents/clarification_questions.json`, deleted); now `generate_questions` (§3 node 2) drafts it
-fresh per ingestion batch, reading the transcript against `doc/clarification_template.md` and
+fresh per ingestion batch, reading the transcript against `prompting/roles/common/clarification_template.md` and
 asking one specific question per identified component instead of one generic question that
 implicitly spans all of them (`prompting/roles/common/clarification_questions.jinja` has the full
 rationale and the process that drafts it). For each question in that drafted list, the loop lands
@@ -108,11 +125,17 @@ class SilverState(TypedDict):
     bronze_documents: list[dict]
     transcript_text: str
     generated_questions: list[GeneratedQuestion] # drafted fresh per batch — see node 2; id/scope/target/requirement/question
-    mentioned_components: list[MentionedComponentItem]  # name, status — same batch, fed into node 5
+    mentioned_components: list[MentionedComponentItem]  # name, status — used by generate_questions
+                                                          # itself only; no longer threaded into
+                                                          # synthesize_document (node 6) — the ADR
+                                                          # prompt derives component status itself
+                                                          # from the transcript + clarifications
     clarifications: list[ClarificationItem]     # id/scope/target/requirement/question, answer, status
     pending_questions: list[str]
-    known_gold_components: list[dict]           # name, description, profile — best-effort lookup
-    documents: dict[str, str]                   # source_component -> synthesized Markdown (Actor)
+    known_gold_components: list[dict]           # vestigial — no longer populated or read; see node 6
+    documents: dict[str, str]                   # source_component -> synthesized ADR Markdown (Actor)
+    document_versions: dict[str, int]           # source_component -> version write_document just wrote
+                                                 # (node 9), read back by chunk_and_embed (node 10)
     critiques: dict[str, list[CritiqueItem]]    # source_component -> [{claim, supported, rationale}]
     boss_verdicts: dict[str, str]               # source_component -> "ok" | "needs_human_review"
     revision_attempted: dict[str, bool]         # source_component -> already retried once?
@@ -139,7 +162,7 @@ against its own sources, fix or escalate anything it can't back up, then save an
 
 2. **`generate_questions`** — *Figure out what to even ask.* One LLM call reads the pooled
    transcript — and, when one exists, a Mermaid diagram of the architecture already known as of
-   this transcript's own point in time — against `doc/clarification_template.md` (the
+   this transcript's own point in time — against `prompting/roles/common/clarification_template.md` (the
    `ARCHITECTURE_CHANGES` specification the prompt derives its required-information model from),
    and drafts two things fresh for this batch: `mentioned_components` (every component named,
    each with a `new`/`modified`/`removed`/`unchanged`/`unknown` status relative to the known
@@ -175,15 +198,19 @@ against its own sources, fix or escalate anything it can't back up, then save an
    question, relying on LangGraph's own Postgres-backed checkpointer to survive the pause. Whatever
    comes back on resume folds into `clarifications`, and the graph re-routes.
 
-6. **`synthesize_document`** — *Fill in the template, honestly.* One LLM call per source transcript
-   writes directly into `doc/clarification_template.md`'s own structure — not a
-   separate, simplified shape — using everything now known: the transcript, the clarifications,
-   `mentioned_components` (each already carrying the `new`/`modified`/`removed`/`unchanged`/
-   `unknown` status `generate_questions` determined), and a best-effort `SELECT` against Gold's
-   `components` table. It fills whatever the clarifications actually support: Motivation and
-   Context, Affected Components (each tagged with its status and a one-line reason — starting from
-   what's already known, only overriding an `unknown` a clarification resolved), Data Contracts as
-   ODCS drafts, Alternatives, Consequences, Risks, and so on down what got clarified.
+6. **`synthesize_document`** — *Write the final ADR, honestly.* One LLM call per source
+   transcript renders `prompting/roles/common/adr_generator.jinja`
+   (`agents.prompts.build_adr_generation_prompt`) with the transcript and a flat question/answer
+   list built from `clarifications` — `id`/`scope`/`target`/`requirement` are dropped, the ADR
+   prompt only reads question text and its answer. Unlike the old `prompting/roles/common/clarification_template.md`
+   -filling approach, this prompt derives component lifecycle status (`new`/`modified`/`removed`/
+   `unchanged`) itself from the transcript and clarifications alone — `mentioned_components` and
+   the Gold `components` lookup are no longer threaded in (see **State**, above). It fills exactly
+   what the clarifications support — Context, Decision, Affected Components (each tagged with a
+   status and a one-line reason), Affected Data Contracts as ODCS drafts — and collapses any
+   section nothing supports to its prescribed one-sentence "not covered" note rather than a
+   template placeholder; see the prompt file itself for the full component/data-contract inclusion
+   rules.
 
 7. **`critic_document`** — *Check the document's own homework.* One LLM call per source transcript,
    always run, reads the freshly drafted document back against the same transcript and
@@ -197,16 +224,22 @@ against its own sources, fix or escalate anything it can't back up, then save an
    already built, then the document is redrafted just for that one source. If it's still flagged
    after that single retry, it gets downgraded and let through rather than looping forever.
 
-9. **`write_document`** — *Make it official.* No LLM call: upserts the finished document into
-   `silver_documents`, keyed on `source_component` so a re-run overwrites cleanly instead of piling
-   up duplicates, and separately appends this run's clarifications to `silver_clarifications` — one
-   row per (source, question), inserted fresh every run rather than upserted, building a history
-   instead of only the latest state. This node itself touches no disk — the one on-disk artifact in
-   Silver is `generate_questions`' (node 2).
+9. **`write_document`** — *Make it official, versioned.* No LLM call: hashes the finished ADR and
+   compares it against the latest `silver_documents` row for this `source_component`. Same hash →
+   overwrite that row in place (same `version`, idempotent re-run). Different hash → insert a new
+   row at `version + 1`, leaving the older version's row untouched. Returns `document_versions`
+   (`source_component -> version just written`) for `chunk_and_embed` to reuse. Separately appends
+   this run's clarifications to `silver_clarifications` — one row per (source, question), inserted
+   fresh every run rather than upserted, building a history instead of only the latest state. This
+   node itself touches no disk — the one on-disk artifact in Silver is `generate_questions`' (node
+   2).
 
-10. **`chunk_and_embed`** — *Make it retrievable.* No LLM call: clears any previous chunks for this
-    date, splits the document with the same chunker Bronze already uses, embeds each piece, and
-    inserts the fresh `silver_chunks` rows. `END`.
+10. **`chunk_and_embed`** — *Make it retrievable, one chunk per ADR.* No LLM call: computes a
+    single embedding over the whole ADR — no token-splitting, an ADR is retrieved whole, never as
+    a fragment — and upserts exactly the (`source_component`, `version`) pair `write_document` just
+    wrote (using `document_versions`). Every other version's chunk row, for this source or any
+    other, is left alone — the opposite of clearing every chunk for the `ingestion_date` up front,
+    which would have destroyed the version history this node exists to keep. `END`.
 
 Four LLM calls per source transcript in the clean case — `generate_questions` and
 `classify_questions` each once, shared by the whole batch, plus one `synthesize_document` and one
@@ -232,24 +265,22 @@ itself is imported. No LangSmith account, exporter, or API key involved — just
 
 - **No point-in-time architecture diagrams yet.** `generate_questions`'s identity-matching (§3 node
   2) is designed to compare a transcript against the architecture as it stood at that transcript's
-  own date, but nothing in this project stores or versions architecture diagrams by date — Gold's
-  `components` table (below) isn't diagram-shaped and isn't time-sliced either. Until that source
-  exists, `architecture_diagram` stays empty on every run, which the prompt already treats as
-  correct (a first-time description), not broken. Building that source is future, Gold-adjacent
-  work, not part of Silver.
-- **Gold's schema is decided, its process isn't.** Gold has two tables now — `adr` (evolution
-  decisions) and `components` (each component's version history) — but structure-aware chunking,
-  the component graph, and the actual "Pull request / versions" mechanism that populates and
-  reconciles those tables stay unscoped. A table existing doesn't mean the process that fills it
-  does.
-- **No versioning authority from Silver.** The lifecycle tagging in the template's Affected
-  Components section is a **proposal** against a best-effort, possibly-empty snapshot of Gold's
-  `components` table — it is not the system of record. Only Gold's reconciliation process (not yet
-  built, even though `adr`/`components` already exist as tables) may authoritatively decide a
-  component's version history.
-- **Full template coverage isn't the goal — honest partial coverage is.** `synthesize_document`
-  fills exactly what `generate_questions`'s drafted questions can extract from a transcript
-  (context, alternatives, trade-offs, constraints, component purpose/lifecycle, risks,
-  assumptions, decision status) — and that prompt itself is scoped to never draft a question about
-  the sections nobody narrates in a meeting (`prompting/roles/common/clarification_questions.jinja`,
-  **Out of scope**).
+  own date, but nothing in this project stores or versions architecture diagrams by date. Until
+  that source exists, `architecture_diagram` stays empty on every run, which the prompt already
+  treats as correct (a first-time description), not broken. Building that source is future,
+  Gold-adjacent work, not part of Silver.
+- **Gold doesn't exist yet.** No Gold tables, module, or migration exist in this codebase today —
+  `_lookup_known_gold_components` (a best-effort, tolerate-missing-table lookup) was removed from
+  `synthesize_document` for exactly this reason once the ADR prompt stopped needing it. Any
+  cross-meeting reconciliation, a real component graph, or an authoritative version history is
+  future, unscoped work — not a table sitting unused, an absence.
+- **Silver's `version` is not component-version authority.** `silver_documents.version` only
+  disambiguates "did this specific ADR's content change since last time" for one source
+  transcript, via a content hash — it says nothing about a component's real-world version history
+  across meetings. That reconciliation (if it ever exists) is Gold-level work Silver doesn't do or
+  claim to do.
+- **Full ADR coverage isn't the goal — honest partial coverage is.** `synthesize_document` fills
+  exactly what the clarifications support and collapses everything else to the ADR prompt's own
+  "not covered" notes — and `generate_questions`'s prompt itself is scoped to never draft a
+  question about the sections nobody narrates in a meeting
+  (`prompting/roles/common/clarification_questions.jinja`, **Out of scope**).

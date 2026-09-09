@@ -1,0 +1,12 @@
+We're reworking how push notifications go out across regions. Today NotificationDispatcher
+receives a notification-request event from upstream services and sends it straight to the
+third-party push provider itself. We want to split that apart: NotificationDispatcher keeps
+receiving notification-request, but now it hands off to a new RegionRouter, which decides whether
+EuPushWorker or UsPushWorker should actually deliver it. RegionRouter, EuPushWorker, and
+UsPushWorker are all new. NotificationDispatcher stops talking to the third-party provider
+directly — it only forwards to RegionRouter from now on; EuPushWorker and UsPushWorker become the
+only components that call the provider directly. Someone also brought up a DeliveryTracker
+service a couple of times, saying it "might end up owning delivery receipts" — but we never
+actually pinned down whether that's being built as part of this change or is a separate future
+effort, and nobody confirmed a delivery-receipt event's shape either, so let's not commit to any
+of that in this document.

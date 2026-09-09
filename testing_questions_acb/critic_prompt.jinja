@@ -1,0 +1,23 @@
+You are grading a list of architecture-change clarification questions drafted for the meeting
+transcript below.
+
+Score from 0 to 100: if a human who was in the meeting answered every one of these questions,
+would the architecture change described in the transcript end up fully and accurately
+documented — every component, every interaction, every data contract, and every decision the
+transcript actually raises?
+
+0 means answering them would leave the change about as undocumented as the raw transcript
+already is. 100 means answering them would leave nothing material the transcript raises still
+ambiguous.
+
+Penalize two things specifically: something the transcript clearly raises but no question
+covers at all, and padding — a question about something the transcript never actually raised.
+
+Transcript:
+{{ transcript }}
+
+Drafted questions:
+{{ questions }}
+
+Return JSON exactly like {"score": <integer 0-100>, "rationale": "<one paragraph explaining
+what the questions cover well and what they miss or pad>"}. Nothing else.

@@ -1,0 +1,30 @@
+[
+  {
+    "question": "What is checkout-completed's previous version and what new version should be created as a result of adding the loyalty field?",
+    "answer": "checkout-completed goes from version 1.0.0 to version 1.1.0 — a minor bump because the change is additive and backward compatible."
+  },
+  {
+    "question": "What is the name and data type of the new field added to checkout-completed, and is it required?",
+    "answer": "The new field is loyalty_points_awarded, an integer, and it is optional (required: false) — existing consumers that don't read it are unaffected."
+  },
+  {
+    "question": "Do existing consumers of checkout-completed v1.0.0 need to migrate to v1.1.0, or is the new version backward compatible?",
+    "answer": "v1.1.0 is backward compatible. OrderHistoryService and any other existing consumer can keep parsing the event as before; no migration is required."
+  },
+  {
+    "question": "Why was LoyaltyService introduced as a separate service instead of adding points logic directly inside CheckoutService?",
+    "answer": "The team wants loyalty rules to evolve independently of the checkout flow and to be reusable from other places later, so it was built as its own service rather than embedded in CheckoutService."
+  },
+  {
+    "question": "Were any alternatives to a synchronous call from CheckoutService to LoyaltyService considered?",
+    "answer": "Yes — an asynchronous, event-driven award (LoyaltyService reacting to checkout-completed instead of being called synchronously) was considered and rejected, because the team wants the awarded points available in the same event OrderHistoryService already reads, not in a second, later event."
+  },
+  {
+    "question": "What are the direct consequences of this change for CheckoutService's dependencies and failure modes?",
+    "answer": "CheckoutService now depends on LoyaltyService being available during checkout; if LoyaltyService is down, that dependency needs to be handled, though the transcript doesn't specify the exact fallback behavior."
+  },
+  {
+    "question": "Is checkout-completed v1.0.0 deprecated once v1.1.0 exists, or do both versions remain active?",
+    "answer": "v1.0.0 is not deprecated — because v1.1.0 is backward compatible, both the previous and new schema shapes are considered the same active version lineage, and existing consumers are not required to move off the old shape."
+  }
+]

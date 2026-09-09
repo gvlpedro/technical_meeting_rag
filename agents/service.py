@@ -46,11 +46,13 @@ def source_content(bronze_documents: list[BronzeRow], source_component: str) -> 
     return " ".join(r["content"] for r in bronze_documents if r["source_component"] == source_component)
 
 
-def _transcription_base_name(source_component: str) -> str:
+def transcription_base_name(source_component: str) -> str:
     """"real_time_delivery_architecture_at_twitter.en.vtt" ->
     "real_time_delivery_architecture_at_twitter" — strips both the `.vtt` extension
     and the language-code suffix `scripts/download_transcript.py` adds, by taking
-    `Path.stem` twice (once per suffix)."""
+    `Path.stem` twice (once per suffix). Public: also used by `agents.graph.write_document`
+    to name the on-disk ADR audit file the same way `_write_generated_questions` below
+    names its own audit file."""
     return Path(Path(source_component).stem).stem
 
 
@@ -72,7 +74,7 @@ def _write_generated_questions(
     questions_dir.mkdir(parents=True, exist_ok=True)
     payload = result.model_dump_json(indent=2)
     for source in distinct_sources(bronze_documents):
-        name = _transcription_base_name(source)
+        name = transcription_base_name(source)
         (questions_dir / f"{name}.json").write_text(payload, encoding="utf-8")
 
 
@@ -124,18 +126,37 @@ async def load_bronze_rows(ingestion_date_str: str, db: AsyncSession) -> list[Br
         {"source_component": r.source_component, "content": r.content} for r in result.all()
     ]
     if not rows:
-        raise NoBronzeDocumentsError(
-            f"No bronze_documents found for ingestion_date={ingestion_date_str!r} — "
-            "ingest it first (make ingestion DATE=...)."
-        )
+        raise NoBronzeDocumentsError(_no_bronze_documents_message(ingestion_date_str))
     return rows
+
+
+def _no_bronze_documents_message(ingestion_date_str: str) -> str:
+    """Distinguishes the two ways `bronze_documents` can be empty for a date — a
+    transcript file that was never ingested (the common, easy-to-miss case: the file
+    on disk is not the same thing as a row in the table) versus nothing existing at
+    all (a typo'd date, or genuinely nothing uploaded yet) — instead of one generic
+    message that reads the same either way."""
+    transcripts_dir = Path(settings.input_dir) / "transcriptions" / f"ingestion_date={ingestion_date_str}"
+    vtt_files = sorted(p.name for p in transcripts_dir.glob("*.vtt")) if transcripts_dir.is_dir() else []
+    if vtt_files:
+        return (
+            f"Found {len(vtt_files)} transcript file(s) in {transcripts_dir} "
+            f"({', '.join(vtt_files)}), but none are ingested into bronze_documents yet for "
+            f"ingestion_date={ingestion_date_str!r}. A file on disk is not the same as a row in "
+            f"the table — run `make ingestion DATE={ingestion_date_str}` first, then retry."
+        )
+    return (
+        f"No bronze_documents found for ingestion_date={ingestion_date_str!r}, and no transcript "
+        f"files exist at {transcripts_dir} either — nothing to ingest. Check the date, or place "
+        f".vtt file(s) there first."
+    )
 
 
 async def generate_questions_for_batch(
     ingestion_date_str: str, bronze_documents: list[BronzeRow], architecture_diagram: str = ""
 ) -> QuestionListResult:
     """The actual `generate_questions` logic (`doc/silver_process.md` §3 node 2): one
-    LLM call reads the pooled transcript against `doc/clarification_template.md` and
+    LLM call reads the pooled transcript against `prompting/roles/common/clarification_template.md` and
     drafts a fresh, transcript-specific question list covering every component,
     interaction, and data contract the transcript establishes but leaves incomplete —
     see `prompting/roles/common/clarification_questions.jinja` for the actual process.
@@ -161,8 +182,16 @@ async def generate_questions_for_batch(
     # temperature=0: this prompt is a mandatory, systematic checklist (see its own FINAL
     # SELF-CHECK section), not a creative-writing task — the default sampling temperature was
     # letting the same transcript sometimes get full data-contract coverage and sometimes skip
-    # it entirely, run to run, for no reason tied to the transcript itself.
-    response = await router.complete(messages, response_format=QuestionListResult, temperature=0)
+    # it entirely, run to run, for no reason tied to the transcript itself. reasoning_effort=
+    # "none" is required alongside it for a reasoning-locked model (e.g. gpt-5.6-sol): those
+    # models otherwise reject any temperature other than 1 outright. Verified empirically that
+    # this combination is OpenAI-only — Anthropic's reasoning-locked models (e.g. claude-opus-5)
+    # have no equivalent escape hatch and hard-require temperature=1, so if `settings.
+    # llm_fallback_order` ever falls through to Anthropic for one of these calls, it will fail
+    # instead of gracefully falling back. Acceptable today since OpenAI is the primary provider.
+    response = await router.complete(
+        messages, response_format=QuestionListResult, temperature=0, reasoning_effort="none"
+    )
     result = QuestionListResult.model_validate(load_json_response(response.choices[0].message.content))
 
     if _problem_count(result, transcript_text) > 0:
@@ -181,7 +210,10 @@ async def generate_questions_for_batch(
         # spending indefinitely.
         for _ in range(SHALLOW_RETRY_ATTEMPTS):
             retry_response = await router.complete(
-                messages, response_format=QuestionListResult, temperature=SHALLOW_RETRY_TEMPERATURE
+                messages,
+                response_format=QuestionListResult,
+                temperature=SHALLOW_RETRY_TEMPERATURE,
+                reasoning_effort="none",
             )
             retry_result = QuestionListResult.model_validate(
                 load_json_response(retry_response.choices[0].message.content)

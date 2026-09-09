@@ -6,3 +6,5 @@ __pycache__/
 .idea
 .tmp
 /testing_questions_acb/output/
+/testing_adr_acb/output/
+/testing_questions_for_one_component/output/

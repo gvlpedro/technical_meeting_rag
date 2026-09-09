@@ -1,0 +1,50 @@
+CHECKLIST — 03_multi_region_notification_platform
+
+Case-specific ground truth this ADR must reflect, derived directly from this case's own
+clarifications.json — this case mixes three partial-information patterns at once (see this
+case's metadata.json). Items marked [DETERMINISTIC] are yes/no, mechanically checkable with no
+judgment call. Items marked [JUDGMENT] require reading intent/nuance.
+
+1. [DETERMINISTIC] Section 4 (Affected Components) contains exactly these four rows, each
+   tagged with exactly this status:
+   - NotificationDispatcher — MODIFIED
+   - RegionRouter — NEW
+   - EuPushWorker — NEW
+   - UsPushWorker — NEW
+
+2. [DETERMINISTIC] DeliveryTracker does NOT appear anywhere tagged with a change status. Q3's
+   answer explicitly says it should not be treated as part of this change. It may be named at
+   most once, in prose, in section 1 Context — nothing more.
+
+3. [JUDGMENT] RegionRouter IS still listed as NEW in section 4 (per item 1) — its description,
+   however, does not assert a specific routing-decision mechanism (payload-derived vs. a
+   separate customer lookup) as settled fact, since Q4 was asked and left unanswered. This is
+   different from DeliveryTracker's full exclusion: RegionRouter's overall status is confirmed,
+   only this one internal detail is not — the document must not conflate the two by either
+   inventing the mechanism or dropping RegionRouter from section 4.
+
+4. [DETERMINISTIC] Section 5/6 include region-notification-request tagged NEW, with
+   NotificationDispatcher as producer and RegionRouter as consumer. Its schema is honest about
+   what wasn't agreed: at most one structurally-necessary correlation-identifier field (to tie
+   the message back to the original notification), no invented full payload with plausible
+   fields that were never named.
+
+5. [DETERMINISTIC] notification-request, if it appears in section 5/6 at all, is tagged
+   UNCHANGED — never NEW or MODIFIED. Its omission from section 5/6 entirely is also acceptable
+   (only its unchanged status is confirmed, not a full schema), but if present the tag must be
+   correct.
+
+6. [DETERMINISTIC] EuPushWorker and UsPushWorker do not have their own individually named data
+   contract anywhere in section 5/6 — the transcript never describes what RegionRouter sends to
+   either worker. An invented contract for this leg is a fabrication.
+
+7. [JUDGMENT] The document describes the direct integration between NotificationDispatcher and
+   the third-party push provider as removed/discontinued as part of this change (Q7's answer),
+   with EuPushWorker and UsPushWorker becoming the only components calling the provider
+   directly.
+
+8. [DETERMINISTIC] No component or data contract appears that isn't one of
+   NotificationDispatcher, RegionRouter, EuPushWorker, UsPushWorker, notification-request, and
+   region-notification-request — no scope creep beyond what these clarifications establish.
+
+9. [DETERMINISTIC] Zero placeholder markers anywhere.

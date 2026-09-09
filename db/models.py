@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Date, DateTime, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
@@ -35,22 +35,40 @@ class BronzeDocument(Base):
 
 
 class SilverDocument(Base):
-    """One clarified document per source transcript (Silver layer).
+    """One clarified ADR document per (source transcript, version) — Silver layer.
 
-    Shaped as `doc/clarification_template.md` itself, filled in as far as the
-    clarification loop's answers allow — see `doc/silver_process.md` §1-2. `content`
-    is the whole document, not chunked; `SilverChunk` below holds the retrievable
-    pieces cut from it. Silver stores nothing on disk at all — the clarification
-    audit trail lives in `SilverClarification` below, not as a column here.
+    Shaped as `prompting/roles/common/adr_generator.jinja` produces it, filled in as
+    far as the clarification loop's answers allow — see `doc/silver_process.md` §1-2.
+    `content` is the whole document, not chunked; `SilverChunk` below holds the single
+    retrievable chunk cut from it. Silver stores nothing on disk at all — the
+    clarification audit trail lives in `SilverClarification` below, not as a column
+    here.
+
+    Versioned, not just upserted: `write_document` hashes the freshly generated
+    content and compares it against the latest existing row for this
+    `source_component`. Identical hash → that same row is overwritten in place (same
+    `version`, idempotent re-run). Different hash → a new row is inserted at
+    `version + 1`, and the older version's row is left untouched — both stay queryable.
+    `(source_component, version)` is the real identity; `source_component` alone is no
+    longer unique.
     """
 
     __tablename__ = "silver_documents"
+    __table_args__ = (UniqueConstraint("source_component", "version", name="uq_silver_documents_source_version"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    # Matches bronze_documents.source_component. Unique so a re-run upserts this row
-    # in place instead of duplicating it (idempotency, doc/silver_process.md §1).
-    source_component: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # Matches bronze_documents.source_component. No longer unique alone — see class
+    # docstring; (source_component, version) is the real identity now.
+    source_component: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # 1, 2, 3... per source_component — bumped only when the generated content's hash
+    # actually changes from the latest stored version (write_document decides this,
+    # not the LLM).
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # sha256 hex digest of `content` — write_document's cheap way to tell "identical
+    # re-run" (overwrite this version) from "genuinely new content" (new version)
+    # without diffing full document text on every run.
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -77,17 +95,24 @@ class SilverClarification(Base):
 
 
 class SilverChunk(Base):
-    """Chunked + embedded pieces of a SilverDocument's content, for retrieval.
+    """The single embedded chunk for one SilverDocument (source_component, version).
 
-    No FK to silver_documents — same flat source_component pattern bronze_documents
-    already uses (doc/silver_process.md §2).
+    Unlike the rest of this pipeline's chunker-based splitting, an ADR is never split
+    into multiple retrieval chunks — one ADR is one chunk, one embedding, so a search
+    hit always returns the whole decision record rather than a fragment of it. No FK
+    to silver_documents — same flat source_component pattern bronze_documents already
+    uses (doc/silver_process.md §2) — but `(source_component, version)` is unique, so
+    `chunk_and_embed` can upsert exactly the version it just wrote without touching any
+    other version's row.
     """
 
     __tablename__ = "silver_chunks"
+    __table_args__ = (UniqueConstraint("source_component", "version", name="uq_silver_chunks_source_version"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     source_component: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.embedding_dim), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

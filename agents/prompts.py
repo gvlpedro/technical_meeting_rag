@@ -1,7 +1,20 @@
+from typing import TypedDict
+
 import jinja2
 
 from agents.state import ClarificationItem, GeneratedQuestion, GoldComponentSnapshot, MentionedComponentItem
-from agents.template import load_question_generation_role
+from agents.template import load_adr_generation_role, load_question_generation_role
+
+
+class QaPair(TypedDict):
+    """One resolved clarification for `build_adr_generation_prompt` — deliberately just a
+    question/answer pair, not the full `ClarificationItem` shape: `adr_generator.jinja`
+    doesn't need `id`/`scope`/`target`/`requirement`, only the text a human would read.
+    `answer` is `None` when the question was asked but never answered — see
+    `_qa_pairs_block`, which renders that as `(not answered)`, not silently dropped."""
+
+    question: str
+    answer: str | None
 
 
 def _clarifications_block(clarifications: list[ClarificationItem]) -> str:
@@ -98,6 +111,31 @@ def build_synthesis_prompt(
         f"Transcript for this source only:\n{source_content}"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _qa_pairs_block(clarifications: list[QaPair]) -> str:
+    if not clarifications:
+        return "(no clarifications were collected for this transcript)"
+    lines = []
+    for pair in clarifications:
+        answer = pair["answer"] if pair["answer"] is not None else "(not answered)"
+        lines.append(f"- Q: {pair['question']}\n  A: {answer}")
+    return "\n".join(lines)
+
+
+def build_adr_generation_prompt(transcript_text: str, clarifications: list[QaPair]) -> list[dict]:
+    """Renders `prompting/roles/common/adr_generator.jinja` as a real Jinja template — see
+    that file for the actual generation rules (component-inclusion discipline, no
+    placeholders, `doc/adr_example.md`-shaped output). Distinct from `build_synthesis_prompt`:
+    that one fills the full `prompting/roles/common/clarification_template.md` template inline; this one always
+    produces the shorter, ADR-only shape `doc/adr_example.md` demonstrates, from a flat
+    question/answer list rather than the graph's own `ClarificationItem` state shape."""
+    role_template = jinja2.Template(load_adr_generation_role())
+    prompt = role_template.render(
+        transcript=transcript_text,
+        clarifications=_qa_pairs_block(clarifications),
+    )
+    return [{"role": "user", "content": prompt}]
 
 
 def build_critic_prompt(

@@ -182,7 +182,7 @@ produces *about the meetings it ingests* (that's the Objective above):
   independently-verifiable job — Bronze never interprets, Silver clarifies, Gold records the ADRs
   (`adr`) and each component's version history (`components`)
 * **Clarification questions are drafted per transcript, not read from a fixed list.** One LLM call
-  reads the transcript against `doc/clarification_template.md` and asks one specific question per
+  reads the transcript against `prompting/roles/common/clarification_template.md` and asks one specific question per
   component actually named ("Is `X` new, evolving, or unchanged?"), instead of one generic question
   that silently covers every component at once (`prompting/roles/common/clarification_questions.jinja`).
 * **Clarification is LLM-first, human-in-the-loop only when needed.** One classification call

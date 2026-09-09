@@ -1,0 +1,45 @@
+CHECKLIST — 02_checkout_loyalty_integration
+
+Case-specific ground truth this ADR must reflect, derived directly from this case's own
+clarifications.json — this is the "everything resolved cleanly" case, so the bar here is
+completeness, not honest omission. Items marked [DETERMINISTIC] are yes/no, mechanically
+checkable with no judgment call. Items marked [JUDGMENT] require reading intent/nuance.
+
+1. [DETERMINISTIC] Section 4 (Affected Components) contains at least these two rows, each
+   tagged with exactly this status:
+   - CheckoutService — MODIFIED
+   - LoyaltyService — NEW
+   OrderHistoryService — UNCHANGED is confirmed by the transcript and may also appear; its
+   absence is not a failure on its own (unchanged components are optional to list), but if it
+   appears it must be tagged UNCHANGED, never anything else.
+
+2. [DETERMINISTIC] Section 5/6 contain exactly one data contract: checkout-completed, tagged
+   MODIFIED, version 1.0.0 → 1.1.0, with CheckoutService as producer. Its schema includes a new
+   field named loyalty_points_awarded, type integer, required: false. The document does NOT
+   mark checkout-completed v1.0.0 as deprecated (Q7's answer: both versions remain the same
+   active lineage since v1.1.0 is backward compatible).
+
+3. [DETERMINISTIC] LoyaltyService does not have its own listed data contract anywhere in
+   section 5/6 — the call from CheckoutService to LoyaltyService is synchronous; no event or
+   contract name was ever given for it. An invented contract for this interaction (e.g. a
+   "loyalty-award-request" event) is a fabrication and must not appear.
+
+4. [JUDGMENT] Section 2 (Previous Architecture) has real content — CheckoutService publishing
+   checkout-completed directly to OrderHistoryService, with no LoyaltyService in the diagram —
+   since the transcript explicitly describes this as the state before the change. This is the
+   opposite expectation from cases where no prior architecture is evidenced: here it should NOT
+   be the "not covered" placeholder note.
+
+5. [DETERMINISTIC] Section 3 (Target Architecture) shows CheckoutService calling LoyaltyService
+   and CheckoutService publishing checkout-completed (v1.1.0) to OrderHistoryService.
+
+6. [JUDGMENT] If the document includes an Alternatives subsection under the ADR, it reflects
+   that an asynchronous, event-driven award mechanism was considered and rejected in favor of
+   the synchronous call (Q5's answer) — this must not be silently dropped if the model chooses
+   to write an Alternatives section at all.
+
+7. [DETERMINISTIC] No component or data contract appears that isn't one of CheckoutService,
+   LoyaltyService, OrderHistoryService, and checkout-completed — no scope creep beyond what
+   these clarifications establish.
+
+8. [DETERMINISTIC] Zero placeholder markers anywhere.

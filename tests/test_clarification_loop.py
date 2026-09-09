@@ -66,7 +66,7 @@ def _make_fake_acompletion(
             content = json.dumps({"mentioned_components": components, "questions": questions})
         elif "You classify each question" in content_in:
             content = json.dumps(classification)
-        elif "You fill in the architecture description template" in content_in:
+        elif "Architecture Decision Record" in content_in:
             content = synthesis_queue.pop(0)
         elif "You review a drafted architecture document" in content_in:
             content = json.dumps({"claims": critique_queue.pop(0)})
@@ -168,8 +168,8 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
             if "You classify each question" in content_in:
                 seen_questions_blocks.append(messages[1]["content"])
                 return _fake_response(json.dumps({"classifications": []}))
-            if "You fill in the architecture description template" in content_in:
-                return _fake_response("# Architecture Description / Evolution\n\nCheckout: unchanged.")
+            if "Architecture Decision Record" in content_in:
+                return _fake_response("# ADR — Checkout Service\n\nCheckout: unchanged.")
             if "You review a drafted architecture document" in content_in:
                 return _fake_response(json.dumps({"claims": []}))
             raise AssertionError(f"unexpected prompt: {content_in[:80]!r}")

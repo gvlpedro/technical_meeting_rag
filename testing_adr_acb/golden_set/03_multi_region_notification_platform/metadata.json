@@ -1,0 +1,6 @@
+{
+  "name": "03_multi_region_notification_platform",
+  "description": "Synthetic, high-complexity case mixing several partial-information patterns at once: a confirmed-but-out-of-scope component (DeliveryTracker) that must be excluded from Affected Components, an unanswered clarification about an *included* component's routing detail (RegionRouter) that must be reflected as a gap in its description rather than exclude the whole component, and a new data contract whose existence/producer/consumer/action are confirmed but whose schema fields are not — so the ODCS section must stay honest about what wasn't agreed rather than inventing a field list.",
+  "expected_components": ["NotificationDispatcher", "RegionRouter", "EuPushWorker", "UsPushWorker"],
+  "excluded_components": ["DeliveryTracker"]
+}

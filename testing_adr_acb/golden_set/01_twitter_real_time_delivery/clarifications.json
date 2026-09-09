@@ -1,0 +1,147 @@
+[
+  {
+    "question": "Is it accurate that the Write API is the entry point for tweets and returns a fast HTTP response before the downstream delivery processing is completed?",
+    "answer": "Yes. The transcript states that a tweet first reaches the Write API through an HTTP endpoint, is written to disk, and then a quick HTTP 200 response is returned to the client. The downstream processing is asynchronous and decoupled from the initial request. The stated target is to return within approximately 50 milliseconds after duplicate detection and other basic business logic."
+  },
+  {
+    "question": "Is it accurate that the Write API asynchronously triggers multiple independent delivery paths after accepting a tweet?",
+    "answer": "Yes. The transcript explicitly describes the processing after the Write API as asynchronous and decoupled. It identifies separate paths for timeline fan-out, search indexing, and push delivery, and later states that these paths operate independently after the synchronous Write API processing."
+  },
+  {
+    "question": "Is it accurate that the Social Graph Service determines which users follow the author of a tweet and therefore receive the tweet in their home timeline?",
+    "answer": "Yes. The transcript states that the Social Graph Service maintains information about who follows whom and is queried by the fan-out process to determine the users who follow the tweet author. The tweet is then inserted into the corresponding users' home timeline caches."
+  },
+  {
+    "question": "Is it accurate that Redis is used as an in-memory timeline cache containing tweet IDs and user IDs rather than complete tweet payloads?",
+    "answer": "Yes. The transcript describes Redis as an in-memory key-value store used for the timeline cache. It states that timeline entries normally contain the tweet ID, user ID, and additional bits rather than the complete tweet, in order to avoid duplicating the full tweet payload across potentially millions of followers."
+  },
+  {
+    "question": "Is it accurate that each user's timeline is replicated across three Redis instances for fault tolerance?",
+    "answer": "Yes. The transcript explicitly states that each person's timeline does not live on a single Redis instance but on three instances, allowing the system to retrieve the timeline from another instance if the first one is unavailable."
+  },
+  {
+    "question": "Is it accurate that timeline fan-out is performed in batches of approximately 4,000 followers?",
+    "answer": "Yes. The transcript states that the system pipelines updates to approximately 4,000 destinations at a time, chunking followers into groups of around 4,000 before pushing the updates to Redis."
+  },
+  {
+    "question": "Is it accurate that Redis fan-out avoids creating timeline entries for users whose timelines are not currently cached?",
+    "answer": "Yes. The transcript explains that the system uses the Redis RPUSHX operation, which ignores the operation when the target key does not exist. This avoids performing fan-out work for users whose timelines have fallen out of the cache, for example because they have been inactive for a long period."
+  },
+  {
+    "question": "Is it accurate that inactive users' timelines can be reconstructed on demand when they are no longer present in the Redis cache?",
+    "answer": "Yes. The transcript states that when a user's timeline is no longer cached, the Timeline Service can query the Social Graph Service, determine who the user follows, retrieve the relevant timelines, reassemble the home timeline, place it back into Redis, and continue serving the request. The transcript gives an approximate duration of three seconds for this cache-miss path."
+  },
+  {
+    "question": "Is it accurate that the Timeline Service hydrates tweet IDs retrieved from Redis into complete tweet representations?",
+    "answer": "Yes. The transcript explicitly describes a hydrated tweet as a rendered representation composed using information such as the user's icon, tweet text, geolocation, and whether the current user has already favorited the tweet. The Timeline Service interacts with other services to hydrate the tweet from the tweet ID stored in Redis."
+  },
+  {
+    "question": "Is it accurate that the Timeline Service has a significantly faster path when the timeline is cached than when it must be reconstructed?",
+    "answer": "Yes. The transcript states that the cached path takes approximately 50 milliseconds, while reconstructing a timeline after a cache miss can take approximately three seconds. These figures are presented as approximate characteristics of the architecture described in the talk."
+  },
+  {
+    "question": "Is it accurate that the Search path tokenizes tweets and inserts them into a distributed search index?",
+    "answer": "Yes. The transcript states that the Write API forks to an Ingestor, which tokenizes the tweet, and that the resulting information is inserted into a search index distributed across multiple Early Bird services. The transcript describes Early Bird as an optimized Lucene-based search index."
+  },
+  {
+    "question": "Is it accurate that Early Bird is the component responsible for storing the search indexes, while Blender performs distributed search and result ranking?",
+    "answer": "Yes, with an important distinction. The transcript describes Early Bird as the optimized Lucene-based search index running across multiple services. Blender performs a scatter-gather operation across the relevant Early Bird indexes, applies additional signals, ranks the results, performs a real-time merge, and presents the results."
+  },
+  {
+    "question": "Is it accurate that Blender uses user-specific signals such as identity, location, and past interests when ranking search results?",
+    "answer": "Yes. The transcript explicitly states that Blender may use information about who the user is, where they are, and their past interests, together with other search signals, to rank search results."
+  },
+  {
+    "question": "Is it accurate that search indexing does not require the same fan-out operation as timeline delivery?",
+    "answer": "Yes. The transcript explicitly contrasts the two approaches. Timeline delivery can require inserting a tweet into the timelines of potentially many followers, whereas search indexing inserts the tweet into the relevant token-based indexes without performing an equivalent follower-based fan-out."
+  },
+  {
+    "question": "Is it accurate that the system supports both pull-based and push-based timeline delivery?",
+    "answer": "Yes. The transcript distinguishes pull-based timelines, where clients request the current timeline through an API, from push-based delivery, where tweets and events are delivered through persistent connections without the client continuously polling."
+  },
+  {
+    "question": "Is it accurate that User Streams provide a real-time representation of a user's home timeline?",
+    "answer": "Yes. The transcript describes User Streams as delivering tweets from the people the user follows through a persistent socket connection, effectively providing a real-time version of the home timeline experience."
+  },
+  {
+    "question": "Is it accurate that Track Follow provides a real-time stream filtered by users and content tokens specified by the client?",
+    "answer": "Yes. The transcript describes Track Follow as a persistent connection where the client specifies users or tokens of interest. Tweets matching those criteria are filtered and pushed to the client in real time. The transcript characterizes this as a lightweight alternative to repeatedly querying the more expensive search API."
+  },
+  {
+    "question": "Is it accurate that Hose Bird maintains persistent connections with external clients and routes tweets and social graph events through a cascading cluster?",
+    "answer": "Yes. The transcript states that Hose Bird maintains persistent connections with end clients and routes tweets and events through multiple levels of machines. It describes a four-level cascading cluster in which data is progressively fanned out until reaching edge machines responsible for external client connections."
+  },
+  {
+    "question": "Is it accurate that the Hose Bird cluster is designed to scale the number of persistent client connections horizontally rather than relying on a single machine?",
+    "answer": "Yes. The transcript explicitly explains that approximately one million clients may be connected to the push API simultaneously and that a single machine cannot reasonably handle this workload. The cascading cluster distributes the connections and traffic across multiple machines and levels."
+  },
+  {
+    "question": "Is it accurate that social graph changes such as follow, unfollow, block, and delete events must also propagate through the push infrastructure to maintain client-side consistency?",
+    "answer": "Yes. The transcript explicitly identifies social graph changes and other events as important inputs to the push infrastructure. For example, when a user follows or unfollows someone, or blocks someone, the edge machines need to receive the change so that the appropriate tweets continue or stop being streamed to the client."
+  },
+  {
+    "question": "Is it accurate that Mobile Push uses a separate mobile-follow relationship rather than simply using the user's complete follower graph?",
+    "answer": "Yes. The transcript explicitly states that Twitter has more than one follower graph and distinguishes normal follows from mobile follows. Mobile follows determine which users should trigger mobile notifications such as iPhone notifications or SMS."
+  },
+  {
+    "question": "Is it accurate that Mobile Push performs a fan-out similar to timeline delivery but sends notifications through a dedicated mobile delivery infrastructure?",
+    "answer": "Yes. The transcript describes Mobile Push as a hybrid of HTTP push and Redis fan-out. It queries the Social Graph Service for mobile followers and fans notifications out to them, but instead of writing to the timeline cache, it sends notifications through a separate data center and integrations with mobile carriers."
+  },
+  {
+    "question": "Is it accurate that the system replicates the Write API input across data centers rather than replicating Redis state directly across data centers?",
+    "answer": "Yes. The transcript explicitly states that cross-data-center replication is not performed at the Redis level because of the resulting bandwidth and traffic requirements. Instead, the tweet stream entering the Write API is replicated to additional data centers, where the downstream computation is repeated."
+  },
+  {
+    "question": "Is it accurate that the architecture uses asynchronous processing to decouple the client-facing Write API from downstream tweet delivery?",
+    "answer": "Yes. This is explicitly described in the transcript. After the Write API performs basic synchronous processing and returns a fast HTTP response, downstream fan-out, indexing, push delivery, and related processing occur asynchronously."
+  },
+  {
+    "question": "Is it accurate that the architecture uses different read/write trade-offs for timeline delivery and search?",
+    "answer": "Yes. The transcript explicitly characterizes timeline caching as relatively expensive on writes but cheap on reads, because tweets are fanned out into many user timelines. Search has the opposite trade-off: indexing is comparatively cheap on the write side, while search queries are more expensive because they require distributed lookup, ranking, and merging."
+  },
+  {
+    "question": "Is it accurate that the architecture considers a hybrid fan-out strategy for users with very large follower counts?",
+    "answer": "Yes, but the transcript presents this as an experiment or potential approach rather than a confirmed final design. The proposed strategy is to avoid fanning out tweets from highly followed accounts into millions of Redis timelines. Instead, those tweets would be merged in real time when a user's timeline is read, while tweets from less-followed accounts would continue to be precomputed in Redis."
+  },
+  {
+    "question": "Is it accurate that the proposed celebrity threshold is explicitly defined as two million followers?",
+    "answer": "No. The transcript gives two million followers as an example of a possible celebrity threshold, but it does not establish this as a confirmed production value. The safe interpretation is that a follower-count threshold could be used to decide when to switch from write-time fan-out to read-time merging."
+  },
+  {
+    "question": "Is it accurate that Storm is presented as a possible general-purpose streaming computation layer for processing tweet events in real time?",
+    "answer": "Yes. The transcript presents Storm as a continuous computational system that could generalize the existing push infrastructure. It mentions potential applications such as real-time clickstream analysis and dynamically reranking search results based on changing user interests or popularity signals."
+  },
+  {
+    "question": "Is it accurate that the architecture includes both real-time processing and batch processing?",
+    "answer": "Yes. The transcript explicitly distinguishes the real-time tweet delivery paths from a separate batch computation infrastructure. The batch system processes data from the Write API for analytics and recommendation-like use cases, such as generating emails containing tweets that a user may have missed."
+  },
+  {
+    "question": "Is it accurate that the batch computation described in the transcript is performed nightly rather than in real time?",
+    "answer": "Yes, with a qualification. The speaker states that the described batch computation runs nightly at that time, while noting that the system could potentially be made more frequent, such as hourly. Therefore, nightly processing is accurate for the architecture described in the transcript, but should not be treated as a permanent or universal requirement."
+  },
+  {
+    "question": "Is it accurate that the architecture targets approximately 150 milliseconds for HTTP push delivery?",
+    "answer": "Yes. The transcript states an SLA of approximately 150 milliseconds for sending HTTP push events out to clients."
+  },
+  {
+    "question": "Is it accurate that the architecture targets approximately 50 milliseconds or less for the synchronous Write API response?",
+    "answer": "Yes. The transcript repeatedly states a target of approximately 50 milliseconds or less for returning the synchronous HTTP response after duplicate detection and other basic request processing."
+  },
+  {
+    "question": "Is it accurate that the architecture was designed to tolerate machine failures as a normal operating condition?",
+    "answer": "Yes. The transcript explicitly states that at Twitter's scale machines fail regularly and that the system therefore cannot assume that an individual machine is always available. Replication, redundancy, and failover are presented as fundamental architectural requirements."
+  },
+  {
+    "question": "Is it accurate that the architecture's main scalability challenge comes from tweet deliveries being much more numerous than tweets created?",
+    "answer": "Yes. The transcript emphasizes that the important scale metric is not only the number of tweets produced but the number of deliveries generated by those tweets. It gives an example of approximately 340 million tweets per day resulting in approximately 26 billion tweet deliveries per day."
+  },
+  {
+    "question": "Is it accurate that the system was handling approximately 300,000 pull-based timeline requests per second and approximately 30,000 search timeline queries per second at the time of the talk?",
+    "answer": "Yes. These figures are explicitly given in the transcript as approximate traffic levels at the time of the presentation. They should be treated as historical architecture metrics rather than current system characteristics."
+  },
+  {
+    "question": "Is it accurate that the transcript establishes all mentioned component names as formally defined data-contract boundaries?",
+    "answer": "No. The transcript describes components and their interactions, but it does not provide formal data-contract definitions such as schemas, required fields, ownership, versioning, validation rules, SLAs per contract, or compatibility guarantees. Those details would need to be confirmed separately before being encoded as formal Data Contracts."
+  }
+]
+

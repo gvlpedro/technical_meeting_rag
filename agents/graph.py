@@ -17,17 +17,17 @@ os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
 os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 import asyncio
+import hashlib
+from pathlib import Path
 from typing import Literal
 
 import logfire
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
-from sqlalchemy import delete, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy import delete, select
 
-from agents.prompts import build_classification_prompt, build_critic_prompt, build_synthesis_prompt
+from agents.prompts import build_adr_generation_prompt, build_classification_prompt, build_critic_prompt
 from agents.schemas import ClassificationResult, CritiqueResult
 from agents.service import (
     NoBronzeDocumentsError,
@@ -35,13 +35,14 @@ from agents.service import (
     generate_questions_for_batch,
     load_bronze_rows,
     source_content,
+    transcription_base_name,
 )
-from agents.state import ClarificationItem, GoldComponentSnapshot, SilverState
-from agents.template import load_json_response, load_template
+from agents.state import ClarificationItem, SilverState
+from agents.template import load_json_response
 from app.config import settings
 from db.models import SilverChunk, SilverClarification, SilverDocument
 from db.session import async_session_factory
-from ingestion.bronze_documents_chunker import chunk_text, parse_ingestion_date
+from ingestion.bronze_documents_chunker import parse_ingestion_date
 from ingestion.embedder import embed
 from llm import router
 
@@ -53,6 +54,34 @@ logfire.configure(
 
 _DECLINE_PHRASES = {"", "no sé", "no se", "unknown", "n/a", "idk", "i don't know"}
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
+
+# Caps how many questions ask_human ever presents to a human in one batch — a transcript
+# can realistically draft far more than 20 needs_clarification items (see
+# doc/cost_analysis.md's golden-set numbers, some cases well past 100 questions total),
+# and nobody actually wants to answer that many in one terminal session. Ranked by scope,
+# most load-bearing first (adr/component/architecture — what actually needs to get built)
+# down to least (metadata — bookkeeping); deterministic and free, no extra LLM call.
+MAX_PENDING_QUESTIONS = 20
+_SCOPE_PRIORITY = {
+    "adr": 0,
+    "component": 1,
+    "architecture": 2,
+    "data_contract": 3,
+    "change_impact": 4,
+    "migration": 5,
+    "metadata": 6,
+}
+
+
+def _top_questions(questions: list[str], scopes: dict[str, str] | None = None) -> list[str]:
+    """Truncates to `MAX_PENDING_QUESTIONS`. When `scopes` (question text -> scope) is
+    given, sorts by `_SCOPE_PRIORITY` first — used for classify-origin questions, which
+    carry a real scope. Boss-origin escalations (see `boss_decide`) have no scope of
+    their own (synthesized ad hoc from a Critic claim) and are already naturally few, so
+    they're just truncated in their existing order."""
+    if scopes is not None:
+        questions = sorted(questions, key=lambda q: _SCOPE_PRIORITY.get(scopes.get(q, ""), len(_SCOPE_PRIORITY)))
+    return questions[:MAX_PENDING_QUESTIONS]
 
 
 def checkpointer_dsn() -> str:
@@ -68,19 +97,6 @@ def _downgrade_claim(content: str, claim: str) -> str:
     if marked in content:
         return content  # already downgraded — idempotent against a second pass
     return content.replace(claim, marked, 1)
-
-
-async def _lookup_known_gold_components() -> list[GoldComponentSnapshot]:
-    """Best-effort snapshot of Gold's `components` table. Tolerates the table not
-    existing yet — Task 7 (Gold's minimal schema) may not have landed, and Silver
-    must work either way (`doc/silver_process.md` §7)."""
-    async with async_session_factory() as session:
-        try:
-            result = await session.execute(text("SELECT name, description, profile FROM components"))
-        except ProgrammingError:
-            await session.rollback()
-            return []
-        return [dict(row) for row in result.mappings().all()]
 
 
 # --- Nodes -------------------------------------------------------------------
@@ -136,7 +152,11 @@ async def classify_questions(state: SilverState) -> dict:
                 "status": c.status,
             }
         )
-    pending = [c["question"] for c in clarifications if c["status"] == "needs_clarification"]
+    needs_clarification = [c for c in clarifications if c["status"] == "needs_clarification"]
+    pending = _top_questions(
+        [c["question"] for c in needs_clarification],
+        scopes={c["question"]: c["scope"] for c in needs_clarification},
+    )
 
     return {
         "clarifications": clarifications,
@@ -196,21 +216,18 @@ def ask_human(state: SilverState) -> dict:
 
 
 async def synthesize_document(state: SilverState) -> dict:
-    """The Actor. One LLM call per distinct source, writing directly into
-    `doc/clarification_template.md`'s structure (`doc/silver_process.md` §3 node 5)."""
-    template_text = load_template()
+    """The Actor. One LLM call per distinct source, writing the final ADR directly —
+    `prompting/roles/common/adr_generator.jinja`'s structure, not
+    `prompting/roles/common/clarification_template.md`'s (`doc/silver_process.md` §3 node 5). Takes a flat
+    question/answer list, not the graph's own richer `ClarificationItem` shape — see
+    `agents.prompts.QaPair` — so `id`/`scope`/`target`/`requirement` are dropped here;
+    the ADR prompt only ever reads the question text and its answer."""
     sources = state["redraft_only"] or distinct_sources(state["bronze_documents"])
-    known_gold_components = state["known_gold_components"] or await _lookup_known_gold_components()
+    qa_pairs = [{"question": c["question"], "answer": c["answer"]} for c in state["clarifications"]]
 
     documents = dict(state["documents"])
     for source in sources:
-        messages = build_synthesis_prompt(
-            template_text,
-            source_content(state["bronze_documents"], source),
-            state["clarifications"],
-            known_gold_components,
-            state["mentioned_components"],
-        )
+        messages = build_adr_generation_prompt(source_content(state["bronze_documents"], source), qa_pairs)
         response = await router.complete(messages)
         documents[source] = response.choices[0].message.content
 
@@ -218,7 +235,6 @@ async def synthesize_document(state: SilverState) -> dict:
         "documents": documents,
         "active_sources": sources,
         "redraft_only": None,
-        "known_gold_components": known_gold_components,
     }
 
 
@@ -284,7 +300,7 @@ def boss_decide(state: SilverState) -> dict:
     }
     if escalate_sources:
         update["redraft_only"] = escalate_sources
-        update["pending_questions"] = pending_questions
+        update["pending_questions"] = _top_questions(pending_questions)
         update["interrupt_origin"] = "boss"
     return update
 
@@ -293,28 +309,86 @@ def route_after_boss(state: SilverState) -> Literal["ask_human", "write_document
     return "ask_human" if state["pending_questions"] else "write_document"
 
 
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+async def _persist_document_version(
+    session, ingestion_date, source_component: str, content: str
+) -> int:
+    """Writes one `SilverDocument` row, deciding the version deterministically from
+    content alone — never from what the LLM says about itself. Compares the new ADR's
+    hash against the latest existing row for this `source_component`: identical hash
+    overwrites that same row in place (idempotent re-run, no new version); a different
+    hash inserts a new row at `latest_version + 1`, leaving the older version's row
+    untouched — both stay queryable. Returns the version actually written, so
+    `chunk_and_embed` doesn't have to re-derive it."""
+    new_hash = _content_hash(content)
+    latest = (
+        await session.execute(
+            select(SilverDocument)
+            .where(SilverDocument.source_component == source_component)
+            .order_by(SilverDocument.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if latest is None:
+        version = 1
+        session.add(
+            SilverDocument(
+                ingestion_date=ingestion_date,
+                source_component=source_component,
+                version=version,
+                content=content,
+                content_hash=new_hash,
+            )
+        )
+    elif latest.content_hash == new_hash:
+        version = latest.version
+        latest.ingestion_date = ingestion_date
+        latest.content = content
+    else:
+        version = latest.version + 1
+        session.add(
+            SilverDocument(
+                ingestion_date=ingestion_date,
+                source_component=source_component,
+                version=version,
+                content=content,
+                content_hash=new_hash,
+            )
+        )
+    return version
+
+
+def _write_adr_audit_file(ingestion_date_str: str, source_component: str, content: str) -> None:
+    """Writes `output/ingestion_date=<date>/adr/<transcription>.md` — a human-inspectable
+    audit copy of the ADR `write_document` just persisted, same convention
+    `generate_questions_for_batch`'s own `_write_generated_questions` already uses for its
+    own audit file (`doc/silver_process.md` §1). Always reflects this run's latest
+    content, unversioned on disk — only `silver_documents` keeps version history; this
+    file exists to be read by a human, not by anything downstream."""
+    adr_dir = Path(settings.output_dir) / f"ingestion_date={ingestion_date_str}" / "adr"
+    adr_dir.mkdir(parents=True, exist_ok=True)
+    (adr_dir / f"{transcription_base_name(source_component)}.md").write_text(content, encoding="utf-8")
+
+
 async def write_document(state: SilverState) -> dict:
-    """Upserts `silver_documents` (deterministic, no LLM call — overwrite-in-place
-    idempotency, same pattern `scripts/download_transcript.py` used for re-downloads
-    before it moved to timestamped snapshots) and appends this run's clarifications to
-    `silver_clarifications` — one row per (source, question), inserted fresh every run
-    rather than upserted, so it accumulates a history instead of only the latest state."""
+    """Persists each synthesized ADR at its own (`source_component`, `version`) —
+    see `_persist_document_version` for the overwrite-vs-new-version decision — and
+    appends this run's clarifications to `silver_clarifications` — one row per
+    (source, question), inserted fresh every run rather than upserted, so it
+    accumulates a history instead of only the latest state. Also writes each ADR to disk
+    (`_write_adr_audit_file`) for manual inspection alongside the Postgres write."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
+    document_versions: dict[str, int] = dict(state["document_versions"])
     async with async_session_factory() as session:
         for source, content in state["documents"].items():
-            stmt = pg_insert(SilverDocument).values(
-                ingestion_date=ingestion_date,
-                source_component=source,
-                content=content,
+            document_versions[source] = await _persist_document_version(
+                session, ingestion_date, source, content
             )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[SilverDocument.source_component],
-                set_={
-                    "ingestion_date": stmt.excluded.ingestion_date,
-                    "content": stmt.excluded.content,
-                },
-            )
-            await session.execute(stmt)
+            _write_adr_audit_file(state["ingestion_date"], source, content)
 
             for item in state["clarifications"]:
                 session.add(
@@ -327,30 +401,37 @@ async def write_document(state: SilverState) -> dict:
                 )
         await session.commit()
 
-    return {}
+    return {"document_versions": document_versions}
 
 
 async def chunk_and_embed(state: SilverState) -> dict:
-    """Deletes any existing `silver_chunks` for this date (re-run safety), reuses
-    Bronze's own chunker and embedder unchanged. `END`."""
+    """One embedding per ADR — no token-splitting: an ADR is retrieved whole, never as
+    a fragment (`doc/silver_process.md` §3 node 10). Upserts exactly the
+    (`source_component`, `version`) pair `write_document` just wrote, leaving every
+    other version's chunk row (older versions, other sources, other dates) untouched —
+    the opposite of the old blanket delete-by-`ingestion_date`, which would have wiped
+    out the version history this node now exists to keep. `END`."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     async with async_session_factory() as session:
-        await session.execute(delete(SilverChunk).where(SilverChunk.ingestion_date == ingestion_date))
-
         for source, content in state["documents"].items():
-            chunks = chunk_text(content, settings.chunk_size_tokens, settings.chunk_overlap_tokens)
-            if not chunks:
+            if not content.strip():
                 continue
-            embeddings = await asyncio.to_thread(embed, chunks)
-            for chunk_content, embedding in zip(chunks, embeddings, strict=True):
-                session.add(
-                    SilverChunk(
-                        ingestion_date=ingestion_date,
-                        source_component=source,
-                        content=chunk_content,
-                        embedding=embedding,
-                    )
+            version = state["document_versions"][source]
+            await session.execute(
+                delete(SilverChunk).where(
+                    SilverChunk.source_component == source, SilverChunk.version == version
                 )
+            )
+            [embedding] = await asyncio.to_thread(embed, [content])
+            session.add(
+                SilverChunk(
+                    ingestion_date=ingestion_date,
+                    source_component=source,
+                    version=version,
+                    content=content,
+                    embedding=embedding,
+                )
+            )
         await session.commit()
     return {}
 

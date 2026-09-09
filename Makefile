@@ -18,9 +18,17 @@ migrate: db
 test: migrate
 	uv run pytest
 
-# Real-LLM golden-set question collection (see testing_questions_acb/README.md)
+# Real-LLM golden-set question collection (see testing_questions_acb/README.md)pwd
 test-questions-acb:
 	PYTHONPATH=. uv run pytest testing_questions_acb/ -v
+
+# Real-LLM golden-set ADR generation (see testing_adr_acb/README.md)
+test-adr-acb:
+	PYTHONPATH=. uv run pytest testing_adr_acb/ -v
+
+# Real-LLM single-case test (see testing_questions_for_one_component/README.md)
+test-minimal-new-component:
+	PYTHONPATH=. uv run pytest testing_questions_for_one_component/ -v
 
 down:
 	docker compose down

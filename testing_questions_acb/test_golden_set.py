@@ -17,13 +17,15 @@ Two independent things happen per case, and only one of them can fail the test:
     outcome, and it's what the test actually asserts on.
   - **The Critic** — a second, independent LLM call scoring 0-100 how completely the
     drafted questions would document the architecture change if a human answered every
-    one of them, plus a one-paragraph `reason`. Deliberately written against general
-    principles (completeness, grounding), not against `clarification_questions.jinja`'s
-    own internal structure — an earlier version of this rubric was tied to a specific,
-    heavily-specified prompt and went stale the moment the prompt was rewritten. `score`/
-    `reason` are recorded for information only; they do **not** gate the test. A
-    probabilistic judge deciding pass/fail turned this suite flaky before — see git
-    history — so this time only the deterministic checks above do that.
+    one of them, plus a one-paragraph `reason`. Its prompt lives in this directory's own
+    `critic_prompt.jinja` (rendered via `_build_evaluation_prompt`), deliberately written
+    against general principles (completeness, grounding), not against
+    `clarification_questions.jinja`'s own internal structure — an earlier version of this
+    rubric was tied to a specific, heavily-specified prompt and went stale the moment the
+    prompt was rewritten. `score`/`reason` are recorded for information only; they do
+    **not** gate the test. A probabilistic judge deciding pass/fail turned this suite
+    flaky before — see git history — so this time only the deterministic checks above do
+    that.
 
 Deliberately excluded from the default `pytest`/`make test` run (`testpaths = ["tests"]`
 in pyproject.toml) — this hits the real LLM twice per case (Actor + Critic), on purpose,
@@ -53,6 +55,7 @@ just enough to see the order of magnitude of running this suite.
 import os
 from pathlib import Path
 
+import jinja2
 import litellm
 import pytest
 from pydantic import BaseModel
@@ -70,6 +73,7 @@ CRITIC_PROVIDER_ORDER = list(reversed(settings.llm_fallback_order))
 USD_TO_EUR = 0.92
 
 GOLDEN_SET_DIR = Path(__file__).parent / "golden_set"
+_CRITIC_PROMPT_PATH = Path(__file__).parent / "critic_prompt.jinja"
 
 pytestmark = pytest.mark.anyio
 
@@ -164,25 +168,17 @@ def _questions_block(questions: list[QuestionItem]) -> str:
     return "\n".join(f"- [{q.scope}] {q.question}" for q in questions) or "(no questions were drafted)"
 
 
+def _load_critic_prompt_template() -> str:
+    """`testing_questions_acb/critic_prompt.jinja`'s raw text — the Critic's own prompt, kept
+    as a real Jinja template here (not inline in this module) so it can be edited/reviewed like
+    any other prompt in this repo (see `prompting/roles/common/*.jinja`), just scoped to this
+    test suite rather than production."""
+    return _CRITIC_PROMPT_PATH.read_text(encoding="utf-8")
+
+
 def _build_evaluation_prompt(transcript: str, questions: list[QuestionItem]) -> list[dict]:
-    content = (
-        "You are grading a list of architecture-change clarification questions drafted for the "
-        "meeting transcript below.\n\n"
-        "Score from 0 to 100: if a human who was in the meeting answered every one of these "
-        "questions, would the architecture change described in the transcript end up fully and "
-        "accurately documented — every component, every interaction, every data contract, and "
-        "every decision the transcript actually raises?\n\n"
-        "0 means answering them would leave the change about as undocumented as the raw "
-        "transcript already is. 100 means answering them would leave nothing material the "
-        "transcript raises still ambiguous.\n\n"
-        "Penalize two things specifically: something the transcript clearly raises but no "
-        "question covers at all, and padding — a question about something the transcript never "
-        "actually raised.\n\n"
-        f"Transcript:\n{transcript}\n\n"
-        f"Drafted questions:\n{_questions_block(questions)}\n\n"
-        'Return JSON exactly like {"score": <integer 0-100>, "rationale": "<one paragraph '
-        'explaining what the questions cover well and what they miss or pad>"}. Nothing else.'
-    )
+    template = jinja2.Template(_load_critic_prompt_template())
+    content = template.render(transcript=transcript, questions=_questions_block(questions))
     return [{"role": "user", "content": content}]
 
 
@@ -193,6 +189,13 @@ async def _evaluate(transcript: str, questions: list[QuestionItem]) -> Evaluatio
         providers=CRITIC_PROVIDER_ORDER,
         response_format=EvaluationResult,
         temperature=0,
+        # required for a reasoning-locked OpenAI model (e.g. gpt-5.6-sol) to accept
+        # temperature=0 at all — see agents/service.py's identical comment. Anthropic's own
+        # reasoning-locked models (e.g. claude-opus-5) have no equivalent escape hatch, so
+        # CRITIC_PROVIDER_ORDER's Anthropic-first attempt will now fail every time and fall
+        # through to OpenAI — meaning the Critic silently ends up on the same provider as
+        # the Actor it's judging, defeating the independence this ordering was for.
+        reasoning_effort="none",
     )
     return EvaluationResult.model_validate(load_json_response(response.choices[0].message.content))
 
