@@ -491,14 +491,24 @@ Possible actions may include:
 
 ```text
 new
-modified
+forward-update
+break-change
 unchanged
 deprecated
 removed
 unknown
 ```
 
-Determine the action from the transcript and existing architecture.
+Determine the action from the transcript and existing architecture. When a contract's schema
+changes, distinguish `forward-update` from `break-change` by consumer compatibility, not by how
+large the change sounds:
+
+* `forward-update` — existing consumers keep working unmodified: a new optional field, a new
+  enum value alongside the old ones, a loosened constraint. Nothing an existing consumer already
+  relies on is removed, renamed, or made stricter.
+* `break-change` — an existing consumer would need to change to keep working: a required field
+  removed or renamed, a field's type narrowed, a previously optional field made required, or a
+  removed enum value a consumer might still send/expect.
 
 Examples:
 
@@ -506,8 +516,11 @@ Examples:
 New contract
     action = new
 
-Existing contract whose schema changes
-    action = modified
+Existing contract gains an additive, backward-compatible field
+    action = forward-update
+
+Existing contract removes or renames a field existing consumers rely on
+    action = break-change
 
 Existing contract that remains unchanged
     action = unchanged
@@ -519,7 +532,8 @@ Contract no longer used
     action = removed
 ```
 
-If the action cannot be determined, use `action = unknown` and generate a clarification question.
+If the action cannot be determined — including whether a schema change is compatible or
+breaking — use `action = unknown` and generate a clarification question.
 
 ---
 
@@ -596,7 +610,7 @@ Consider:
 * Components removed
 * Components remaining unchanged
 * Contracts added
-* Contracts modified
+* Contracts forward-updated (backward-compatible) or break-changed
 * Contracts deprecated
 * Contracts removed
 * Consumers affected by contract changes
@@ -619,7 +633,7 @@ Known:
 
 ```text
 contract = processed-event
-action = modified
+action = forward-update
 ```
 
 At this stage, do not ask for the field type of `customer_id` — that belongs to the next stage's
@@ -749,7 +763,7 @@ Bad:
 
 Good:
 
-> "Is processed-event new, modified, unchanged, deprecated, or removed as part of this change?"
+> "Is processed-event new, a forward-compatible update, a breaking change, unchanged, deprecated, or removed as part of this change?"
 
 ---
 
@@ -836,7 +850,7 @@ Every question must contain exactly these properties:
   "scope": "data_contract",
   "target": "processed-event",
   "requirement": "action",
-  "question": "Is processed-event new, modified, unchanged, deprecated, or removed as part of this change?"
+  "question": "Is processed-event new, a forward-compatible update, a breaking change, unchanged, deprecated, or removed as part of this change?"
 }
 ```
 
@@ -920,7 +934,7 @@ Each item must contain:
   "name": "processed-event",
   "producer": "Event Processor",
   "consumer": "Analytics Service",
-  "action": "modified"
+  "action": "forward-update"
 }
 ```
 
@@ -928,15 +942,18 @@ Allowed `action` values:
 
 ```text
 new
-modified
+forward-update
+break-change
 unchanged
 deprecated
 removed
 unknown
 ```
 
-Use `"unknown"` for `producer`/`consumer`/`action` when the transcript doesn't establish it —
-never guess, and generate the corresponding clarification question (Phase 7/Phase 8) instead.
+Use `forward-update`/`break-change` per Phase 7's compatibility criteria — never a generic
+"modified". Use `"unknown"` for `producer`/`consumer`/`action` when the transcript doesn't
+establish it — never guess, and generate the corresponding clarification question (Phase
+7/Phase 8) instead.
 
 ---
 
@@ -962,7 +979,7 @@ Example:
     "scope": "data_contract",
     "target": "processed-event",
     "requirement": "action",
-    "question": "Is processed-event new, modified, unchanged, deprecated, or removed as part of this change?"
+    "question": "Is processed-event new, a forward-compatible update, a breaking change, unchanged, deprecated, or removed as part of this change?"
   },
   {
     "id": "contract.processed_event.producer",

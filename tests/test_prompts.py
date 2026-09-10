@@ -46,7 +46,8 @@ def test_data_contract_question_prompt_covers_odcs_depth_and_restrains_padding()
     for expected in (
         "Previous contract version",
         "New contract version",
-        "breaking change",
+        "break-change",
+        "forward-update",
         "Affected consumers",
         "Required/optional",
         "Constraints",
@@ -64,7 +65,14 @@ def test_data_contract_question_prompt_includes_identified_contracts():
     messages = build_data_contract_question_generation_prompt(
         "REQUIREMENTS",
         "TRANSCRIPT",
-        [{"name": "processed-event", "producer": "Event Processor", "consumer": "Analytics", "action": "modified"}],
+        [
+            {
+                "name": "processed-event",
+                "producer": "Event Processor",
+                "consumer": "Analytics",
+                "action": "forward-update",
+            }
+        ],
     )
     content = messages[0]["content"]
 

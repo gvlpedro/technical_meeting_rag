@@ -68,12 +68,12 @@ List the [Open Data Contract Standard (ODCS)](https://bitol-io.github.io/open-da
 
 | Contract          | Version | Change     | Description |
 | ----------------- | ------- | ---------- | ----------- |
-| `contract-a.json` | `1.0.0` | `Added`    | Description |
-| `contract-b.json` | `1.1.0` | `Modified` | Description |
+| `contract-a.json` | `1.0.0` | `Added`         | Description |
+| `contract-b.json` | `1.1.0` | `Forward-update` | Description |
 
 ### Contract Changes
 
-<!-- Describe new, modified, deprecated, or removed data contracts -->
+<!-- Describe new, forward-updated, break-changed, deprecated, or removed data contracts -->
 
 ---
 

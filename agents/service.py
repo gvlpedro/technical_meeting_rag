@@ -12,6 +12,7 @@ coverage was thorough — see `testing_arch_questions_acb/` and `testing_data_co
 for the two stages' own golden-set tests.
 """
 
+import re
 from pathlib import Path
 
 from sqlalchemy import select
@@ -102,15 +103,78 @@ def _looks_shallow(result: ArchitectureQuestionListResult) -> bool:
     return len(scopes) == 1 and len(result.mentioned_components) > 1
 
 
+_MIN_GROUNDABLE_NAME_LENGTH = 2
+
+
+def name_appears_in_text(name: str, text_lower: str) -> bool:
+    """Case-insensitive, word-boundary-safe check for whether `name` appears in `text_lower`
+    (already lowercased by the caller). Two guards a plain `in` substring check doesn't have,
+    both load-bearing now that the result is persisted to Postgres instead of only feeding a
+    transient retry heuristic:
+
+    - **Word boundaries** (`\\b...\\b`, name regex-escaped): a bare `x in text_lower` check
+      would let a short name match *inside* an unrelated word — "Order" would "ground" against
+      "Reordering"/"Orders" in a completely different source's transcript, silently attaching a
+      false-positive mention to the wrong `silver_documents` row with nothing to catch it later.
+    - **Minimum length** (`_MIN_GROUNDABLE_NAME_LENGTH`): an empty or 1-character `name` would
+      otherwise satisfy `"" in text_lower` (or match everywhere) for *every* source in the
+      batch — rejected outright instead of "grounding" everywhere.
+
+    Not bulletproof for a name that itself starts/ends in punctuation (`\\b` needs a
+    word/non-word transition on each side) — acceptable for this domain's naming conventions
+    (component/service/contract names), not a general-purpose text-matching primitive.
+    """
+    normalized = name.strip().lower()
+    if len(normalized) < _MIN_GROUNDABLE_NAME_LENGTH:
+        return False
+    return re.search(rf"\b{re.escape(normalized)}\b", text_lower) is not None
+
+
 def _ungrounded_component_names(result: ArchitectureQuestionListResult, transcript: str) -> list[str]:
     """Every `mentioned_components` name that doesn't appear in the transcript verbatim
-    (case-insensitive) — a hallucinated or paraphrased component name, not something the
-    transcript actually said. Same deterministic check `testing_arch_questions_acb`'s
-    golden-set test already runs on the side, moved into production so a real
-    `make questions`/`make clarify` run gets the same escape-hatch retry the test does, not
-    just a post-hoc failure report."""
+    (case-insensitive, word-boundary-safe — see `name_appears_in_text`) — a hallucinated or
+    paraphrased component name, not something the transcript actually said. Same deterministic
+    check `testing_arch_questions_acb`'s golden-set test already runs on the side, moved into
+    production so a real `make questions`/`make clarify` run gets the same escape-hatch retry
+    the test does, not just a post-hoc failure report."""
     transcript_lower = transcript.lower()
-    return [c.name for c in result.mentioned_components if c.name.lower() not in transcript_lower]
+    return [c.name for c in result.mentioned_components if not name_appears_in_text(c.name, transcript_lower)]
+
+
+def mentions_grounded_in_source(source_text: str, items: list[dict]) -> list[dict]:
+    """Every item (a `MentionedComponentItem`/`MentionedDataContractItem`-shaped dict) whose
+    `name` appears verbatim (case-insensitive, word-boundary-safe — see
+    `name_appears_in_text`) in this one source's own transcript content.
+
+    `mentioned_components`/`mentioned_data_contracts` are drafted once per `generate_
+    architecture_questions_for_batch` call, over the whole ingestion_date's *pooled* transcript
+    text — there is no per-source split in the LLM's own output (see that function's docstring).
+    This is how `write_document` learns which of the batch's mentions actually belong to a
+    specific `source_component`'s `silver_documents` row: the same verbatim-grounding check
+    `_ungrounded_component_names` already runs batch-wide, inverted and scoped to one source's
+    text instead of the pooled one. A name can legitimately ground in more than one source
+    within the same batch — that's not a bug, it means more than one transcript that day
+    mentioned it.
+
+    `write_document` calls this twice per source (once for components, once for contracts)
+    against the same source's content, so it's lowercased twice per source — negligible next to
+    the LLM calls already in the same pipeline run, not worth an API that requires callers to
+    pre-lowercase (a correctness footgun waiting for the next caller who forgets to).
+
+    KNOWN LIMITATION (not fixed here — see `.tmp/refactor_silver_and_gold_process_v6.md`-era
+    docs for the follow-up): `generate_architecture_questions_for_batch` pools every source's
+    transcript into one LLM call *before* this grounding step ever runs, so the LLM's own
+    output carries no per-source attribution to begin with — this function reconstructs it
+    after the fact by substring search, which is a real but different failure mode from the
+    one just fixed above: a name the LLM canonicalized away from a source's own wording (e.g.
+    transcript says "CO svc", LLM reports "Checkout Service") grounds nowhere (false negative)
+    even with perfect word-boundary matching, while a different source whose transcript happens
+    to contain that literal canonical string absorbs it instead (false positive). The real fix
+    is per-source attribution at generation time (tag each mention with its source, or run the
+    architecture stage per source), not a better post-hoc search — out of scope for this pass.
+    """
+    source_lower = source_text.lower()
+    return [item for item in items if name_appears_in_text(item["name"], source_lower)]
 
 
 def _problem_count(result: ArchitectureQuestionListResult, transcript: str) -> int:

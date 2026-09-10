@@ -10,7 +10,17 @@ from typing import Literal
 from pydantic import BaseModel
 
 ComponentStatus = Literal["new", "modified", "removed", "unchanged", "unknown"]
-ContractAction = Literal["new", "modified", "unchanged", "deprecated", "removed", "unknown"]
+# `forward-update` (backward-compatible: additive/optional) vs `break-change` (removes/renames/
+# tightens a required field) — see prompts/data_contract_questions.jinja PHASE 4 for the
+# criterion. KNOWN LIMITATION: unlike `mentioned_components` (verified verbatim against the
+# transcript by `_ungrounded_component_names`), this classification has no mechanical check at
+# all — it's whatever the LLM concludes from prompt-following alone. A subtly-breaking change
+# that reads like "just adding detail" in the transcript can be misclassified `forward-update`
+# with nothing downstream to catch it before it ships as an authoritative ODCS spec. Not fixed
+# here — would need a real schema-diff mechanism, out of scope for this pass.
+ContractAction = Literal[
+    "new", "forward-update", "break-change", "unchanged", "deprecated", "removed", "unknown"
+]
 QuestionScope = Literal[
     "metadata", "component", "architecture", "data_contract", "adr", "change_impact", "migration"
 ]

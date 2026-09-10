@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Date, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
@@ -51,6 +52,11 @@ class SilverDocument(Base):
     `version + 1`, and the older version's row is left untouched — both stay queryable.
     `(source_component, version)` is the real identity; `source_component` alone is no
     longer unique.
+
+    `mentioned_component_names`/`mentioned_data_contract_names` persist what `generate_
+    architecture_questions` identifies for this row's own source — previously computed and
+    discarded every run; see the column comments below and `agents.service.
+    mentions_grounded_in_source`.
     """
 
     __tablename__ = "silver_documents"
@@ -70,6 +76,15 @@ class SilverDocument(Base):
     # without diffing full document text on every run.
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Raw, unresolved component/data-contract mentions grounded in THIS row's own source —
+    # `MentionedComponent`/`MentionedDataContract`-shaped dicts (agents/schemas.py), filtered
+    # from generate_architecture_questions' batch-wide output down to just the ones whose name
+    # appears verbatim in this source_component's transcript content (see
+    # agents.service.mentions_grounded_in_source). Named "mentioned", not "canonical" —
+    # deliberately not yet resolved through any identity/alias matching; that resolution is
+    # Gold-level work this column only feeds, never does itself.
+    mentioned_component_names: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    mentioned_data_contract_names: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

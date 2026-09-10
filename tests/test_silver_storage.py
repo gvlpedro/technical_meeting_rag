@@ -2,7 +2,7 @@ import hashlib
 from datetime import date
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
@@ -86,6 +86,55 @@ async def test_same_source_component_and_version_violates_unique_constraint():
         )
         with pytest.raises(IntegrityError):
             await session.commit()
+
+
+async def test_mentioned_names_default_to_empty_list_and_round_trip():
+    """`mentioned_component_names`/`mentioned_data_contract_names` are NOT NULL with a
+    Python-side default — a row built without passing them (as every pre-existing call site
+    still does) must not fail, and defaults to `[]`, not `None`. A row that does pass real
+    `MentionedComponent`/`MentionedDataContract`-shaped dicts must round-trip them verbatim
+    through Postgres' `jsonb` column."""
+    async with async_session_factory() as session:
+        bare = SilverDocument(
+            ingestion_date=INGESTION_DATE,
+            source_component=SOURCE_COMPONENT,
+            content="# ADR — no mentions passed",
+            content_hash=_hash("# ADR — no mentions passed"),
+        )
+        session.add(bare)
+        await session.commit()
+        await session.refresh(bare)
+        assert bare.mentioned_component_names == []
+        assert bare.mentioned_data_contract_names == []
+
+    grounded_components = [{"name": "checkout service", "status": "new"}]
+    grounded_contracts = [
+        {"name": "checkout-completed", "producer": "checkout service", "consumer": "unknown", "action": "new"}
+    ]
+    async with async_session_factory() as session:
+        session.add(
+            SilverDocument(
+                ingestion_date=INGESTION_DATE,
+                source_component=SOURCE_COMPONENT,
+                version=2,
+                content="# ADR — with mentions",
+                content_hash=_hash("# ADR — with mentions"),
+                mentioned_component_names=grounded_components,
+                mentioned_data_contract_names=grounded_contracts,
+            )
+        )
+        await session.commit()
+
+    async with async_session_factory() as session:
+        row = (
+            await session.execute(
+                select(SilverDocument).where(
+                    SilverDocument.source_component == SOURCE_COMPONENT, SilverDocument.version == 2
+                )
+            )
+        ).scalar_one()
+        assert row.mentioned_component_names == grounded_components
+        assert row.mentioned_data_contract_names == grounded_contracts
 
 
 async def test_a_second_document_version_for_the_same_source_component_is_allowed():

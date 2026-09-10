@@ -61,7 +61,7 @@ import pytest
 from pydantic import BaseModel
 
 from agents.schemas import MentionedComponent, MentionedDataContract, QuestionItem
-from agents.service import generate_architecture_questions_for_batch
+from agents.service import generate_architecture_questions_for_batch, name_appears_in_text
 from agents.template import load_json_response
 from app.config import settings
 from llm import router
@@ -140,15 +140,17 @@ def _check_mentioned_components_are_grounded(
     mentioned_components: list[MentionedComponent], transcript: str
 ) -> list[str]:
     """Deterministic, LLM-free check: every claimed `mentioned_components` entry must
-    appear in the transcript verbatim (case-insensitive) — catches an invented or
-    paraphrased component name mechanically.
+    appear in the transcript verbatim (case-insensitive, word-boundary-safe — see
+    `agents.service.name_appears_in_text`) — catches an invented or paraphrased component
+    name mechanically. Same primitive production's `_ungrounded_component_names` uses, so a
+    fix to the grounding rule lands in one place, not here and in production separately.
     """
     violations = []
     if not mentioned_components:
         violations.append("mentioned_components is empty — no component identified at all")
 
     transcript_lower = transcript.lower()
-    ungrounded = [c.name for c in mentioned_components if c.name.lower() not in transcript_lower]
+    ungrounded = [c.name for c in mentioned_components if not name_appears_in_text(c.name, transcript_lower)]
     if ungrounded:
         violations.append(f"{len(ungrounded)} mentioned_components not found in the transcript: {ungrounded}")
 
@@ -160,10 +162,11 @@ def _check_mentioned_data_contracts_are_grounded(
 ) -> list[str]:
     """Same principle as `_check_mentioned_components_are_grounded`, applied to this stage's
     other identification output: every claimed contract `name` must appear in the transcript
-    verbatim (case-insensitive) — this stage identifies contracts, it doesn't invent them, and
-    an invented one here would feed straight into the data-contract stage as if it were real."""
+    verbatim (case-insensitive, word-boundary-safe) — this stage identifies contracts, it
+    doesn't invent them, and an invented one here would feed straight into the data-contract
+    stage as if it were real."""
     transcript_lower = transcript.lower()
-    ungrounded = [c.name for c in mentioned_data_contracts if c.name.lower() not in transcript_lower]
+    ungrounded = [c.name for c in mentioned_data_contracts if not name_appears_in_text(c.name, transcript_lower)]
     if ungrounded:
         return [f"{len(ungrounded)} mentioned_data_contracts not found in the transcript: {ungrounded}"]
     return []

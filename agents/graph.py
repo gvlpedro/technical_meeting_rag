@@ -35,6 +35,7 @@ from agents.service import (
     generate_architecture_questions_for_batch,
     generate_data_contract_questions_for_batch,
     load_bronze_rows,
+    mentions_grounded_in_source,
     source_content,
     transcription_base_name,
 )
@@ -322,7 +323,12 @@ def _content_hash(content: str) -> str:
 
 
 async def _persist_document_version(
-    session, ingestion_date, source_component: str, content: str
+    session,
+    ingestion_date,
+    source_component: str,
+    content: str,
+    mentioned_component_names: list[dict],
+    mentioned_data_contract_names: list[dict],
 ) -> int:
     """Writes one `SilverDocument` row, deciding the version deterministically from
     content alone — never from what the LLM says about itself. Compares the new ADR's
@@ -330,7 +336,14 @@ async def _persist_document_version(
     overwrites that same row in place (idempotent re-run, no new version); a different
     hash inserts a new row at `latest_version + 1`, leaving the older version's row
     untouched — both stay queryable. Returns the version actually written, so
-    `chunk_and_embed` doesn't have to re-derive it."""
+    `chunk_and_embed` doesn't have to re-derive it.
+
+    `mentioned_component_names`/`mentioned_data_contract_names` are refreshed on every write,
+    including the same-hash overwrite branch — a re-run can legitimately draft a different
+    (or differently-grounded) mention list even when the synthesized ADR text itself hashes
+    identical. `_row_fields` is the single place all three branches (insert-first, overwrite,
+    insert-next-version) read shared column values from, so a future column addition is a
+    one-line change here instead of a hand-edit repeated across three constructor calls."""
     new_hash = _content_hash(content)
     latest = (
         await session.execute(
@@ -341,32 +354,27 @@ async def _persist_document_version(
         )
     ).scalar_one_or_none()
 
+    def _row_fields(version: int) -> dict:
+        return {
+            "ingestion_date": ingestion_date,
+            "source_component": source_component,
+            "version": version,
+            "content": content,
+            "content_hash": new_hash,
+            "mentioned_component_names": mentioned_component_names,
+            "mentioned_data_contract_names": mentioned_data_contract_names,
+        }
+
     if latest is None:
         version = 1
-        session.add(
-            SilverDocument(
-                ingestion_date=ingestion_date,
-                source_component=source_component,
-                version=version,
-                content=content,
-                content_hash=new_hash,
-            )
-        )
+        session.add(SilverDocument(**_row_fields(version)))
     elif latest.content_hash == new_hash:
         version = latest.version
-        latest.ingestion_date = ingestion_date
-        latest.content = content
+        for field, value in _row_fields(version).items():
+            setattr(latest, field, value)
     else:
         version = latest.version + 1
-        session.add(
-            SilverDocument(
-                ingestion_date=ingestion_date,
-                source_component=source_component,
-                version=version,
-                content=content,
-                content_hash=new_hash,
-            )
-        )
+        session.add(SilverDocument(**_row_fields(version)))
     return version
 
 
@@ -388,13 +396,25 @@ async def write_document(state: SilverState) -> dict:
     appends this run's clarifications to `silver_clarifications` — one row per
     (source, question), inserted fresh every run rather than upserted, so it
     accumulates a history instead of only the latest state. Also writes each ADR to disk
-    (`_write_adr_audit_file`) for manual inspection alongside the Postgres write."""
+    (`_write_adr_audit_file`) for manual inspection alongside the Postgres write.
+
+    `mentioned_components`/`mentioned_data_contracts` are drafted once over the whole
+    batch's pooled transcript (`generate_architecture_questions`), not per source — grounds
+    each mention against this specific source's own content (`mentions_grounded_in_source`)
+    before persisting, so a future Gold extraction pass reads a per-ADR grounded list instead
+    of re-deriving it from the finished Markdown."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     document_versions: dict[str, int] = dict(state["document_versions"])
     async with async_session_factory() as session:
         for source, content in state["documents"].items():
+            source_text = source_content(state["bronze_documents"], source)
             document_versions[source] = await _persist_document_version(
-                session, ingestion_date, source, content
+                session,
+                ingestion_date,
+                source,
+                content,
+                mentions_grounded_in_source(source_text, state["mentioned_components"]),
+                mentions_grounded_in_source(source_text, state["mentioned_data_contracts"]),
             )
             _write_adr_audit_file(state["ingestion_date"], source, content)
 

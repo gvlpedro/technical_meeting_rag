@@ -140,6 +140,7 @@ DATE_CONTRADICTION = date(2026, 6, 3)
 DATE_LOW_SEVERITY = date(2026, 6, 4)
 DATE_BOUNDED_RETRY = date(2026, 6, 5)
 DATE_DATA_CONTRACT_QUESTIONS = date(2026, 6, 7)
+DATE_MENTIONED_NAMES = date(2026, 6, 8)
 
 
 async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
@@ -326,6 +327,60 @@ async def test_clean_transcript_completes_with_no_interrupt_and_persists(monkeyp
         assert len(docs_after) == 1  # upserted, not duplicated
     finally:
         await _cleanup_date(DATE_CLEAN)
+
+
+async def test_write_document_grounds_batch_mentions_per_source(monkeypatch):
+    """`generate_architecture_questions` drafts `mentioned_components`/`mentioned_data_contracts`
+    once over the whole batch's pooled transcript (see that function's docstring) — `write_
+    document` must ground each mention against its OWN source's content
+    (`agents.service.mentions_grounded_in_source`) before persisting it on that source's
+    `SilverDocument` row, not duplicate the whole batch's list onto every row in the batch."""
+    await _insert_bronze(
+        DATE_MENTIONED_NAMES, "meeting_checkout.en.vtt", ["We are introducing the checkout service."]
+    )
+    await _insert_bronze(
+        DATE_MENTIONED_NAMES, "meeting_billing.en.vtt", ["The billing service remains unchanged."]
+    )
+    try:
+        mentioned_components = [
+            {"name": "checkout service", "status": "new"},
+            {"name": "billing service", "status": "unchanged"},
+        ]
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=[
+                "# ADR — Checkout\n\nCheckout service is new.",
+                "# ADR — Billing\n\nBilling service is unchanged.",
+            ],
+            critique_queue=[[], []],
+            mentioned_components=mentioned_components,
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("mentioned-names-1", initial_state("20260608"))
+        assert "__interrupt__" not in result
+
+        async with async_session_factory() as session:
+            docs = (
+                (
+                    await session.execute(
+                        select(SilverDocument).where(SilverDocument.ingestion_date == DATE_MENTIONED_NAMES)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        by_source = {d.source_component: d for d in docs}
+        assert by_source["meeting_checkout.en.vtt"].mentioned_component_names == [
+            {"name": "checkout service", "status": "new"}
+        ]
+        assert by_source["meeting_billing.en.vtt"].mentioned_component_names == [
+            {"name": "billing service", "status": "unchanged"}
+        ]
+        assert by_source["meeting_checkout.en.vtt"].mentioned_data_contract_names == []
+        assert by_source["meeting_billing.en.vtt"].mentioned_data_contract_names == []
+    finally:
+        await _cleanup_date(DATE_MENTIONED_NAMES)
 
 
 async def test_classify_stage_interrupt_and_resume_persists_across_new_connection(monkeypatch):

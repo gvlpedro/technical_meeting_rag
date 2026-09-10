@@ -175,18 +175,27 @@ usage pattern.
 # PHASE 4 — DATA CONTRACT VERSIONING
 
 Versioning is especially important, and applies whenever a contract's `action` (given in
-`IDENTIFIED_DATA_CONTRACTS`) is `modified`, `deprecated`, or `unknown`.
+`IDENTIFIED_DATA_CONTRACTS`) is `forward-update`, `break-change`, `deprecated`, or `unknown`.
 
-When a data contract is modified, determine:
+When a data contract is a `forward-update` or `break-change`, determine:
 
 * Previous contract version
 * New contract version
 * Reason for the version change
-* Whether the version increment represents a breaking change
-* Compatibility requirements
-* Migration requirements
+* Whether the stated version increment (major/minor/patch) is actually consistent with the
+  `break-change`/`forward-update` classification — flag it explicitly if, say, a minor bump
+  accompanies a change that removes, renames, or tightens a required field (that's a
+  `break-change` regardless of what the version number implies)
+* Compatibility requirements — for a `break-change`, which existing consumers are affected and
+  why; for a `forward-update`, confirm no existing consumer needs to change
+* Migration requirements — for a `break-change`, the concrete mechanics: backfill needed,
+  dual-write period, cutover date/plan
 * Deprecation of the previous version
 * Affected consumers
+
+If the identification stage marked the action `unknown`, first determine whether the change is
+compatible (`forward-update`) or breaking (`break-change`) per the same criteria
+`architecture_questions.jinja` Phase 7 uses, before asking about version numbers.
 
 If the transcript says:
 
@@ -196,7 +205,7 @@ Known:
 
 ```text
 contract = processed-event
-change = modified
+action = forward-update
 ```
 
 But do not assume:
@@ -219,7 +228,7 @@ Then the version evolution is known — do not ask for it again.
 
 # PHASE 5 — CONTRACT EVOLUTION
 
-For every modified data contract, determine exactly what changes.
+For every forward-updated or break-changed data contract, determine exactly what changes.
 
 Potential changes include:
 
@@ -514,7 +523,8 @@ Before returning the JSON, verify internally, **for every contract in
 * Servers/interfaces are known or questioned when required.
 * Support/ownership is known or questioned when required.
 * Versioning (previous/new version, reason, compatibility, affected consumers) is known or
-  questioned when the contract's `action` is `modified`, `deprecated`, or `unknown`.
+  questioned when the contract's `action` is `forward-update`, `break-change`, `deprecated`, or
+  `unknown`.
 * An `unchanged` contract's full existing spec is known or questioned when required.
 * A `removed`/`deprecated` contract's existing spec and replacement are known or questioned when
   required.

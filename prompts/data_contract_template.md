@@ -93,8 +93,8 @@ known — otherwise the technology fact belongs in Description/Usage as prose in
 
 ## 7. Versioning & Compatibility
 
-<!-- Only applicable when this contract is `modified`/evolving, per its `action` in
-IDENTIFIED_DATA_CONTRACTS. -->
+<!-- Only applicable when this contract is `forward-update`/`break-change` (evolving), per its
+`action` in IDENTIFIED_DATA_CONTRACTS. -->
 
 | Field                    | Description                                                  |
 | -------------------------| ---------------------------------------------------------------|
