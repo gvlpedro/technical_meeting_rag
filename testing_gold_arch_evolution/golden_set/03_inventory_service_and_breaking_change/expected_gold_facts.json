@@ -1,0 +1,8 @@
+[
+  {"canonical_name": "Payment Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Order Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Inventory Service", "entity_type": "component", "operation": "new", "version": 1},
+  {"canonical_name": "Payment Confirmed", "entity_type": "data_contract", "operation": "new", "version": 1},
+  {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "break-change"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 3}
+]

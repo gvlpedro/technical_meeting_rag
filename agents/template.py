@@ -12,6 +12,7 @@ _DATA_CONTRACT_QUESTION_ROLE_PATH = _PROMPTS_DIR / "data_contract_questions.jinj
 _ADR_GENERATION_ROLE_PATH = _PROMPTS_DIR / "adr_generator.jinja"
 _QUESTION_CLASSIFIER_PATH = _PROMPTS_DIR / "question_classifier.jinja"
 _ADR_CRITIC_PATH = _PROMPTS_DIR / "adr_critic.jinja"
+_GOLD_EXTRACTION_ROLE_PATH = _PROMPTS_DIR / "gold_extraction.jinja"
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
@@ -70,6 +71,16 @@ def load_adr_critic_role() -> str:
     `{{source_content}}` placeholders still unfilled — `build_critic_prompt` fills them. Used
     by the production graph's `critic_document` node (`agents/graph.py`)."""
     return _ADR_CRITIC_PATH.read_text(encoding="utf-8")
+
+
+def load_gold_extraction_role() -> str:
+    """`prompts/gold_extraction.jinja`'s raw text, `{{adr_content}}`/
+    `{{mentioned_components}}`/`{{mentioned_data_contracts}}` placeholders still unfilled —
+    `build_gold_extraction_prompt` fills them. Used by `agents.gold_service.
+    extract_gold_facts_for_source`, called from the production graph's `extract_gold_facts`
+    node (`agents/graph.py`) — runs inside Silver's own graph, right after `chunk_and_embed`,
+    per `.tmp/gold_process_v5.md` §1-2, not as a separately triggered pass."""
+    return _GOLD_EXTRACTION_ROLE_PATH.read_text(encoding="utf-8")
 
 
 def extract_json(content: str) -> str:

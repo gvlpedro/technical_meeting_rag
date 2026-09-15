@@ -1,0 +1,44 @@
+Architecture sync — Order Fulfillment Platform, January 2026.
+
+Today we are launching Order Service. Order Service is a brand new component — it is a new
+component that does not exist in any form yet. Order Service owns the checkout-to-fulfillment
+flow: once a customer confirms an order, Order Service receives that confirmation and
+coordinates everything that needs to happen next.
+
+For context: Legacy Order Monolith already exists today and currently handles the parts of
+order processing that Order Service does not cover yet. Legacy Order Monolith is not changing
+as part of this launch. It remains unchanged — exactly as it is today, running side by side with
+the new Order Service while the migration continues gradually over the next several releases.
+
+As soon as an order is confirmed, Order Service publishes a new data contract called Order
+Events. Order Events is a brand-new contract — it has never existed before today. Order Service
+is the producer of Order Events. Order Events carries three fields: order_id, a required string
+that uniquely identifies the order; buyer_id, a required string that identifies the customer who
+placed the order; and total_amount, a required number giving the order's total value in cents.
+No component consumes Order Events yet today — that integration is intentionally deferred to a
+later phase, so as of this launch it has no consumer wired up.
+
+We decided to build Order Service as its own new component, instead of extending Legacy Order
+Monolith directly, because Legacy Order Monolith's codebase has become too risky to touch
+further — the team wants new order logic to live in a fresh, independently deployable service
+rather than growing the monolith. The alternative of adding this logic directly inside Legacy
+Order Monolith was considered and rejected for exactly that reason. The main consequence of this
+decision is that, until the migration finishes, order-processing logic will temporarily live in
+two places at once — Order Service for new flows, Legacy Order Monolith for everything not yet
+migrated — a deliberate, temporary tradeoff the team has explicitly accepted.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

@@ -1,0 +1,7 @@
+[
+  {"canonical_name": "Inventory Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Notification Service", "entity_type": "component", "operation": "new", "version": 1},
+  {"canonical_name": "Stock Updated", "entity_type": "data_contract", "operation": "new", "version": 1},
+  {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "deprecated"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 4}
+]

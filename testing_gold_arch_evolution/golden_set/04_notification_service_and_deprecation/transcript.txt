@@ -1,0 +1,48 @@
+Architecture sync — Order Fulfillment Platform, April 2026.
+
+Inventory Service is being modified in this update — once it finishes reserving stock for an
+order, it now also publishes a new data contract, Stock Updated, instead of only updating its own
+internal inventory table like before. Stock Updated is a brand-new contract — it has never
+existed before today. Inventory Service is the producer of Stock Updated. Stock Updated carries
+three required fields: order_id, a required string linking back to the order; sku_count, a
+required integer giving how many distinct SKUs were reserved; and reserved_at, a required string
+holding an ISO-8601 timestamp of when the reservation happened.
+
+We're introducing a new component, Notification Service, this month. Notification Service is
+entirely new — it does not exist in any form yet. Notification Service subscribes to Stock
+Updated; once stock has been reserved for an order, Notification Service sends the customer a
+confirmation notification.
+
+Order Events is being deprecated as of this update. Order Service will keep publishing it for one
+more release cycle so Payment Service — its last remaining consumer — has time to finish cutting
+over to reading buyer confirmation details from Payment Confirmed instead, but no new consumer
+should be built against Order Events from here on. Order Events is being replaced end-to-end by
+Payment Confirmed and Stock Updated together; once Payment Service finishes that migration, Order
+Events will be removed entirely.
+
+Legacy Order Monolith remains untouched this month as well — no changes to it, still unchanged,
+still running whatever hasn't migrated over yet.
+
+We added Notification Service as its own new component, instead of folding notification logic
+into Inventory Service or Payment Service directly, because notification channels — email, SMS,
+push — are expected to multiply soon, and the team wants that complexity isolated in one place
+rather than duplicated across two producers; embedding it into either producer was considered and
+rejected for that reason. The consequence is a new dependency: the customer notification now
+waits on Stock Updated arriving from Inventory Service, so it can be slightly delayed if Inventory
+Service is running slow.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

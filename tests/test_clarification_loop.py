@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 from agents.graph import build_graph, checkpointer_dsn
 from agents.state import initial_state
 from app.config import settings
-from db.models import BronzeDocument, SilverChunk, SilverClarification, SilverDocument
+from db.models import BronzeDocument, GoldAlias, GoldEvolution, SilverChunk, SilverClarification, SilverDocument
 from db.session import async_session_factory
 
 pytestmark = pytest.mark.anyio
@@ -37,6 +37,17 @@ _DEFAULT_QUESTION = {
     "question": "placeholder question?",
 }
 
+# The harmless default for extract_gold_facts's one LLM call: nothing extracted, architecture
+# unchanged. Shared by _make_fake_acompletion's own default and any test below faking its own
+# acompletion but not exercising Gold extraction specifically.
+_DEFAULT_GOLD_EXTRACTION = {
+    "components": [],
+    "contracts": [],
+    "architecture_change": "unchanged",
+    "architecture_narrative": "No architecture change extracted for this test.",
+    "mermaid_diagram": "",
+}
+
 
 def _make_fake_acompletion(
     classification: dict,
@@ -46,6 +57,7 @@ def _make_fake_acompletion(
     mentioned_components: list[dict] | None = None,
     mentioned_data_contracts: list[dict] | None = None,
     data_contract_questions: list[dict] | None = None,
+    gold_extraction: dict | None = None,
 ):
     """Dispatches on which prompt was sent (architecture questions / data-contract
     questions / classify / synthesize / critic). Each question-generation stage and
@@ -63,11 +75,20 @@ def _make_fake_acompletion(
     is enough for tests that don't care about specific question text or ids. Leaving
     `mentioned_data_contracts` at its default (empty) means the data-contract stage skips
     its LLM call entirely (`generate_data_contract_questions_for_batch`'s own short
-    circuit) — most tests below never need to fake that prompt at all."""
+    circuit) — most tests below never need to fake that prompt at all.
+
+    `gold_extraction` fakes `extract_gold_facts`'s one LLM call per source (`agents/graph.py`),
+    which now runs unconditionally for every source that reaches `boss_verdicts[source] ==
+    "ok"` — every pre-existing test below therefore also exercises this node, just with the
+    harmless default (nothing extracted, architecture unchanged) unless a test overrides it,
+    the same way `mentioned_data_contracts` defaulting to empty means most tests never bother
+    faking the data-contract stage either. See `test_gold_extraction_persists_and_skips_
+    unknown_status` for the one test that overrides it to exercise real extraction/persistence."""
     questions = generated_questions if generated_questions is not None else [_DEFAULT_QUESTION]
     components = mentioned_components if mentioned_components is not None else []
     contracts = mentioned_data_contracts if mentioned_data_contracts is not None else []
     contract_questions = data_contract_questions if data_contract_questions is not None else []
+    gold_result = gold_extraction if gold_extraction is not None else _DEFAULT_GOLD_EXTRACTION
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         content_in = messages[0]["content"]
@@ -79,6 +100,8 @@ def _make_fake_acompletion(
             content = json.dumps({"questions": contract_questions})
         elif "You classify each question" in content_in:
             content = json.dumps(classification)
+        elif "extracting structured, versionable facts" in content_in:
+            content = json.dumps(gold_result)
         elif "Architecture Decision Record" in content_in:
             content = synthesis_queue.pop(0)
         elif "You review a drafted architecture document" in content_in:
@@ -105,7 +128,26 @@ async def _insert_bronze(ingestion_date: date, source_component: str, contents: 
 
 
 async def _cleanup_date(ingestion_date: date) -> None:
+    """Also cleans up any `gold_evolution`/`gold_aliases` rows this run wrote — `extract_gold_
+    facts` now runs unconditionally for every clean-passing source (see `_make_fake_
+    acompletion`'s `gold_result` default), so every test in this file writes at least an
+    `architecture:<source>` row unless it explicitly skips Gold. `gold_aliases` has no
+    `ingestion_date` column of its own (it's not versioned — `gold_process.md` §3), so its
+    rows are found via the `(entity_type, entity_id)` pairs `gold_evolution` just gave us,
+    deleted before the `gold_evolution` rows themselves so nothing is left to look up."""
     async with async_session_factory() as session:
+        gold_entities = (
+            await session.execute(
+                select(GoldEvolution.entity_type, GoldEvolution.entity_id).where(
+                    GoldEvolution.ingestion_date == ingestion_date
+                )
+            )
+        ).all()
+        for entity_type, entity_id in gold_entities:
+            await session.execute(
+                delete(GoldAlias).where(GoldAlias.entity_type == entity_type, GoldAlias.entity_id == entity_id)
+            )
+        await session.execute(delete(GoldEvolution).where(GoldEvolution.ingestion_date == ingestion_date))
         await session.execute(delete(SilverChunk).where(SilverChunk.ingestion_date == ingestion_date))
         await session.execute(
             delete(SilverClarification).where(SilverClarification.ingestion_date == ingestion_date)
@@ -141,6 +183,7 @@ DATE_LOW_SEVERITY = date(2026, 6, 4)
 DATE_BOUNDED_RETRY = date(2026, 6, 5)
 DATE_DATA_CONTRACT_QUESTIONS = date(2026, 6, 7)
 DATE_MENTIONED_NAMES = date(2026, 6, 8)
+DATE_GOLD_EXTRACTION = date(2026, 6, 9)
 
 
 async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
@@ -251,6 +294,8 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
                 return _fake_response("# ADR — Checkout Service\n\nCheckout: unchanged.")
             if "You review a drafted architecture document" in content_in:
                 return _fake_response(json.dumps({"claims": []}))
+            if "extracting structured, versionable facts" in content_in:
+                return _fake_response(json.dumps(_DEFAULT_GOLD_EXTRACTION))
             raise AssertionError(f"unexpected prompt: {content_in[:80]!r}")
 
         monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
@@ -591,3 +636,108 @@ async def test_claim_still_material_after_one_retry_proceeds_without_a_third_ask
         assert "handles refunds **[unknown — flagged by review]**" in doc.content
     finally:
         await _cleanup_date(DATE_BOUNDED_RETRY)
+
+
+async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
+    """End-to-end: `extract_gold_facts` -> `resolve_gold_identity` -> `persist_gold_evolution`
+    (`agents/graph.py`, `.tmp/gold_process_v5.md` §2), running inside this same graph run right
+    after `chunk_and_embed`. A confirmed component gets a `gold_evolution` row and a
+    `gold_aliases` entry; a component the extraction leaves `"unknown"` gets neither — see
+    `agents.graph.persist_gold_evolution`'s skip (v6 §3: `"unknown"` should never reach Gold)."""
+    source = "meeting_gold.en.vtt"
+    await _insert_bronze(DATE_GOLD_EXTRACTION, source, ["The checkout service was introduced today."])
+    try:
+        gold_extraction = {
+            "components": [
+                {
+                    "name": "Checkout Service",
+                    "status": "new",
+                    "narrative": "Checkout Service is a new component introduced to handle checkout.",
+                    "dependency_names": [],
+                    "contract_names": [],
+                },
+                {
+                    "name": "Mystery Service",
+                    "status": "unknown",
+                    "narrative": "Mentioned but its status could not be determined from the ADR.",
+                    "dependency_names": [],
+                    "contract_names": [],
+                },
+            ],
+            "contracts": [],
+            "architecture_change": "changed",
+            "architecture_narrative": "Checkout Service was added to the architecture.",
+            "mermaid_diagram": "",
+        }
+        # Two entries each: the second `_run` below is a brand-new thread_id, so the graph
+        # replays synthesize_document/critic_document from scratch too, not just the Gold
+        # nodes — same text both times so write_document's hash-compare keeps `version == 1`
+        # on the second run, which is what makes `already_extracted` actually skip Gold's LLM
+        # call rather than just happening to not need it.
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=[
+                "# ADR — Checkout\n\nCheckout service is new.",
+                "# ADR — Checkout\n\nCheckout service is new.",
+            ],
+            critique_queue=[[], []],
+            mentioned_components=[{"name": "checkout service", "status": "new"}],
+            gold_extraction=gold_extraction,
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("gold-extraction-1", initial_state("20260609"))
+        assert "__interrupt__" not in result
+
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(GoldEvolution).where(GoldEvolution.ingestion_date == DATE_GOLD_EXTRACTION)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        by_type = {(r.entity_type, r.canonical_name): r for r in rows}
+
+        checkout = by_type[("component", "Checkout Service")]
+        assert checkout.version == 1
+        assert checkout.operation == "new"
+        assert checkout.source_component == source
+        assert checkout.source_adr_version == 1
+
+        architecture = by_type[("architecture", source)]
+        assert architecture.operation == "changed"
+
+        # "Mystery Service" (status "unknown") must NOT appear anywhere in gold_evolution.
+        assert ("component", "Mystery Service") not in by_type
+        assert len(rows) == 2  # exactly checkout + architecture, nothing for Mystery Service
+
+        async with async_session_factory() as session:
+            aliases = (
+                (
+                    await session.execute(
+                        select(GoldAlias).where(GoldAlias.entity_id == checkout.entity_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert [a.alias for a in aliases] == ["Checkout Service"]
+
+        # Re-running the same graph for the same source/version must not re-call the LLM for
+        # extraction at all — already_extracted short-circuits it (agents/graph.py).
+        def _explode(*, model, api_key, messages, **kwargs):
+            raise AssertionError("extract_gold_facts must not re-call the LLM for an already-processed version")
+
+        async def fake_acompletion_no_gold_call(*, model, api_key, messages, **kwargs):
+            content_in = messages[0]["content"]
+            if "extracting structured, versionable facts" in content_in:
+                _explode(model=model, api_key=api_key, messages=messages, **kwargs)
+            return await fake(model=model, api_key=api_key, messages=messages, **kwargs)
+
+        monkeypatch.setattr(litellm, "acompletion", fake_acompletion_no_gold_call)
+        await _run("gold-extraction-2", initial_state("20260609"))
+    finally:
+        await _cleanup_date(DATE_GOLD_EXTRACTION)

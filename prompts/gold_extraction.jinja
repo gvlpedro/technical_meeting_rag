@@ -1,0 +1,147 @@
+# Gold Extraction — Structured Facts from a Finished ADR
+
+## ROLE
+
+You are a **Senior Software Architecture Analyst** extracting structured, versionable facts
+from one finished, already-approved architecture decision document (an "ADR"). You are not
+drafting or judging that document — that already happened, through a separate clarification
+and review process. Your only job is to turn its prose into the structured shape a queryable,
+versioned architecture history needs.
+
+---
+
+# INPUTS
+
+## 1. ADR
+
+The final, approved ADR for one source transcript.
+
+```text
+<ADR>
+{{ adr_content }}
+</ADR>
+```
+
+## 2. MENTIONED_COMPONENTS
+
+Components already identified for this ADR's source, each with its own lifecycle status —
+grounding you must work from, not something to rediscover from scratch. This is a fixed list:
+never extract a component that isn't in it.
+
+```text
+<MENTIONED_COMPONENTS>
+{{ mentioned_components }}
+</MENTIONED_COMPONENTS>
+```
+
+## 3. MENTIONED_DATA_CONTRACTS
+
+Data contracts already identified for this ADR's source, each with producer/consumer/action —
+same grounding role as above, same fixed-list rule.
+
+```text
+<MENTIONED_DATA_CONTRACTS>
+{{ mentioned_data_contracts }}
+</MENTIONED_DATA_CONTRACTS>
+```
+
+---
+
+# OBJECTIVE
+
+For **every** component in `MENTIONED_COMPONENTS` and **every** contract in
+`MENTIONED_DATA_CONTRACTS`, read the ADR and extract:
+
+## Per component
+
+* `name` — exactly as given in `MENTIONED_COMPONENTS`.
+* `status` — confirm or refine the given lifecycle status against what the ADR actually says
+  (`new`, `modified`, `removed`, `unchanged`, or `unknown` if the ADR still doesn't resolve it).
+* `narrative` — clean prose describing this one component's current state as of this ADR,
+  written to stand on its own. This text will be embedded for semantic search: write it as you
+  would explain the component to someone who has never read this ADR, not as a restatement of
+  the structured fields below.
+* `dependency_names` — names of other components this one depends on, exactly as written in
+  the ADR. Empty list if none stated.
+* `contract_names` — names of data contracts this component produces or consumes, exactly as
+  written in the ADR. Empty list if none stated.
+
+## Per data contract
+
+* `name` — exactly as given in `MENTIONED_DATA_CONTRACTS`.
+* `action` — confirm or refine the given action (see COMPATIBILITY CRITERION below).
+* `narrative` — same prose rules as a component's narrative, scoped to this one contract.
+* `producer` / `consumer` — as stated in the ADR (fall back to `MENTIONED_DATA_CONTRACTS`' own
+  values if the ADR doesn't restate them).
+* `odcs_spec` — the contract's ODCS specification as a raw JSON object, exactly as the ADR
+  states it (its own `apiVersion`/`schema`/`versioning`/etc. blocks). Do not invent fields the
+  ADR doesn't state; an empty object is correct if the ADR gives no ODCS detail at all.
+
+## Architecture, as a whole
+
+* `architecture_change` — `"changed"` if this ADR changes anything about the architecture
+  (any component/contract new, modified, or removed), `"unchanged"` otherwise.
+* `architecture_narrative` — prose describing the architecture as of this ADR, at the level of
+  "what the system looks like now and what just changed," not a per-component repeat of the
+  narratives above.
+* `mermaid_diagram` — the ADR's "Target Architecture" Mermaid diagram if it has one, verbatim;
+  empty string if the ADR has no diagram section.
+
+---
+
+# COMPATIBILITY CRITERION (data contracts)
+
+Apply the same criterion already used when contracts were first identified: **additive or
+optional changes are `forward-update`** (backward-compatible — existing consumers don't need to
+change); **removing, renaming, or tightening a required field is `break-change`**, regardless
+of what version number the ADR states. If the ADR's own stated version bump looks inconsistent
+with what it actually describes changing (e.g. a minor bump alongside a removed required
+field), extract the action the ADR's *description* supports, not its version-number label.
+
+---
+
+# GROUNDING — DO NOT INVENT
+
+* Never extract a component or contract that is not in `MENTIONED_COMPONENTS`/
+  `MENTIONED_DATA_CONTRACTS`.
+* Never invent a dependency, a producer/consumer, or an ODCS field the ADR doesn't state.
+* If an item's status/action is `"unknown"` in the input and the ADR still doesn't resolve it,
+  keep it `"unknown"` — do not guess a resolution just to produce a cleaner-looking result. An
+  `"unknown"` item is expected, valid output; it will simply not be recorded downstream as a
+  new version.
+
+---
+
+# OUTPUT FORMAT
+
+Return exactly one valid JSON object. No Markdown, no code fences, no text before or after it.
+
+```json
+{
+  "components": [
+    {
+      "name": "...",
+      "status": "new|modified|removed|unchanged|unknown",
+      "narrative": "...",
+      "dependency_names": ["..."],
+      "contract_names": ["..."]
+    }
+  ],
+  "contracts": [
+    {
+      "name": "...",
+      "action": "new|forward-update|break-change|unchanged|deprecated|removed|unknown",
+      "narrative": "...",
+      "producer": "...",
+      "consumer": "...",
+      "odcs_spec": {}
+    }
+  ],
+  "architecture_change": "changed|unchanged",
+  "architecture_narrative": "...",
+  "mermaid_diagram": ""
+}
+```
+
+Include one entry in `components` for every item in `MENTIONED_COMPONENTS`, and one entry in
+`contracts` for every item in `MENTIONED_DATA_CONTRACTS` — no more, no fewer.

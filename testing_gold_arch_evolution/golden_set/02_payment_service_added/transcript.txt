@@ -1,0 +1,49 @@
+Architecture sync — Order Fulfillment Platform, February 2026.
+
+Two changes this month. First: Order Service is being modified in this update. We're adding
+idempotency to it — Order Service now deduplicates repeated order-confirmation submissions using
+an idempotency key, so the same order is never processed twice even if a client retries the
+confirmation call. Nothing else about Order Service changes this month.
+
+Second: we're introducing a new component, Payment Service. Payment Service is entirely new — it
+does not exist in any form yet. Payment Service subscribes to Order Events; whenever Order
+Service publishes one, Payment Service charges the buyer's payment method and confirms the
+charge.
+
+Order Events itself changes too, to support this. It gains a new field, payment_method — a new,
+optional string, required: false — so Order Service can tell Payment Service which payment
+method to charge without a second lookup. Existing behavior isn't affected: nothing already
+reading Order Events needs to change anything, since the new field is additive and optional.
+Order Events moves from version 1.0 to version 1.1 because of this — a minor, backward-compatible
+bump. Payment Service becomes Order Events' first consumer, subscribing to it starting this
+release.
+
+As always, Legacy Order Monolith continues running exactly as it did last month — nothing about
+it changes in this update either; it stays unchanged, still handling whatever hasn't migrated to
+Order Service yet.
+
+We added the idempotency logic now because last month's early rollout already surfaced duplicate
+order submissions caused by flaky client retries — this couldn't wait for a later cycle. Payment
+Service was built as its own separate component, rather than embedded inside Order Service,
+because the team wants payment logic to evolve and scale independently of the checkout flow —
+the alternative of putting charge logic directly inside Order Service was considered and rejected
+for that same separation-of-concerns reason Order Service itself was split out of Legacy Order
+Monolith for. The consequence of adding Payment Service is a new hard runtime dependency: if
+Payment Service is unavailable, Order Service still accepts and records the order, but no charge
+happens until Payment Service recovers.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

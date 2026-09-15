@@ -131,3 +131,86 @@ class SilverChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(settings.embedding_dim), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GoldEvolution(Base):
+    """One asserted version of a component, a data contract, or the architecture as a whole —
+    Gold layer, append-only source of truth (`.tmp/gold_process.md` §6, cut to two tables and
+    flattened per `.tmp/optmizaciones.md` §1 and `.tmp/refactor_silver_and_gold_process_v6.md`).
+
+    No FK to `silver_documents` — `source_component`/`source_adr_version` are flat columns,
+    same no-FK convention `silver_chunks` already uses relative to `bronze_documents`
+    (v6 §1); `ingestion_date` is copied forward too, so "how has X evolved over time" queries
+    never need a join back to Silver just to get a date (v6 §2, event-time vs. `changed_at`'s
+    processing-time).
+
+    `entity_hash`, not `content_hash`: same hash-compare-then-bump mechanism as
+    `SilverDocument.content_hash`, but scoped to one entity's own
+    `(operation, narrative, payload)`, not a whole document — a different column name avoids
+    implying they hash the same shape of thing (v6 §4). "Current state" (latest version per
+    entity) is a query (`DISTINCT ON (entity_type, entity_id) ORDER BY version DESC`,
+    `agents.gold_service.current_gold_state`), not a materialized cache table — `v4`'s
+    `gold_current_state` is cut for this pass, see `.tmp/optmizaciones.md` §1.
+    """
+
+    __tablename__ = "gold_evolution"
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "version", name="uq_gold_evolution_entity_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Literal["component", "data_contract", "architecture"] — a subset of
+    # agents.schemas.QuestionScope, not redeclared (v6 §3); enforced by Pydantic at the
+    # application layer only, plain `String` here, same weak-DB-typing tradeoff already
+    # accepted for `operation`/`payload` (gold_process.md §8).
+    entity_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # Stable identity minted once by resolve_gold_identity, never reused across entity_types.
+    entity_id: Mapped[str] = mapped_column(String, nullable=False)
+    canonical_name: Mapped[str] = mapped_column(String, nullable=False)
+    # Per (entity_type, entity_id): 1, 2, 3... — a different axis from
+    # SilverDocument.version (whole-ADR granularity); only the hash-compare-then-bump
+    # *mechanism* is shared, not the counter itself.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # ComponentStatus | ContractAction | ArchitectureChangeType depending on entity_type —
+    # agents.schemas, not redeclared here.
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+    # The only embedded field — clean prose for semantic search, never a restatement of
+    # `payload`'s structured data (gold_process.md §1, v6 §5).
+    narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    # ComponentPayload | DataContractPayload | ArchitecturePayload (agents.schemas),
+    # validated at the application layer before being written here.
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    embedding: Mapped[list[float]] = mapped_column(Vector(settings.embedding_dim), nullable=False)
+    # sha256(operation, narrative, canonical-JSON payload) — see agents.gold_service._entity_hash.
+    entity_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_component: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source_adr_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Event-time: the meeting date this version was asserted at (copied from
+    # silver_documents.ingestion_date), not when this row was written — see changed_at below.
+    ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GoldAlias(Base):
+    """Identity-resolution lookup only (`gold_process.md` §3) — one row per distinct raw name
+    variant ever seen for an entity, not per version, so it stays small relative to
+    `gold_evolution` regardless of how much history accumulates. Owns nothing: the
+    `entity_id` values it resolves to live only as plain strings on `gold_evolution` rows, no
+    FK relationship in either direction (same flat, no-FK convention as `gold_evolution`
+    itself, v6 §1).
+
+    Resolution flow: exact match on `alias` -> `pg_trgm` fuzzy match on the same column ->
+    mint a new `entity_id` (`agents.gold_service.resolve_entity_id`)."""
+
+    __tablename__ = "gold_aliases"
+    __table_args__ = (
+        UniqueConstraint("entity_type", "entity_id", "alias", name="uq_gold_aliases_entity_alias"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    entity_id: Mapped[str] = mapped_column(String, nullable=False)
+    alias: Mapped[str] = mapped_column(String, nullable=False)
+    source_component: Mapped[str] = mapped_column(String, nullable=False)
+    source_adr_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

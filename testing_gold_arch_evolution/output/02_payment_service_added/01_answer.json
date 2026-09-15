@@ -1,0 +1,62 @@
+{
+  "question": "Is the latest change to the Order Events contract backward compatible for existing consumers?",
+  "expected_entity": {
+    "canonical_name": "Order Events",
+    "entity_type": "data_contract",
+    "operation": "forward-update"
+  },
+  "entity_hit": true,
+  "operation_hit": true,
+  "keyword_hit": true,
+  "retrieved": [
+    {
+      "entity_type": "data_contract",
+      "canonical_name": "Order Events",
+      "version": 2,
+      "operation": "forward-update"
+    },
+    {
+      "entity_type": "data_contract",
+      "canonical_name": "Order Events",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 1,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 2,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Order Service",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 2,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Order Service",
+      "version": 2,
+      "operation": "modified"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 1,
+      "operation": "unchanged"
+    }
+  ],
+  "answer": "Yes. The latest Order Events update (v1.1.0) adds an optional `payment_method` field, making it an additive, backward-compatible change; existing consumers are not affected."
+}

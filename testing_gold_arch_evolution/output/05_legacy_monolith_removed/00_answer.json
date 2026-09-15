@@ -1,0 +1,62 @@
+{
+  "question": "What happened to Legacy Order Monolith?",
+  "expected_entity": {
+    "canonical_name": "Legacy Order Monolith",
+    "entity_type": "component",
+    "operation": "removed"
+  },
+  "entity_hit": true,
+  "operation_hit": true,
+  "keyword_hit": true,
+  "retrieved": [
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 5,
+      "operation": "removed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 3,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 1,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 2,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 4,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 5,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Inventory Service",
+      "version": 3,
+      "operation": "modified"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Notification Service",
+      "version": 2,
+      "operation": "modified"
+    }
+  ],
+  "answer": "Legacy Order Monolith was fully retired and decommissioned in the latest architecture version. Its order-processing responsibilities were migrated to Order Service, Payment Service, Inventory Service, and Notification Service, and no logic or dependencies remain in the monolith."
+}

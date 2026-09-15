@@ -1,0 +1,5 @@
+[
+  {"canonical_name": "Legacy Order Monolith", "entity_type": "component", "operation": "removed"},
+  {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "removed"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 5}
+]

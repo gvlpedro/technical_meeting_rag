@@ -1,0 +1,62 @@
+{
+  "question": "How did Order Service change in this latest update?",
+  "expected_entity": {
+    "canonical_name": "Order Service",
+    "entity_type": "component",
+    "operation": "modified"
+  },
+  "entity_hit": true,
+  "operation_hit": true,
+  "keyword_hit": true,
+  "retrieved": [
+    {
+      "entity_type": "component",
+      "canonical_name": "Order Service",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Legacy Order Monolith",
+      "version": 2,
+      "operation": "unchanged"
+    },
+    {
+      "entity_type": "data_contract",
+      "canonical_name": "Order Events",
+      "version": 2,
+      "operation": "forward-update"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 1,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Order Service",
+      "version": 2,
+      "operation": "modified"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 2,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "data_contract",
+      "canonical_name": "Order Events",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Payment Service",
+      "version": 1,
+      "operation": "new"
+    }
+  ],
+  "answer": "In the latest update, Order Service adds idempotency for order-confirmation submissions, deduplicating retries via an idempotency key to prevent duplicate processing. It now publishes Order Events v1.1.0 via Kafka, including optional payment-method information for Payment Service to process charges independently."
+}

@@ -1,0 +1,64 @@
+CHECKLIST — testing_gold_arch_evolution (suite-level, general)
+
+This checklist runs once, after all 5 steps finish. test_golden_set.py's
+`_run_checklist_deterministic` runs every item below. It checks the full
+5-step order_fulfillment_platform.en.vtt history (2026-01-15 to 2026-05-15).
+
+Each item marked [DETERMINISTIC] is a mechanical check on gold_evolution or
+gold_aliases. Each DETERMINISTIC item gates the test.
+
+One item is marked [JUDGMENT]. This item is informational only. It never
+gates the test.
+
+1. [DETERMINISTIC] The "Order Events" data contract (entity_type=data_contract)
+   has exactly 5 gold_evolution rows for
+   source_component=order_fulfillment_platform.en.vtt. Their `operation`
+   values, in version order, equal exactly:
+
+       [new, forward-update, break-change, deprecated, removed]
+
+   This is the full ContractAction lifecycle on one entity_id, across the 5
+   steps. It is the clearest proof that hash-compare-then-bump versioning
+   works over a real, growing history.
+
+2. [DETERMINISTIC] Top-k cosine-similarity retrieval (k=8) over
+   gold_evolution.embedding, for the question "What happened to the legacy
+   monolith?", surfaces Legacy Order Monolith's `removed` row in the top 8
+   results. A real LLM answer, drafted from those retrieved rows, contains at
+   least one of these words: removed, retired, decommissioned.
+
+3. [DETERMINISTIC] No gold_evolution row for
+   source_component=order_fulfillment_platform.en.vtt has an `entity_type`
+   outside {component, data_contract, architecture}. No row has an
+   `operation` outside the closed ComponentStatus, ContractAction, and
+   ArchitectureChangeType vocabulary. In particular, no row has
+   `operation == "unknown"`. This proves that
+   agents.graph.persist_gold_evolution's "unknown never reaches Gold" rule
+   holds end to end, under a real LLM, across a real multi-step history — not
+   only the single-step, faked-LLM path that
+   tests/test_clarification_loop.py already covers.
+
+4. [DETERMINISTIC] `agents.gold_service.current_gold_state(session,
+   entity_type="component")`, restricted to this suite's own five component
+   canonical names, reports exactly these components as still present
+   (latest operation != "removed"): Order Service, Payment Service, Inventory
+   Service, Notification Service. This restriction stops unrelated rows
+   elsewhere in the database from changing the result. Legacy Order Monolith
+   is excluded. Its latest gold_evolution version has operation "removed".
+
+5. [JUDGMENT] A free-form question asks: "summarize how the architecture
+   evolved from start to finish." A top-10 retrieval over the whole history
+   answers this question. A second, informational-only LLM call judges the
+   answer against the known 5-step story:
+
+       Order Service launches alongside an unchanged Legacy Order Monolith.
+       Payment Service is added. Order Events gains a compatible field.
+       Inventory Service is added. Order Events gets a breaking change to its
+       buyer_id field. Notification Service is added. Order Events is
+       deprecated. Legacy Order Monolith is retired. Order Events is fully
+       removed.
+
+   This item is recorded to output/result.json for a human to read. It never
+   gates this suite. testing_adr_acb's own README already documents a
+   probabilistic judge deciding pass/fail as a past source of flakiness. Only
+   the deterministic items above gate here too.

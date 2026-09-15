@@ -240,6 +240,16 @@ A component may be:
 * Storage system
 * Other architectural building block
 
+**Queue/Topic vs. data contract — do not double-list.** A named event, message, or data flow
+you are identifying as a data contract in PHASE 6 (because it fits "Event"/"Message"/"Stream"
+there) is not *also* a component here just because it moves over a queue or topic. "Topic"/
+"Queue" as a component type means the underlying broker/infrastructure is itself being
+discussed as an architectural building block (e.g. "we're sharding the order-events topic
+across three partitions for throughput") — not merely that a data contract happens to be
+delivered over one. If a name only ever appears as "X is delivered over Kafka" / "X changes to
+add a field" / "X moves from v1.0 to v1.1", that is a data contract changing, not a new or
+modified component — list it once, under PHASE 6 only.
+
 For every component determine its change status.
 
 Allowed statuses:
@@ -474,6 +484,9 @@ A data contract may represent:
 * Stream
 * Data product
 * Other exchanged data structure
+
+See PHASE 3's "Queue/Topic vs. data contract" note — if you're listing a name here, it does not
+also belong in `mentioned_components`, even if it's delivered over a queue/topic.
 
 At this stage, identification is enough: name, producer, consumer, and action. Do **not** ask
 about its schema, quality rules, SLA, or full ODCS metadata here — that is the next stage's job,

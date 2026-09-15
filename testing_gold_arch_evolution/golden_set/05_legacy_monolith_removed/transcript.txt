@@ -1,0 +1,35 @@
+Architecture sync — Order Fulfillment Platform, May 2026.
+
+Two removals this month, and nothing else changes.
+
+Legacy Order Monolith is being fully retired and removed today. Its remaining order-processing
+responsibilities have all been migrated over the last four months to Order Service, Payment
+Service, Inventory Service, and Notification Service, so there is nothing left running inside the
+monolith, and it is being decommissioned entirely — removed from the architecture as of this
+release.
+
+Order Events is being removed entirely in this update as well. Payment Service, its last
+remaining consumer, finished migrating to reading buyer confirmation details from Payment
+Confirmed last cycle, so Order Service stops publishing Order Events starting today — the
+contract is fully retired, not just deprecated anymore.
+
+We're retiring Legacy Order Monolith now, instead of leaving it running indefinitely as a passive
+safety net, because keeping unused legacy code running in production carries real operational and
+security risk with no offsetting benefit once nothing depends on it anymore — the alternative of
+keeping it around as a passive fallback was considered and rejected for that reason. The
+consequence is that all order processing now runs exclusively through Order Service, Payment
+Service, Inventory Service, and Notification Service; there is no rollback path back to the
+monolith if a bug is found, which the team explicitly accepted given the extensive migration
+testing already completed over the last four releases.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if removing the monolith causes data drift or reliability issues it can't reconcile with
+the current approach. Implementation includes updating monitoring dashboards, on-call runbooks,
+and internal documentation for every changed component and contract described above; this
+migration stage is considered complete once all target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline.

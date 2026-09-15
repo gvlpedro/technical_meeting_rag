@@ -1,0 +1,62 @@
+{
+  "question": "Is Notification Service new, and what does it do?",
+  "expected_entity": {
+    "canonical_name": "Notification Service",
+    "entity_type": "component",
+    "operation": "new"
+  },
+  "entity_hit": true,
+  "operation_hit": true,
+  "keyword_hit": true,
+  "retrieved": [
+    {
+      "entity_type": "component",
+      "canonical_name": "Notification Service",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 4,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Inventory Service",
+      "version": 2,
+      "operation": "modified"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Payment Service",
+      "version": 2,
+      "operation": "modified"
+    },
+    {
+      "entity_type": "architecture",
+      "canonical_name": "order_fulfillment_platform.en.vtt",
+      "version": 3,
+      "operation": "changed"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Order Service",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "data_contract",
+      "canonical_name": "Stock Updated",
+      "version": 1,
+      "operation": "new"
+    },
+    {
+      "entity_type": "component",
+      "canonical_name": "Payment Service",
+      "version": 3,
+      "operation": "modified"
+    }
+  ],
+  "answer": "Yes. Notification Service is a newly introduced dedicated component that subscribes to Inventory Service’s Stock Updated events after stock reservation. It sends customer confirmation notifications across email, SMS, and push, centralizing notification-channel complexity instead of duplicating it in other services."
+}

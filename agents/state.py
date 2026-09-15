@@ -84,6 +84,13 @@ class SilverState(TypedDict):
     active_sources: list[str]  # source_components synthesize/critic/boss are working on this pass
     redraft_only: list[str] | None  # set by boss_decide: redraft just these sources, not the batch
     interrupt_origin: Literal["classify", "boss"]  # how ask_human should interpret its resume payload
+    # Gold (.tmp/gold_process_v5.md §1-2) — three more nodes appended after chunk_and_embed,
+    # sharing this same graph run instead of a separately triggered pass. Neither field needs
+    # to survive an `interrupt()`/resume cycle (Gold nodes never interrupt), but both live in
+    # state rather than as node-local variables so a redraft's second pass through this graph
+    # doesn't lose an earlier source's already-computed extraction.
+    gold_extractions: dict[str, dict]  # source_component -> extract_gold_facts' GoldExtractionResult
+    gold_entity_ids: dict[str, dict[str, str]]  # source_component -> {raw name -> resolved entity_id}
 
 
 def initial_state(ingestion_date: str) -> SilverState:
@@ -104,4 +111,6 @@ def initial_state(ingestion_date: str) -> SilverState:
         "active_sources": [],
         "redraft_only": None,
         "interrupt_origin": "classify",
+        "gold_extractions": {},
+        "gold_entity_ids": {},
     }

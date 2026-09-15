@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1300" role="img" aria-label="Test flow of testing_gold_arch_evolution: truncate the test tables, run 5 real transcripts through the full LangGraph one month at a time while checking each step's Gold facts and QA retrieval, then run a suite-level checklist of 5 items, then truncate again.">
+  <title>testing_gold_arch_evolution — test flow</title>
+  <desc>Step-by-step flow of test_golden_set.py::test_gold_arch_evolution_five_steps, showing which steps call a real LLM, which checks gate the test, and which are informational only.</desc>
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #ffffff; }
+      .title { font-size: 22px; font-weight: 700; }
+      .h { font-size: 14px; font-weight: 700; }
+      .b { font-size: 12px; fill: #c3c2b7; }
+      .small { font-size: 11px; fill: #898781; }
+      .edgeLabel { font-size: 11px; fill: #c3c2b7; }
+      .tag { font-size: 10px; font-weight: 700; }
+      .loopLabel { font-size: 12px; font-weight: 700; fill: #c3c2b7; }
+      .surface { fill: #1a1a19; stroke: #383835; stroke-width: 1.5; }
+      .llm { fill: #1a1a19; stroke: #3987e5; stroke-width: 2; }
+      .term { fill: #0ca30c; }
+      .loopBox { fill: none; stroke: #383835; stroke-width: 1.5; stroke-dasharray: 5 5; }
+      .edge { stroke: #898781; stroke-width: 1.75; fill: none; }
+      .edgeDashed { stroke: #898781; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; }
+    </style>
+    <marker id="aGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#898781"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1500" height="1300" fill="#0d0d0d"/>
+
+  <text x="650" y="26" text-anchor="middle" class="title">testing_gold_arch_evolution — test flow</text>
+  <text x="650" y="46" text-anchor="middle" class="b">test_golden_set.py :: test_gold_arch_evolution_five_steps — every LLM call and Postgres write is real</text>
+
+  <!-- Legend -->
+  <rect x="1080" y="130" width="380" height="330" rx="10" class="surface"/>
+  <text x="1104" y="158" class="h">Legend</text>
+
+  <rect x="1104" y="180" width="18" height="18" class="llm"/>
+  <text x="1134" y="194" class="b">Real LLM call inside this step</text>
+
+  <rect x="1104" y="218" width="18" height="18" class="surface"/>
+  <text x="1134" y="232" class="b">Deterministic — no LLM call</text>
+
+  <text x="1104" y="264" class="tag" fill="#d95926">GATES</text>
+  <text x="1180" y="264" class="b">fails the test if this check fails</text>
+
+  <text x="1104" y="294" class="tag" fill="#9085e9">INFO</text>
+  <text x="1180" y="294" class="b">recorded for a human, never fails the test</text>
+
+  <circle cx="1113" cy="322" r="10" class="term"/>
+  <text x="1134" y="327" class="b">test start / test end</text>
+
+  <line x1="1096" y1="358" x2="1132" y2="358" class="edge"/>
+  <text x="1140" y="362" class="b">next step in order</text>
+
+  <line x1="1096" y1="392" x2="1132" y2="392" class="edgeDashed"/>
+  <text x="1140" y="396" class="b">loop back to the next case</text>
+
+  <rect x="1096" y="416" width="36" height="24" class="loopBox"/>
+  <text x="1140" y="432" class="b">runs once per golden-set case</text>
+
+  <!-- START -->
+  <rect x="550" y="64" width="200" height="44" rx="22" class="term"/>
+  <text x="650" y="91" text-anchor="middle" class="h" fill="#0d0d0d">START</text>
+  <line x1="650" y1="108" x2="650" y2="134" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- defensive truncate -->
+  <rect x="300" y="134" width="700" height="56" rx="10" class="surface"/>
+  <text x="324" y="158" class="h">_cleanup_all() — TRUNCATE test tables</text>
+  <text x="324" y="176" class="small">defensive: a previous crashed run may have left rows behind</text>
+  <line x1="650" y1="190" x2="650" y2="216" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- loop container -->
+  <rect x="230" y="216" width="840" height="470" rx="12" class="loopBox"/>
+  <text x="254" y="240" class="loopLabel">REPEAT × 5 — one step per month, 2026-01-15 → 2026-05-15, same source_component</text>
+
+  <!-- A: load + insert bronze -->
+  <rect x="270" y="256" width="760" height="56" rx="10" class="surface"/>
+  <text x="294" y="280" class="h">Load fixture + insert Bronze row</text>
+  <text x="294" y="298" class="small">reads transcript.txt / expected_gold_facts.json / qa.json, writes one BronzeDocument row</text>
+  <line x1="650" y1="312" x2="650" y2="338" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- B: run to completion -->
+  <rect x="270" y="338" width="760" height="76" rx="10" class="llm"/>
+  <text x="1010" y="356" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="294" y="362" class="h">_run_to_completion — runs the real LangGraph</text>
+  <text x="294" y="382" class="small">every node of agents/graph.py runs for real, on real infra</text>
+  <text x="294" y="398" class="small">auto-resumes any interrupt() with a fixed fallback answer</text>
+  <line x1="650" y1="414" x2="650" y2="440" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- C: debug dump + interrupt check -->
+  <rect x="270" y="440" width="760" height="56" rx="10" class="surface"/>
+  <text x="1010" y="458" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="294" y="464" class="h">Write extraction_debug.json, then check for open interrupts</text>
+  <text x="294" y="482" class="small">fails if the graph still has a pending interrupt after resuming</text>
+  <line x1="650" y1="496" x2="650" y2="522" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- D: assert expected gold facts -->
+  <rect x="270" y="522" width="760" height="64" rx="10" class="surface"/>
+  <text x="1010" y="540" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="294" y="546" class="h">_assert_expected_gold_facts</text>
+  <text x="294" y="564" class="small">compares this step's gold_evolution rows against expected_gold_facts.json</text>
+  <text x="294" y="580" class="small">checks entity, operation, and — where unambiguous — version</text>
+  <line x1="650" y1="586" x2="650" y2="612" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- E: run qa -->
+  <rect x="270" y="612" width="760" height="88" rx="10" class="llm"/>
+  <text x="1010" y="630" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="294" y="636" class="h">_run_qa — retrieve + answer + score, per question in qa.json</text>
+  <text x="294" y="654" class="small">embed_question → top_k_gold_evolution (cosine) → answer_question</text>
+  <text x="294" y="670" class="small"><tspan fill="#d95926" font-weight="700">GATES</tspan> entity_hit + keyword_hit · <tspan fill="#9085e9" font-weight="700">INFO</tspan> operation_hit</text>
+  <text x="294" y="688" class="small">writes output/&lt;step&gt;/*.json, records this step's result</text>
+
+  <!-- loop-back -->
+  <polyline points="1030,656 1076,656 1076,236 1030,236" class="edgeDashed" marker-end="url(#aGray)" fill="none"/>
+  <text x="1080" y="446" class="edgeLabel" transform="rotate(-90 1080 446)">next step — version grows 1→5</text>
+
+  <line x1="650" y1="686" x2="650" y2="716" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- checklist section -->
+  <text x="686" y="708" text-anchor="start" class="loopLabel">AFTER ALL 5 STEPS — checklist.txt runs once</text>
+
+  <!-- checklist 1 -->
+  <rect x="300" y="726" width="700" height="56" rx="10" class="surface"/>
+  <text x="990" y="744" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="324" y="750" class="h">1. Order Events' full lifecycle</text>
+  <text x="324" y="768" class="small">new → forward-update → break-change → deprecated → removed, in that order</text>
+  <line x1="650" y1="782" x2="650" y2="800" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- checklist 2 -->
+  <rect x="300" y="800" width="700" height="64" rx="10" class="llm"/>
+  <text x="990" y="818" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="990" y="850" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="324" y="824" class="h">2. Legacy monolith retrieval</text>
+  <text x="324" y="842" class="small">top-k must surface its removed row; generated answer must confirm removal</text>
+  <line x1="650" y1="864" x2="650" y2="882" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- checklist 3 -->
+  <rect x="300" y="882" width="700" height="56" rx="10" class="surface"/>
+  <text x="990" y="900" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="324" y="906" class="h">3. Closed vocabulary</text>
+  <text x="324" y="924" class="small">no row may use an operation or entity_type outside the closed set</text>
+  <line x1="650" y1="938" x2="650" y2="956" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- checklist 4 -->
+  <rect x="300" y="956" width="700" height="64" rx="10" class="surface"/>
+  <text x="990" y="974" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="324" y="980" class="h">4. current_gold_state(component)</text>
+  <text x="324" y="998" class="small">reports exactly the 4 live components; the removed monolith is excluded</text>
+  <line x1="650" y1="1020" x2="650" y2="1038" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- checklist 5 -->
+  <rect x="300" y="1038" width="700" height="88" rx="10" class="llm"/>
+  <text x="990" y="1056" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="990" y="1088" text-anchor="end" class="tag" fill="#9085e9">INFO</text>
+  <text x="324" y="1062" class="h">5. Summary judgment</text>
+  <text x="324" y="1080" class="small">a second LLM judges a free-form summary of the whole 5-step history</text>
+  <text x="324" y="1096" class="small">writes checklist_summary_answer.txt + checklist_judgment.json — never gates</text>
+
+  <line x1="650" y1="1126" x2="650" y2="1152" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- final cleanup -->
+  <rect x="300" y="1152" width="700" height="56" rx="10" class="surface"/>
+  <text x="324" y="1176" class="h">_cleanup_all() — TRUNCATE test tables</text>
+  <text x="324" y="1194" class="small">runs in a `finally` block — always runs, whether the test passed or failed</text>
+  <line x1="650" y1="1208" x2="650" y2="1234" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- END -->
+  <rect x="550" y="1234" width="200" height="44" rx="22" class="term"/>
+  <text x="650" y="1261" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+</svg>

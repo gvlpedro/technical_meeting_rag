@@ -37,7 +37,17 @@ Complete classification process (question generation / human answers / ADR gener
 make clarify DATE=20260515 INTERACTIVE=1
 ```
 
+Chat with the agent (interactive mode) :
+```bash
+make chat
+```
+
 ## ACTOR CRITIC BOSS TESTS
+
+Make sure the schema is up to date first:
+```bash
+make migrate
+```
 
 Testing actor-critic-boss for architecture questions
 ```bash
@@ -54,3 +64,7 @@ Testing actor-critic-boss for data contract questions
 make test-data-contract-acb
 ```
 
+Automated E2E test — ingests 5 sequential real transcripts (~10 min)
+```bash
+make test-gold-arch-evolution
+```

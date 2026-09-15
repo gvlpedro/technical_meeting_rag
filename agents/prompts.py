@@ -1,3 +1,4 @@
+import json
 from typing import TypedDict
 
 import jinja2
@@ -13,6 +14,7 @@ from agents.template import (
     load_adr_generation_role,
     load_architecture_question_generation_role,
     load_data_contract_question_generation_role,
+    load_gold_extraction_role,
     load_question_classifier_role,
 )
 
@@ -125,6 +127,27 @@ def build_adr_generation_prompt(transcript_text: str, clarifications: list[QaPai
     prompt = role_template.render(
         transcript=transcript_text,
         clarifications=_qa_pairs_block(clarifications),
+    )
+    return [{"role": "user", "content": prompt}]
+
+
+def build_gold_extraction_prompt(
+    adr_content: str, mentioned_components: list[dict], mentioned_data_contracts: list[dict]
+) -> list[dict]:
+    """Renders `prompts/gold_extraction.jinja` — one LLM call per source, run inside Silver's
+    own graph right after the ADR is approved (`.tmp/gold_process_v5.md` §1-2), not a
+    separately triggered pass over `silver_documents` rows. `mentioned_components`/
+    `mentioned_data_contracts` here are already this source's own grounded lists (`agents.
+    service.mentions_grounded_in_source`'s output, the same one `write_document` persisted to
+    `SilverDocument.mentioned_component_names`/`mentioned_data_contract_names`) — plain dicts,
+    JSON-dumped directly rather than going through a block-formatter like
+    `_mentioned_data_contracts_block` above, since this prompt wants the raw shape (including
+    `status`/`action`), not a human-readable summary line."""
+    role_template = jinja2.Template(load_gold_extraction_role())
+    prompt = role_template.render(
+        adr_content=adr_content,
+        mentioned_components=json.dumps(mentioned_components),
+        mentioned_data_contracts=json.dumps(mentioned_data_contracts),
     )
     return [{"role": "user", "content": prompt}]
 

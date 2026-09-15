@@ -5,7 +5,7 @@ document directly as Markdown (`doc/silver_process.md` §3 node 5: "no intermedi
 structured JSON"), so its response is used as raw text, not parsed against a model.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -24,6 +24,9 @@ ContractAction = Literal[
 QuestionScope = Literal[
     "metadata", "component", "architecture", "data_contract", "adr", "change_impact", "migration"
 ]
+# `gold_evolution.entity_type` — a subset of QuestionScope, imported rather than redeclared
+# (refactor v6 §3: one definition both layers import, so a fourth entity type is added once).
+GoldEntityType = Literal["component", "data_contract", "architecture"]
 
 
 class MentionedComponent(BaseModel):
@@ -113,3 +116,100 @@ class CritiqueClaim(BaseModel):
 
 class CritiqueResult(BaseModel):
     claims: list[CritiqueClaim]
+
+
+# --- Gold extraction (.tmp/gold_process.md v4, .tmp/gold_process_v5.md,
+# .tmp/refactor_silver_and_gold_process_v6.md) -------------------------------------------
+
+# `"changed"|"unchanged"` — ComponentStatus/ContractAction don't apply to the
+# architecture-as-a-whole entity (no "new"/"removed" architecture), so it gets its own,
+# smaller literal rather than overloading one of the other two with a meaning it wasn't
+# designed for (v6 §3).
+ArchitectureChangeType = Literal["changed", "unchanged"]
+# `gold_evolution.operation` — ComponentStatus for entity_type=="component", ContractAction for
+# "data_contract", ArchitectureChangeType for "architecture" (v6 §3). One combined type so
+# `agents.gold_service.persist_entity_version`/`_entity_hash`, which persist all three shapes
+# through the same column, don't fall back to a bare `str` just because they can't pick a single
+# one of the three literals ahead of time. Still includes "unknown" (inherited from
+# ComponentStatus/ContractAction) at the type level — the runtime guarantee that "unknown" never
+# actually reaches this column lives in `agents.graph.persist_gold_evolution`'s skip, not here.
+GoldOperation = ComponentStatus | ContractAction | ArchitectureChangeType
+
+
+class ComponentPayload(BaseModel):
+    """`gold_evolution.payload` shape for `entity_type == "component"` — exact/structural
+    data only, `entity_id` references (already resolved by `resolve_gold_identity`), never raw
+    names. Small and fully typed, unlike `DataContractPayload` below."""
+
+    dependency_ids: list[str] = []
+    contract_ids: list[str] = []
+
+
+class DataContractPayload(BaseModel):
+    """`gold_evolution.payload` shape for `entity_type == "data_contract"`. Deliberately NOT
+    fully typed (v6 §5): ODCS keeps growing (quality rules, servers, team/ownership, SLAs) and
+    is already an external, versioned standard — re-modeling all of it in Pydantic means
+    maintaining a second, parallel copy that drifts the moment ODCS adds a field this schema
+    didn't anticipate. Only `producer`/`consumer` are typed, because those are the two fields
+    Gold actually filters/joins on; `odcs_spec` is stored and returned opaque."""
+
+    producer: str
+    consumer: str
+    odcs_spec: dict[str, Any] = {}
+
+
+class ArchitecturePayload(BaseModel):
+    """`gold_evolution.payload` shape for `entity_type == "architecture"` — a snapshot of the
+    architecture as a whole as of this ADR, not a dependency graph in its own right (no
+    dedicated graph DB/edge table — `gold_process.md` §8); `dependencies` is a flat list of
+    component names, kept only as prose-adjacent context for `mermaid_diagram`."""
+
+    mermaid_diagram: str = ""
+    components: list[str] = []
+    dependencies: list[str] = []
+
+
+class ExtractedComponent(BaseModel):
+    """One component as `extract_gold_facts` reads it out of the finished ADR — grounded
+    against `MentionedComponent`, not rediscovered from raw Markdown (the ADR prompt already
+    confirmed lifecycle status; this call refines/confirms it against the final approved text,
+    per entity, with a narrative meant for embedding).
+
+    `narrative` is prose, not a restatement of the structured fields — see
+    `prompts/gold_extraction.jinja`. `dependency_names`/`contract_names` are raw names as
+    written in the ADR; `resolve_gold_identity` resolves them to `entity_id`s afterward, this
+    model never sees an `entity_id`."""
+
+    name: str
+    status: ComponentStatus
+    narrative: str
+    dependency_names: list[str] = []
+    contract_names: list[str] = []
+
+
+class ExtractedDataContract(BaseModel):
+    """One data contract as `extract_gold_facts` reads it out of the finished ADR — same
+    grounding/narrative rules as `ExtractedComponent`. `odcs_spec` flows straight into
+    `DataContractPayload.odcs_spec`, opaque both here and there."""
+
+    name: str
+    action: ContractAction
+    narrative: str
+    producer: str
+    consumer: str
+    odcs_spec: dict[str, Any] = {}
+
+
+class GoldExtractionResult(BaseModel):
+    """`extract_gold_facts`'s one structured-extraction LLM call per source
+    (`gold_process.md` §4, folded into Silver's own graph run per `gold_process_v5.md` §2) —
+    exactly the shape `resolve_gold_identity`/`persist_gold_evolution` consume next. An
+    `ExtractedComponent`/`ExtractedDataContract` whose status/action is `"unknown"` is valid
+    output here (the extraction genuinely couldn't resolve it) but is never persisted to
+    `gold_evolution` — see `agents.gold_service.persist_entity_version`'s caller."""
+
+    components: list[ExtractedComponent] = []
+    contracts: list[ExtractedDataContract] = []
+    architecture_change: ArchitectureChangeType
+    architecture_narrative: str
+    mermaid_diagram: str = ""

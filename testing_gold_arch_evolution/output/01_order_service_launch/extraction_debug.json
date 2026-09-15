@@ -1,0 +1,130 @@
+{
+  "mentioned_components": [
+    {
+      "name": "Order Service",
+      "status": "new"
+    },
+    {
+      "name": "Legacy Order Monolith",
+      "status": "unchanged"
+    }
+  ],
+  "mentioned_data_contracts": [
+    {
+      "name": "Order Events",
+      "producer": "Order Service",
+      "consumer": "unknown",
+      "action": "new"
+    }
+  ],
+  "gold_extractions": {
+    "order_fulfillment_platform.en.vtt": {
+      "components": [
+        {
+          "name": "Order Service",
+          "status": "new",
+          "narrative": "Order Service is a newly introduced, independently deployable component that owns new checkout-to-fulfillment flows. It produces the Order Events contract after an order is confirmed. This service represents a strategic shift away from expanding the Legacy Order Monolith, allowing new order logic to be developed and deployed independently.",
+          "dependency_names": [],
+          "contract_names": [
+            "Order Events"
+          ]
+        },
+        {
+          "name": "Legacy Order Monolith",
+          "status": "unchanged",
+          "narrative": "Legacy Order Monolith continues to handle order-processing responsibilities and flows not yet migrated to Order Service. During the gradual migration, it remains unchanged and will temporarily coexist with Order Service, handling legacy flows until they are fully transitioned to the new service.",
+          "dependency_names": [],
+          "contract_names": []
+        }
+      ],
+      "contracts": [
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        },
+        {
+          "name": "Order Events",
+          "action": "new",
+          "narrative": "Order Events is a new Kafka-delivered data contract produced by Order Service upon order confirmation. Version 1.0.0 is active and targets 99.9% availability with 90-day retention. The contract carries order identification, buyer information, and total amount. At launch, no consumer is wired up; consumer integration is deferred to a later phase.",
+          "producer": "Order Service",
+          "consumer": "unknown",
+          "odcs_spec": {}
+        }
+      ],
+      "architecture_change": "changed",
+      "architecture_narrative": "The architecture evolves from a single Legacy Order Monolith to a hybrid model where Order Service is introduced as a new, independently deployable component for new checkout-to-fulfillment flows. Order Service produces the Order Events contract, enabling event-driven integration patterns. The Legacy Order Monolith remains unchanged and continues to handle existing order-processing responsibilities during a gradual migration period. This change reduces risk by isolating new logic from the legacy codebase while enabling parallel development and eventual full migration.",
+      "mermaid_diagram": "flowchart LR\n    OrderService[\"Order Service\"] -->|Publishes after order confirmation| OrderEvents[\"Order Events\"]\n    LegacyOrderMonolith[\"Legacy Order Monolith\"]"
+    }
+  },
+  "documents": {
+    "order_fulfillment_platform.en.vtt": "# ADR — Launch Order Service and Order Events\n\n## 1. ADR\n\n### Context\n\nLegacy Order Monolith currently handles the relevant order-processing responsibilities. Its codebase is considered too risky to modify further.\n\nThis change launches Order Service as a fresh, independently deployable component for new checkout-to-fulfillment flows. Order Service publishes the new Order Events contract after an order is confirmed. Legacy Order Monolith remains unchanged during the gradual migration of flows over subsequent releases.\n\n### Decision\n\n- Introduce Order Service as a new independently deployable component for new checkout-to-fulfillment flows.\n- Keep Legacy Order Monolith unchanged to handle order-processing responsibilities and flows not yet migrated to Order Service.\n- Introduce Order Events version 1.0.0 as a new Kafka-delivered contract produced by Order Service.\n\n### Consequences\n\n- New order logic can be placed in a fresh, independently deployable service rather than further expanding Legacy Order Monolith.\n- During the migration, order-processing logic will temporarily exist in both Order Service and Legacy Order Monolith.\n- Order Events has no consumer wired up at launch; consumer integration is deferred to a later phase.\n- Monitoring dashboards, on-call runbooks, and internal documentation must be updated for new or changed components and contracts.\n- The decision will be revisited if the migration causes unreconcilable data drift or reliability issues.\n\n## 2. Previous Architecture\n\n```mermaid\nflowchart LR\n    LegacyOrderMonolith[\"Legacy Order Monolith\"]\n```\n\n## 3. Target Architecture\n\n```mermaid\nflowchart LR\n    OrderService[\"Order Service\"] -->|Publishes after order confirmation| OrderEvents[\"Order Events\"]\n    LegacyOrderMonolith[\"Legacy Order Monolith\"]\n```\n\n## 4. Affected Components\n\n| Component | Change | Description |\n|---|---|---|\n| Order Service | **NEW** | Independently deployable service that owns new checkout-to-fulfillment flows and produces Order Events. |\n| Legacy Order Monolith | **UNCHANGED** | Continues handling order-processing responsibilities and flows not yet migrated to Order Service. |\n\n## 5. Affected Data Contracts\n\n| Data Contract | Component | Change | Version |\n|---|---|---|---|\n| Order Events | Order Service; no consumer at launch | **NEW** | 1.0.0 |\n\n## 6. ODCS Data Contract Specifications\n\n### 6.1 Order Events — NEW\n\n```yaml\napiVersion: v3.0.0\nkind: DataContract\nname: order-events\nversion: 1.0.0\nstatus: active\ndescription: >\n  Single-tenant Order Fulfillment platform contract produced by Order Service\n  as soon as an order is confirmed. It is delivered over Kafka, retained for\n  90 days, targets 99.9% availability, and has no consumer at launch.\nschema:\n  properties:\n    order_id:\n      type: string\n      required: true\n      description: Uniquely identifies the order.\n    buyer_id:\n      type: string\n      required: true\n      description: Identifies the customer who placed the order.\n    total_amount:\n      type: number\n      required: true\n      description: Gives the order's total value in cents.\n```\n\n## 7. ODCS Artifacts\n\n```text\norder-events/\n└── v1.0.0.yaml\n```"
+  }
+}

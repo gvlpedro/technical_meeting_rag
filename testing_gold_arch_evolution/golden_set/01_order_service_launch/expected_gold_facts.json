@@ -1,0 +1,6 @@
+[
+  {"canonical_name": "Order Service", "entity_type": "component", "operation": "new", "version": 1},
+  {"canonical_name": "Legacy Order Monolith", "entity_type": "component", "operation": "unchanged", "version": 1},
+  {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "new", "version": 1},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 1}
+]

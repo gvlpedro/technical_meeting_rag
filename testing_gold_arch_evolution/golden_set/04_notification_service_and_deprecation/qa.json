@@ -1,0 +1,12 @@
+[
+  {
+    "question": "Is Notification Service new, and what does it do?",
+    "expected_entity": {"canonical_name": "Notification Service", "entity_type": "component", "operation": "new"},
+    "expected_answer_keywords": ["new"]
+  },
+  {
+    "question": "What is the current status of the Order Events data contract as of this latest update?",
+    "expected_entity": {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "deprecated"},
+    "expected_answer_keywords": ["deprecat"]
+  }
+]

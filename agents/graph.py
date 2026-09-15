@@ -17,7 +17,6 @@ os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
 os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 import asyncio
-import hashlib
 from pathlib import Path
 from typing import Literal
 
@@ -27,8 +26,15 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from sqlalchemy import delete, select
 
+from agents import gold_service
 from agents.prompts import build_adr_generation_prompt, build_classification_prompt, build_critic_prompt
-from agents.schemas import ClassificationResult, CritiqueResult
+from agents.schemas import (
+    ArchitecturePayload,
+    ClassificationResult,
+    ComponentPayload,
+    CritiqueResult,
+    DataContractPayload,
+)
 from agents.service import (
     NoBronzeDocumentsError,
     distinct_sources,
@@ -118,9 +124,19 @@ async def generate_architecture_questions(state: SilverState) -> dict:
     result = await generate_architecture_questions_for_batch(
         state["ingestion_date"], state["bronze_documents"], architecture_diagram=""
     )
+    # A name the LLM put in BOTH lists is a data contract wearing a component's clothes, not two
+    # distinct entities — "Topic"/"Queue" is a legal component type (architecture_questions.jinja
+    # PHASE 3) and a data contract is often named after the topic/queue it's delivered over, so
+    # the two lists can genuinely collide on the same name even with the prompt's own "don't
+    # double-list" instruction (still just prompt-following, not enforced). Preferring the data
+    # contract classification here — mechanically, not by asking the LLM to try harder — means
+    # every downstream consumer (grounding checks, Gold extraction, the ADR itself) sees one
+    # consistent classification instead of each re-deciding independently.
+    contract_names = {c.name.lower() for c in result.mentioned_data_contracts}
+    components = [c for c in result.mentioned_components if c.name.lower() not in contract_names]
     return {
         "generated_questions": [q.model_dump() for q in result.questions],
-        "mentioned_components": [c.model_dump() for c in result.mentioned_components],
+        "mentioned_components": [c.model_dump() for c in components],
         "mentioned_data_contracts": [c.model_dump() for c in result.mentioned_data_contracts],
     }
 
@@ -318,10 +334,6 @@ def route_after_boss(state: SilverState) -> Literal["ask_human", "write_document
     return "ask_human" if state["pending_questions"] else "write_document"
 
 
-def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-
 async def _persist_document_version(
     session,
     ingestion_date,
@@ -344,7 +356,7 @@ async def _persist_document_version(
     identical. `_row_fields` is the single place all three branches (insert-first, overwrite,
     insert-next-version) read shared column values from, so a future column addition is a
     one-line change here instead of a hand-edit repeated across three constructor calls."""
-    new_hash = _content_hash(content)
+    new_hash = gold_service.content_hash(content)
     latest = (
         await session.execute(
             select(SilverDocument)
@@ -464,6 +476,206 @@ async def chunk_and_embed(state: SilverState) -> dict:
     return {}
 
 
+# --- Gold (.tmp/gold_process_v5.md §1-2) ----------------------------------------
+
+
+async def extract_gold_facts(state: SilverState) -> dict:
+    """One structured-extraction LLM call per source that has a written document this run
+    (`state["documents"]` — every source, not just `active_sources`, which only holds the
+    redraft target once a Boss escalation narrows it) whose `boss_verdicts` is `"ok"` —
+    skipped entirely for a source still mid-redraft (never extract from an unapproved draft,
+    though by the time this node runs every source in `state["documents"]` should already be
+    approved; the check is defensive) and for a source whose exact `(source_component,
+    version)` Gold has already processed (`gold_service.already_extracted`), so a re-run of
+    this graph for an unchanged transcript spends no extra LLM call here either.
+
+    Reuses what Silver's own run already computed instead of a separately-triggered pass
+    re-deriving it from the finished Markdown: `state["documents"][source]` (the final
+    approved ADR, already in memory) and this source's own grounded mention lists, recomputed
+    via `mentions_grounded_in_source` from the same `state["mentioned_components"]`/
+    `state["mentioned_data_contracts"]` + this source's transcript content that
+    `write_document` already used to persist `SilverDocument.mentioned_component_names`/
+    `mentioned_data_contract_names` — cheap, pure, no Postgres round-trip needed to get them
+    back."""
+    gold_extractions = dict(state["gold_extractions"])
+    async with async_session_factory() as session:
+        # Every source that had a document written this run, not just `active_sources` — the
+        # latter shrinks to just the redrafted source once a Boss escalation happens (see
+        # `boss_decide`), while `write_document`/`chunk_and_embed` already persisted/embedded
+        # every OTHER already-approved source in the same batch. Iterating `active_sources`
+        # here silently dropped those sources' Gold extraction for this run (bug found in
+        # review — they'd stay un-extracted until an unrelated future content change bumped
+        # their version again, or a manual `scripts/backfill_gold.py` run).
+        for source in state["documents"]:
+            if state["boss_verdicts"].get(source) != "ok":
+                continue
+            version = state["document_versions"][source]
+            if await gold_service.already_extracted(session, source, version):
+                continue
+
+            source_text = source_content(state["bronze_documents"], source)
+            component_mentions = mentions_grounded_in_source(source_text, state["mentioned_components"])
+            contract_mentions = mentions_grounded_in_source(source_text, state["mentioned_data_contracts"])
+            result = await gold_service.extract_gold_facts_for_source(
+                state["documents"][source], component_mentions, contract_mentions
+            )
+            gold_extractions[source] = result.model_dump()
+
+    return {"gold_extractions": gold_extractions}
+
+
+async def resolve_gold_identity(state: SilverState) -> dict:
+    """No LLM. Exact match on `gold_aliases.alias` -> `pg_trgm` fuzzy match -> mint a new
+    `entity_id` (`gold_service.resolve_entity_id`), for every name this pass's extractions
+    touch: each component/contract's own name, and every raw name in its
+    `dependency_names`/`contract_names` — those cross-references need resolving too, so
+    `persist_gold_evolution` can build `payload.dependency_ids`/`contract_ids` from
+    `entity_id`s, never raw names (`ComponentPayload`, per v6 §5).
+
+    Builds one `name -> entity_id` map per source rather than resolving inline in
+    `persist_gold_evolution` — keeps identity resolution and versioning as two separable
+    concerns, matching `gold_process.md` §3's own split between §3 (identity) and §5
+    (versioning)."""
+    entity_id_maps = dict(state["gold_entity_ids"])
+
+    async with async_session_factory() as session:
+        for source, extraction in state["gold_extractions"].items():
+            version = state["document_versions"][source]
+            name_to_id: dict[str, str] = dict(entity_id_maps.get(source, {}))
+
+            for component in extraction["components"]:
+                if component["status"] == "unknown":
+                    continue
+                await gold_service.resolve_and_alias(session, "component", component["name"], name_to_id, source, version)
+                for dep_name in component.get("dependency_names", []):
+                    await gold_service.resolve_and_alias(session, "component", dep_name, name_to_id, source, version)
+                for contract_name in component.get("contract_names", []):
+                    await gold_service.resolve_and_alias(
+                        session, "data_contract", contract_name, name_to_id, source, version
+                    )
+
+            for contract in extraction["contracts"]:
+                if contract["action"] == "unknown":
+                    continue
+                await gold_service.resolve_and_alias(
+                    session, "data_contract", contract["name"], name_to_id, source, version
+                )
+
+            entity_id_maps[source] = name_to_id
+        await session.commit()
+
+    return {"gold_entity_ids": entity_id_maps}
+
+
+async def _persist_components(
+    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date
+) -> None:
+    for component in extraction["components"]:
+        if component["status"] == "unknown":
+            continue
+        # `if n in name_to_id` is unreachable today, not a real filter: both this loop and
+        # `resolve_gold_identity` iterate the identical `state["gold_extractions"]` with the
+        # identical `status == "unknown"` skip, so every dependency_name/contract_name reachable
+        # here was already resolved into name_to_id there. Kept as a guard against the two loops'
+        # coverage ever drifting apart in a future change — if it ever fires, that's the signal.
+        # Sorted, not just in whatever order the LLM listed them: `_entity_hash` canonicalizes
+        # dict key order but not list element order, so an unordered list here would hash
+        # differently between two logically-identical extractions — a spurious version bump.
+        payload = ComponentPayload(
+            dependency_ids=sorted(
+                {name_to_id[n] for n in component.get("dependency_names", []) if n in name_to_id}
+            ),
+            contract_ids=sorted(
+                {name_to_id[n] for n in component.get("contract_names", []) if n in name_to_id}
+            ),
+        ).model_dump()
+        await gold_service.persist_entity_version(
+            session,
+            entity_type="component",
+            entity_id=name_to_id[component["name"]],
+            canonical_name=component["name"],
+            operation=component["status"],
+            narrative=component["narrative"],
+            payload=payload,
+            source_component=source,
+            source_adr_version=version,
+            ingestion_date=ingestion_date,
+        )
+
+
+async def _persist_contracts(
+    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date
+) -> None:
+    for contract in extraction["contracts"]:
+        if contract["action"] == "unknown":
+            continue
+        payload = DataContractPayload(
+            producer=contract["producer"],
+            consumer=contract["consumer"],
+            odcs_spec=contract.get("odcs_spec", {}),
+        ).model_dump()
+        await gold_service.persist_entity_version(
+            session,
+            entity_type="data_contract",
+            entity_id=name_to_id[contract["name"]],
+            canonical_name=contract["name"],
+            operation=contract["action"],
+            narrative=contract["narrative"],
+            payload=payload,
+            source_component=source,
+            source_adr_version=version,
+            ingestion_date=ingestion_date,
+        )
+
+
+async def _persist_architecture(session, extraction: dict, source: str, version: int, ingestion_date) -> None:
+    """Scoped **per source_component**, not one global "architecture as a whole" entity across
+    every source in the batch — reconciling multiple sources' architecture views into one entity
+    is cross-source coordination, which `.tmp/gold_process_v5.md` §6 explicitly keeps out of a
+    single graph run for this pass. Each source gets its own `architecture:<source_component>`
+    entity_id, versioned independently; merging them into one global view is future work."""
+    # Sorted for the same reason as ComponentPayload's dependency_ids/contract_ids — order must
+    # not affect `_entity_hash`, and what's persisted should be order-stable too.
+    payload = ArchitecturePayload(
+        mermaid_diagram=extraction.get("mermaid_diagram", ""),
+        components=sorted({c["name"] for c in extraction["components"]}),
+        dependencies=sorted({dep for c in extraction["components"] for dep in c.get("dependency_names", [])}),
+    ).model_dump()
+    await gold_service.persist_entity_version(
+        session,
+        entity_type="architecture",
+        entity_id=f"architecture:{source}",
+        canonical_name=source,
+        operation=extraction["architecture_change"],
+        narrative=extraction["architecture_narrative"],
+        payload=payload,
+        source_component=source,
+        source_adr_version=version,
+        ingestion_date=ingestion_date,
+    )
+
+
+async def persist_gold_evolution(state: SilverState) -> dict:
+    """No LLM. Hash-compare-then-bump per entity (`gold_service.persist_entity_version`) —
+    components and data contracts whose `status`/`action` is `"unknown"` are skipped entirely,
+    never written as a `gold_evolution` row (v6 §3: an unresolved classification is a signal the
+    extraction is under-grounded, not a valid value to version). One helper per entity kind —
+    `_persist_components`/`_persist_contracts`/`_persist_architecture` — since each builds a
+    differently-shaped payload; see `_persist_architecture`'s own docstring for why architecture
+    is scoped per source_component rather than globally."""
+    ingestion_date = parse_ingestion_date(state["ingestion_date"])
+    async with async_session_factory() as session:
+        for source, extraction in state["gold_extractions"].items():
+            version = state["document_versions"][source]
+            name_to_id = state["gold_entity_ids"].get(source, {})
+            await _persist_components(session, extraction, name_to_id, source, version, ingestion_date)
+            await _persist_contracts(session, extraction, name_to_id, source, version, ingestion_date)
+            await _persist_architecture(session, extraction, source, version, ingestion_date)
+        await session.commit()
+
+    return {}
+
+
 # --- Graph assembly ------------------------------------------------------------
 
 
@@ -480,6 +692,9 @@ def build_graph(checkpointer) -> CompiledStateGraph:
     graph.add_node("boss_decide", boss_decide)
     graph.add_node("write_document", write_document)
     graph.add_node("chunk_and_embed", chunk_and_embed)
+    graph.add_node("extract_gold_facts", extract_gold_facts)
+    graph.add_node("resolve_gold_identity", resolve_gold_identity)
+    graph.add_node("persist_gold_evolution", persist_gold_evolution)
 
     graph.add_edge(START, "load_bronze")
     graph.add_edge("load_bronze", "generate_architecture_questions")
@@ -503,6 +718,9 @@ def build_graph(checkpointer) -> CompiledStateGraph:
         {"ask_human": "ask_human", "write_document": "write_document"},
     )
     graph.add_edge("write_document", "chunk_and_embed")
-    graph.add_edge("chunk_and_embed", END)
+    graph.add_edge("chunk_and_embed", "extract_gold_facts")
+    graph.add_edge("extract_gold_facts", "resolve_gold_identity")
+    graph.add_edge("resolve_gold_identity", "persist_gold_evolution")
+    graph.add_edge("persist_gold_evolution", END)
 
     return graph.compile(checkpointer=checkpointer)

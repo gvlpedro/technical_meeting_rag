@@ -1,0 +1,55 @@
+Architecture sync — Order Fulfillment Platform, March 2026.
+
+Several changes this month. Payment Service is being modified in this update — once a charge
+succeeds, it now also publishes a new data contract, Payment Confirmed, instead of only updating
+its own internal state like before. Payment Confirmed is a brand-new contract — it has never
+existed before today. Payment Service is the producer of Payment Confirmed. Payment Confirmed
+carries three required fields: payment_id, a required string identifying the charge; order_id, a
+required string linking back to the order; and amount_charged, a required number giving the
+amount charged in cents.
+
+We're also introducing a new component, Inventory Service, this month. Inventory Service is
+entirely new — it does not exist in any form yet. Inventory Service subscribes to Payment
+Confirmed; once a payment is confirmed for an order, Inventory Service reserves the stock needed
+to fulfill it. Inventory Service is Payment Confirmed's consumer as of this release.
+
+Order Events, the data contract Order Service publishes, has a breaking change this month. Its
+buyer_id field is changing shape: it used to be a plain required string holding just the
+customer's id, and it now becomes a required nested object with two fields instead — id and
+email. This is a breaking change: any existing consumer reading buyer_id as a plain string will
+break the moment this ships. Order Events moves from version 1.1 to version 2.0 because of this
+breaking change.
+
+Order Service is separately modified in this update: it now serializes buyer_id as the new
+nested object instead of a plain string whenever it publishes Order Events. The only existing
+consumer of Order Events, Payment Service, must update its parsing logic before this new shape
+goes live. There is no dual-write period — Payment Service's own update will already be live
+before Order Service starts emitting the new shape, so the cutover happens in a single
+coordinated deploy, not a gradual migration.
+
+Legacy Order Monolith is still not part of any of this — it continues running exactly as before,
+unchanged, with no changes to it in this update either.
+
+We're changing buyer_id's shape now because customer email is needed downstream for payment
+receipts, and representing it as a separate flat field would require yet another lookup —
+embedding both id and email directly inside buyer_id was chosen over publishing a second, separate
+event just for email, to avoid consumers having to coordinate two events for one purchase; that
+alternative was considered and rejected. The consequence is a genuine breaking change, carefully
+coordinated around Payment Service's own update landing first so no consumer ever sees both
+shapes at once.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

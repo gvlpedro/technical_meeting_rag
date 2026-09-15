@@ -1,0 +1,12 @@
+[
+  {
+    "question": "How did Order Service change in this latest update?",
+    "expected_entity": {"canonical_name": "Order Service", "entity_type": "component", "operation": "modified"},
+    "expected_answer_keywords": ["idempoten"]
+  },
+  {
+    "question": "Is the latest change to the Order Events contract backward compatible for existing consumers?",
+    "expected_entity": {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "forward-update"},
+    "expected_answer_keywords": ["compatible", "optional", "forward"]
+  }
+]

@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1850" role="img" aria-label="LangGraph flow of agents/graph.py: thirteen nodes from load_bronze through persist_gold_evolution, two conditional routers (route_after_classify, route_after_boss), a shared ask_human interrupt node reused by both routers, and a redraft loop from boss_decide back into synthesize_document.">
+  <title>Silver + Gold LangGraph — agents/graph.py :: build_graph()</title>
+  <desc>Node-by-node flow of the compiled StateGraph: entry at START, the classify/ask_human/synthesize branch, the critic/boss redraft loop, the Silver→Gold boundary after chunk_and_embed, and the terminal END.</desc>
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #ffffff; }
+      .title { font-size: 22px; font-weight: 700; }
+      .h { font-size: 14px; font-weight: 700; }
+      .b { font-size: 12px; fill: #c3c2b7; }
+      .small { font-size: 11px; fill: #898781; }
+      .edgeLabel { font-size: 11px; fill: #c3c2b7; }
+      .tag { font-size: 10px; font-weight: 700; }
+      .surface { fill: #1a1a19; stroke: #383835; stroke-width: 1.5; }
+      .llm { fill: #1a1a19; stroke: #3987e5; stroke-width: 2; }
+      .hitl { fill: #1a1a19; stroke: #d55181; stroke-width: 2; }
+      .diamond { fill: #1a1a19; stroke: #9085e9; stroke-width: 2; }
+      .term { fill: #0ca30c; }
+      .edge { stroke: #898781; stroke-width: 1.75; fill: none; }
+      .edgeDashed { stroke: #898781; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; }
+    </style>
+    <marker id="aGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#898781"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="1850" fill="#0d0d0d"/>
+
+  <text x="440" y="26" text-anchor="middle" class="title">Silver + Gold LangGraph</text>
+  <text x="440" y="46" text-anchor="middle" class="b">agents/graph.py :: build_graph() — node-by-node flow, conditional routing, and the redraft loop</text>
+
+  <!-- Legend panel -->
+  <rect x="740" y="130" width="410" height="450" rx="10" class="surface"/>
+  <text x="764" y="158" class="h">Legend</text>
+
+  <rect x="764" y="180" width="18" height="18" class="llm"/>
+  <text x="794" y="194" class="b">LLM call (router.complete)</text>
+
+  <rect x="764" y="218" width="18" height="18" class="surface"/>
+  <text x="794" y="232" class="b">Deterministic — no LLM call</text>
+
+  <rect x="764" y="256" width="18" height="18" class="hitl"/>
+  <text x="794" y="270" class="b">Human-in-the-loop — interrupt()</text>
+
+  <polygon points="773,294 791,304 773,314 755,304" class="diamond"/>
+  <text x="794" y="309" class="b">Conditional router (route_after_*)</text>
+
+  <rect x="764" y="332" width="8" height="18" fill="#199e70"/>
+  <rect x="772" y="332" width="10" height="18" class="surface"/>
+  <text x="794" y="346" class="b">Gold-layer node (post-boundary)</text>
+
+  <circle cx="773" cy="379" r="10" class="term"/>
+  <text x="794" y="384" class="b">START / END terminal</text>
+
+  <line x1="756" y1="418" x2="792" y2="418" class="edge"/>
+  <text x="800" y="422" class="b">primary graph edge</text>
+
+  <line x1="756" y1="456" x2="792" y2="456" class="edgeDashed"/>
+  <text x="800" y="460" class="b">conditional / loop-back edge</text>
+
+  <text x="764" y="496" class="small">Corner tags mark identity in addition to</text>
+  <text x="764" y="512" class="small">color: LLM, HITL, GOLD — never color alone.</text>
+
+  <!-- START -->
+  <rect x="340" y="60" width="200" height="44" rx="22" class="term"/>
+  <text x="440" y="87" text-anchor="middle" class="h" fill="#0d0d0d">START</text>
+  <line x1="440" y1="104" x2="440" y2="130" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- load_bronze -->
+  <rect x="200" y="130" width="480" height="64" rx="10" class="surface"/>
+  <text x="224" y="156" class="h">load_bronze</text>
+  <text x="224" y="176" class="b">reads bronze_documents rows for this ingestion_date</text>
+  <line x1="440" y1="194" x2="440" y2="224" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- generate_architecture_questions -->
+  <rect x="200" y="224" width="480" height="64" rx="10" class="llm"/>
+  <text x="670" y="242" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="224" y="250" class="h">generate_architecture_questions</text>
+  <text x="224" y="270" class="b">LLM call · drafts questions, IDs mentioned components &amp; contracts</text>
+  <line x1="440" y1="288" x2="440" y2="318" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- generate_data_contract_questions -->
+  <rect x="200" y="318" width="480" height="64" rx="10" class="llm"/>
+  <text x="670" y="336" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="224" y="344" class="h">generate_data_contract_questions</text>
+  <text x="224" y="364" class="b">LLM call · full ODCS questions per identified contract</text>
+  <line x1="440" y1="382" x2="440" y2="412" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- classify_questions -->
+  <rect x="200" y="412" width="480" height="64" rx="10" class="llm"/>
+  <text x="670" y="430" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="224" y="438" class="h">classify_questions</text>
+  <text x="224" y="458" class="b">LLM call · sorts answered / unknown / needs_clarification</text>
+  <line x1="440" y1="476" x2="440" y2="506" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- diamond 1: route_after_classify -->
+  <polygon points="440,506 580,551 440,596 300,551" class="diamond"/>
+  <text x="440" y="546" text-anchor="middle" class="h">route_after_classify(state)</text>
+  <text x="440" y="562" text-anchor="middle" class="small">state['pending_questions']?</text>
+
+  <!-- diamond1 -> ask_human -->
+  <polyline points="300,551 230,551 230,610" class="edge" marker-end="url(#aGray)" fill="none"/>
+  <text x="228" y="572" text-anchor="end" class="edgeLabel">pending_questions ≠ []</text>
+
+  <!-- diamond1 -> synthesize_document (skip ask_human) -->
+  <line x1="440" y1="596" x2="440" y2="680" class="edge" marker-end="url(#aGray)"/>
+  <text x="455" y="635" class="edgeLabel">pending_questions == []</text>
+
+  <!-- ask_human -->
+  <rect x="40" y="610" width="300" height="80" rx="10" class="hitl"/>
+  <text x="316" y="628" text-anchor="end" class="tag" fill="#d55181">HITL</text>
+  <text x="64" y="636" class="h">ask_human</text>
+  <text x="64" y="656" class="small">interrupt() — pauses for batched pending_questions</text>
+  <text x="64" y="672" class="small">interrupt_origin: 'classify' | 'boss' — same node, two callers</text>
+
+  <!-- ask_human -> synthesize_document -->
+  <polyline points="190,690 190,715 200,715" class="edge" marker-end="url(#aGray)" fill="none"/>
+  <text x="20" y="708" class="edgeLabel">resume → synthesize_document, any origin</text>
+
+  <!-- synthesize_document -->
+  <rect x="200" y="680" width="480" height="70" rx="10" class="llm"/>
+  <text x="670" y="698" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="224" y="706" class="h">synthesize_document (Actor)</text>
+  <text x="224" y="726" class="b">LLM call · per active_source · writes ADR Markdown directly</text>
+  <line x1="440" y1="750" x2="440" y2="810" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- critic_document -->
+  <rect x="200" y="810" width="480" height="64" rx="10" class="llm"/>
+  <text x="670" y="828" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="224" y="836" class="h">critic_document (Critic)</text>
+  <text x="224" y="856" class="b">LLM call · always runs · flags claims low / material severity</text>
+  <line x1="440" y1="874" x2="440" y2="934" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- boss_decide -->
+  <rect x="200" y="934" width="480" height="74" rx="10" class="surface"/>
+  <text x="224" y="960" class="h">boss_decide (Boss)</text>
+  <text x="224" y="980" class="b">no LLM · deterministic policy over the Critic's claims</text>
+  <text x="224" y="996" class="small">downgrades low claims · escalates material ones once (revision_attempted)</text>
+  <line x1="440" y1="1008" x2="440" y2="1068" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- diamond 2: route_after_boss -->
+  <polygon points="440,1068 580,1113 440,1158 300,1113" class="diamond"/>
+  <text x="440" y="1108" text-anchor="middle" class="h">route_after_boss(state)</text>
+  <text x="440" y="1124" text-anchor="middle" class="small">state['pending_questions']?</text>
+
+  <!-- diamond2 -> write_document -->
+  <line x1="440" y1="1158" x2="440" y2="1188" class="edge" marker-end="url(#aGray)"/>
+  <text x="460" y="1178" class="edgeLabel">no material claims, or already retried</text>
+
+  <!-- diamond2 -> ask_human (long loop-back) -->
+  <polyline points="300,1113 70,1113 70,682 40,682" class="edgeDashed" marker-end="url(#aGray)" fill="none"/>
+  <text x="40" y="1050" class="edgeLabel" transform="rotate(-90 40 1050)">material claim, 1st attempt → escalate</text>
+
+  <!-- write_document -->
+  <rect x="200" y="1188" width="480" height="64" rx="10" class="surface"/>
+  <text x="224" y="1214" class="h">write_document</text>
+  <text x="224" y="1234" class="b">persists SilverDocument (hash-versioned) + SilverClarification rows</text>
+  <line x1="440" y1="1252" x2="440" y2="1282" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- chunk_and_embed -->
+  <rect x="200" y="1282" width="480" height="64" rx="10" class="surface"/>
+  <text x="224" y="1308" class="h">chunk_and_embed</text>
+  <text x="224" y="1328" class="b">embeds ADR, upserts SilverChunk for (source, version)</text>
+  <line x1="440" y1="1346" x2="440" y2="1406" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- Silver / Gold boundary -->
+  <line x1="60" y1="1376" x2="1150" y2="1376" class="edgeDashed" stroke="#199e70"/>
+  <text x="1150" y="1370" text-anchor="end" class="small" fill="#199e70">Silver ↔ Gold boundary — same graph run, no separate pipeline</text>
+
+  <!-- extract_gold_facts -->
+  <rect x="200" y="1406" width="480" height="70" rx="10" class="llm"/>
+  <rect x="200" y="1406" width="8" height="70" fill="#199e70"/>
+  <text x="670" y="1424" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="670" y="1466" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1430" class="h">extract_gold_facts</text>
+  <text x="224" y="1450" class="b">LLM call · per source with boss_verdict == ok</text>
+  <text x="224" y="1466" class="small">skipped if already extracted for this (source, version)</text>
+  <line x1="440" y1="1476" x2="440" y2="1536" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- resolve_gold_identity -->
+  <rect x="200" y="1536" width="480" height="64" rx="10" class="surface"/>
+  <rect x="200" y="1536" width="8" height="64" fill="#199e70"/>
+  <text x="670" y="1554" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1562" class="h">resolve_gold_identity</text>
+  <text x="224" y="1582" class="b">no LLM · exact alias → pg_trgm fuzzy match → mint uuid4</text>
+  <line x1="440" y1="1600" x2="440" y2="1630" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- persist_gold_evolution -->
+  <rect x="200" y="1630" width="480" height="64" rx="10" class="surface"/>
+  <rect x="200" y="1630" width="8" height="64" fill="#199e70"/>
+  <text x="670" y="1648" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1656" class="h">persist_gold_evolution</text>
+  <text x="224" y="1676" class="b">no LLM · hash-compare-then-bump → gold_evolution / gold_aliases</text>
+  <line x1="440" y1="1694" x2="440" y2="1740" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- END -->
+  <rect x="340" y="1740" width="200" height="44" rx="22" class="term"/>
+  <text x="440" y="1767" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+</svg>

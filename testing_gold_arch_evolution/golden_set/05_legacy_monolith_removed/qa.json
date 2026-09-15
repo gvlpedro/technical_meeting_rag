@@ -1,0 +1,12 @@
+[
+  {
+    "question": "What happened to Legacy Order Monolith?",
+    "expected_entity": {"canonical_name": "Legacy Order Monolith", "entity_type": "component", "operation": "removed"},
+    "expected_answer_keywords": ["removed", "retired", "decommissioned"]
+  },
+  {
+    "question": "What happened to the Order Events contract by the end of this migration?",
+    "expected_entity": {"canonical_name": "Order Events", "entity_type": "data_contract", "operation": "removed"},
+    "expected_answer_keywords": ["removed", "retired"]
+  }
+]
