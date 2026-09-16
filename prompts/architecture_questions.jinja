@@ -350,6 +350,23 @@ If status is `unknown`, generate a clarification question.
 
 ---
 
+# NO-CHANGE SAFEGUARD
+
+After classifying every component, check the batch as a whole: if not a single component across
+the entire transcript was classified `new`, `modified`, or `removed` — every one of them landed on
+`unchanged` or `unknown` — do not let that pass silently, even if each individual classification
+followed the rules above correctly.
+
+A transcript that only describes an existing system, with no proposed change to any of it, is a
+legitimate case — but it is also exactly the case where a purely descriptive discussion gets
+silently misread as "nothing changed" when the discussion may simply never have addressed change
+at all. Draft one explicit question, scoped `architecture`, asking directly whether this
+discussion intends to describe any change to the current architecture, or whether it is purely
+descriptive of the system as it already exists. Draft this question in addition to, never instead
+of, any per-component `unknown`-status question the STATUS RULES below already require.
+
+---
+
 # STATUS RULES
 
 Never infer component status solely from its name.

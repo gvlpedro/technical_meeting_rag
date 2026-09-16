@@ -26,7 +26,7 @@ from agents.schemas import ArchitectureQuestionListResult, DataContractQuestionL
 from agents.state import BronzeRow, MentionedDataContractItem
 from agents.template import load_architecture_template, load_data_contract_template, load_json_response
 from app.config import settings
-from db.models import BronzeDocument
+from db.models import BronzeDocument, SilverClarification, SilverDocument
 from ingestion.bronze_documents_chunker import parse_ingestion_date
 from llm import router
 
@@ -214,15 +214,33 @@ def _problem_count_data_contracts(
     )
 
 
-async def load_bronze_rows(ingestion_date_str: str, db: AsyncSession) -> list[BronzeRow]:
-    """Every `bronze_documents` row for this `ingestion_date`, in insertion order.
-    Raises `NoBronzeDocumentsError` if there are none — see that class's docstring."""
+async def load_bronze_rows(
+    ingestion_date_str: str,
+    db: AsyncSession,
+    *,
+    tenant: str = "default",
+    source_components: list[str] | None = None,
+) -> list[BronzeRow]:
+    """Every `bronze_documents` row for this `(tenant, ingestion_date)`, in insertion order.
+    Raises `NoBronzeDocumentsError` if there are none — see that class's docstring.
+
+    `tenant` filters here, not just at ingestion time: two tenants can both have a meeting on
+    the same calendar date, and `ingestion_date` alone would silently pool both tenants'
+    transcripts into one batch.
+
+    `source_components`, when given, narrows further to exactly those source_components —
+    the frontend's "Input transcription" tab always passes the exact filenames it just
+    ingested in THIS upload, so a second, unrelated upload that happens to reuse the same
+    calendar date never gets pooled with it. `None` (a script, a test, `make clarify`) keeps
+    pooling every source under this date, which for that CLI-driven, whole-day-of-transcripts
+    workflow is the intended batch, not an accident."""
     ingestion_date = parse_ingestion_date(ingestion_date_str)
-    result = await db.execute(
-        select(BronzeDocument.source_component, BronzeDocument.content)
-        .where(BronzeDocument.ingestion_date == ingestion_date)
-        .order_by(BronzeDocument.id)
+    query = select(BronzeDocument.source_component, BronzeDocument.content).where(
+        BronzeDocument.ingestion_date == ingestion_date, BronzeDocument.tenant == tenant
     )
+    if source_components is not None:
+        query = query.where(BronzeDocument.source_component.in_(source_components))
+    result = await db.execute(query.order_by(BronzeDocument.id))
     rows: list[BronzeRow] = [
         {"source_component": r.source_component, "content": r.content} for r in result.all()
     ]
@@ -253,6 +271,153 @@ def _no_bronze_documents_message(ingestion_date_str: str) -> str:
     )
 
 
+async def bronze_content_for_source(session: AsyncSession, tenant: str, source_component: str) -> str:
+    """Every `bronze_documents` chunk for this exact `(tenant, source_component)`, joined —
+    the same raw transcript text `synthesize_document` reads via `source_content` inside the
+    graph, fetched independently here for the frontend's "regenerate with feedback" endpoint,
+    which runs the Actor again outside any graph run."""
+    result = await session.execute(
+        select(BronzeDocument.content)
+        .where(BronzeDocument.tenant == tenant, BronzeDocument.source_component == source_component)
+        .order_by(BronzeDocument.id)
+    )
+    return " ".join(row[0] for row in result.all())
+
+
+async def bronze_ingestion_date_for_source(
+    session: AsyncSession, tenant: str, source_component: str
+) -> str | None:
+    """This source's own `ingestion_date`, formatted the same `YYYYMMDD` way
+    `generate_architecture_questions_for_batch`/`generate_data_contract_questions_for_batch`
+    take it — needed by the frontend's "ask me more" endpoint, which calls both standalone
+    (outside any graph run, so there is no `state["ingestion_date"]` to read) purely to name
+    their own audit files under `output/ingestion_date=<date>/...`. `None` if this source has
+    no bronze rows at all."""
+    result = await session.execute(
+        select(BronzeDocument.ingestion_date)
+        .where(BronzeDocument.tenant == tenant, BronzeDocument.source_component == source_component)
+        .order_by(BronzeDocument.id)
+        .limit(1)
+    )
+    ingestion_date = result.scalar_one_or_none()
+    return ingestion_date.strftime("%Y%m%d") if ingestion_date else None
+
+
+async def qa_pairs_for_source(session: AsyncSession, tenant: str, source_component: str) -> list[dict]:
+    """Every clarification question/answer already on record for this `(tenant,
+    source_component)`, in the order they were answered — `write_document`'s own append-only
+    audit trail (`SilverClarification`), reconstructed here so the frontend's "regenerate with
+    feedback" endpoint can hand the Actor the exact same resolved clarifications the original
+    run used, plus one new entry for the reviewer's fresh feedback."""
+    result = await session.execute(
+        select(SilverClarification.question, SilverClarification.answer)
+        .where(SilverClarification.tenant == tenant, SilverClarification.source_component == source_component)
+        .order_by(SilverClarification.answered_at)
+    )
+    return [{"question": question, "answer": answer} for question, answer in result.all()]
+
+
+async def latest_document_content(
+    session: AsyncSession, tenant: str, source_component: str
+) -> str | None:
+    """The content of the most recent existing `SilverDocument` for this
+    `(tenant, source_component)` — this run's own continuity anchor for "what did the previous
+    ADR for this same source already say," read from Silver's own version history. `None` if
+    this source has no prior version at all (a first-time run).
+
+    Deliberately reads Silver, never Gold, for this: Gold only ever mirrors what an already-
+    written ADR states, one layer downstream — see the "each layer consumes only from the one
+    before it" discipline this pipeline holds elsewhere (`agents/gold_service.py` never reads
+    `bronze_documents`, `agents/service.py`/the non-Gold nodes of `agents/graph.py` never read
+    `gold_evolution`). Continuity across two runs of the SAME layer is a same-layer concern —
+    Silver's own last output — not a reason to bend that discipline."""
+    result = await session.execute(
+        select(SilverDocument.content)
+        .where(SilverDocument.tenant == tenant, SilverDocument.source_component == source_component)
+        .order_by(SilverDocument.version.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+def _markdown_section(content: str, start_heading: str, end_heading: str) -> str:
+    """Slice `content` from `start_heading` (inclusive) up to `end_heading` (exclusive), or to
+    the end of the document if `end_heading` never appears. `""` if `start_heading` itself isn't
+    found. A literal-string heading match, not a Markdown parser — reliable here because
+    `prompts/adr_generator.jinja`'s OUTPUT STRUCTURE fixes these exact heading strings."""
+    start = content.find(start_heading)
+    if start == -1:
+        return ""
+    end = content.find(end_heading, start + len(start_heading))
+    return (content[start:end] if end != -1 else content[start:]).strip()
+
+
+def _strip_diagram_colors(diagram: str) -> str:
+    """Drops every `classDef`/`class` styling line from a Mermaid diagram string. A
+    color class (see `prompts/adr_generator.jinja`'s DIAGRAM COLOR CODING section) marks what
+    changed in the ONE ADR that drew it — it must never survive into a later document as if it
+    were still true. Used by `previous_target_architecture_diagram`, whose output seeds a new
+    ADR's "## 2. Previous Architecture": that section is always a plain, colorless snapshot,
+    never the diff-coloring from whichever earlier ADR's "## 3. Target Architecture" this
+    diagram came from."""
+    lines = [line for line in diagram.splitlines() if not line.strip().startswith(("classDef", "class "))]
+    return "\n".join(lines).strip()
+
+
+def previous_target_architecture_diagram(previous_adr_content: str | None) -> str:
+    """Pulls the ` ```mermaid ` fence out of a previous ADR's own "## 3. Target Architecture"
+    section — this run's "Previous Architecture" is exactly what the last run's "Target
+    Architecture" already was, minus any color coding (see `_strip_diagram_colors`). `""` if
+    there is no previous ADR, or its Target Architecture section had no diagram (a first-time
+    run, or one where nothing about the architecture was ever confirmed)."""
+    if not previous_adr_content:
+        return ""
+    section = _markdown_section(previous_adr_content, "## 3. Target Architecture", "## 4. Affected Components")
+    if "```mermaid" not in section:
+        return ""
+    diagram = section.split("```mermaid", 1)[1].split("```", 1)[0].strip()
+    return _strip_diagram_colors(diagram)
+
+
+def own_previous_architecture_diagram(adr_content: str | None) -> str:
+    """Pulls the ` ```mermaid ` fence out of an ADR's **own** "## 2. Previous Architecture"
+    section — for redrafting the SAME still-unapproved draft (the frontend's "regenerate with
+    feedback" endpoint), not for starting a new change from an already-approved one. That
+    endpoint's `previous` is this very draft's latest `SilverDocument` row, already persisted by
+    `write_document` before any human reviewed it — reading its §3 Target Architecture (via
+    `previous_target_architecture_diagram`) would wrongly promote this unapproved draft's own
+    target into a fabricated "previous" state for a change nothing has finalized yet. Reading its
+    §2 instead reproduces exactly what this draft already established as prior architecture,
+    unchanged by the extra feedback. `""` if there is no ADR (first-time run) or its §2 had no
+    diagram (nothing about the prior architecture is established either).
+
+    Also runs `_strip_diagram_colors` — §2 should never carry a color class in the first place,
+    but this is the same belt-and-suspenders guarantee `previous_target_architecture_diagram`
+    gives its own output, in case an earlier generation slipped one in anyway."""
+    if not adr_content:
+        return ""
+    section = _markdown_section(adr_content, "## 2. Previous Architecture", "## 3. Target Architecture")
+    if "```mermaid" not in section:
+        return ""
+    diagram = section.split("```mermaid", 1)[1].split("```", 1)[0].strip()
+    return _strip_diagram_colors(diagram)
+
+
+def previous_architecture_context(previous_adr_content: str | None) -> str:
+    """The previous ADR's Target Architecture diagram plus its Affected Components table,
+    combined — this run's own `KNOWN_ARCHITECTURE` input for
+    `generate_architecture_questions_for_batch`. Gives the LLM both the diagram (relationships)
+    and the named components with their last confirmed status, so it can classify `new` vs.
+    `unchanged` against something real instead of guessing with no anchor at all
+    (`prompts/architecture_questions.jinja`'s own STATUS RULES). `""` if there is no previous
+    ADR for this source (a first-time run)."""
+    if not previous_adr_content:
+        return ""
+    return _markdown_section(
+        previous_adr_content, "## 3. Target Architecture", "## 5. Affected Data Contracts"
+    )
+
+
 async def generate_architecture_questions_for_batch(
     ingestion_date_str: str, bronze_documents: list[BronzeRow], architecture_diagram: str = ""
 ) -> ArchitectureQuestionListResult:
@@ -271,10 +436,12 @@ async def generate_architecture_questions_for_batch(
     as a side effect). Callable directly from a script or a unit test with `bronze_documents`
     built by hand; `db/session.py` never enters the picture.
 
-    `architecture_diagram` is always empty in production today — there is no source yet for
-    "the architecture as of this transcript's own point in time" (Gold doesn't version
-    diagrams, `doc/silver_process.md` §7); the prompt's own Jinja `{% if known_architecture %}`
-    already treats that as "no prior architecture known," a correct, expected case.
+    `architecture_diagram` is empty only for a source with no prior ADR at all — `agents.graph.
+    generate_architecture_questions` passes `agents.service.previous_architecture_context`'s
+    output here, built from the previous `SilverDocument` for the same source (never from
+    Gold — see that function's own docstring). The prompt's own Jinja
+    `{% if known_architecture %}` already treats an empty value as "no prior architecture
+    known," a correct, expected case for a source's first-ever run.
     """
     transcript_text = " ".join(row["content"] for row in bronze_documents)
     template_text = load_architecture_template()

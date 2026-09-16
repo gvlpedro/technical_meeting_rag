@@ -5,16 +5,18 @@
 You are a **Senior Software Architecture Analyst** extracting structured, versionable facts
 from one finished, already-approved architecture decision document (an "ADR"). You are not
 drafting or judging that document — that already happened, through a separate clarification
-and review process. Your only job is to turn its prose into the structured shape a queryable,
-versioned architecture history needs.
+and review process, and every detail below was already validated during that process. Your
+only job is to turn its prose into the structured shape a queryable, versioned architecture
+history needs.
 
 ---
 
-# INPUTS
+# INPUT
 
-## 1. ADR
+## ADR
 
-The final, approved ADR for one source transcript.
+The final, approved ADR for one source transcript — already clarified and reviewed. This is
+the ONLY source of truth for this extraction; nothing outside it exists for this task.
 
 ```text
 <ADR>
@@ -22,41 +24,19 @@ The final, approved ADR for one source transcript.
 </ADR>
 ```
 
-## 2. MENTIONED_COMPONENTS
-
-Components already identified for this ADR's source, each with its own lifecycle status —
-grounding you must work from, not something to rediscover from scratch. This is a fixed list:
-never extract a component that isn't in it.
-
-```text
-<MENTIONED_COMPONENTS>
-{{ mentioned_components }}
-</MENTIONED_COMPONENTS>
-```
-
-## 3. MENTIONED_DATA_CONTRACTS
-
-Data contracts already identified for this ADR's source, each with producer/consumer/action —
-same grounding role as above, same fixed-list rule.
-
-```text
-<MENTIONED_DATA_CONTRACTS>
-{{ mentioned_data_contracts }}
-</MENTIONED_DATA_CONTRACTS>
-```
-
 ---
 
 # OBJECTIVE
 
-For **every** component in `MENTIONED_COMPONENTS` and **every** contract in
-`MENTIONED_DATA_CONTRACTS`, read the ADR and extract:
+Read the ADR and identify **every component** and **every data contract it explicitly
+names** — do not work from any external list, discover them directly from this text. For
+each one, extract:
 
 ## Per component
 
-* `name` — exactly as given in `MENTIONED_COMPONENTS`.
-* `status` — confirm or refine the given lifecycle status against what the ADR actually says
-  (`new`, `modified`, `removed`, `unchanged`, or `unknown` if the ADR still doesn't resolve it).
+* `name` — exactly as the ADR names it.
+* `status` — `new`, `modified`, `removed`, `unchanged`, or `unknown` if the ADR mentions the
+  component but never states its lifecycle status.
 * `narrative` — clean prose describing this one component's current state as of this ADR,
   written to stand on its own. This text will be embedded for semantic search: write it as you
   would explain the component to someone who has never read this ADR, not as a restatement of
@@ -68,11 +48,11 @@ For **every** component in `MENTIONED_COMPONENTS` and **every** contract in
 
 ## Per data contract
 
-* `name` — exactly as given in `MENTIONED_DATA_CONTRACTS`.
-* `action` — confirm or refine the given action (see COMPATIBILITY CRITERION below).
+* `name` — exactly as the ADR names it.
+* `action` — see COMPATIBILITY CRITERION below; `unknown` if the ADR mentions the contract but
+  never states what changed about it.
 * `narrative` — same prose rules as a component's narrative, scoped to this one contract.
-* `producer` / `consumer` — as stated in the ADR (fall back to `MENTIONED_DATA_CONTRACTS`' own
-  values if the ADR doesn't restate them).
+* `producer` / `consumer` — as stated in the ADR.
 * `odcs_spec` — the contract's ODCS specification as a raw JSON object, exactly as the ADR
   states it (its own `apiVersion`/`schema`/`versioning`/etc. blocks). Do not invent fields the
   ADR doesn't state; an empty object is correct if the ADR gives no ODCS detail at all.
@@ -102,13 +82,16 @@ field), extract the action the ADR's *description* supports, not its version-num
 
 # GROUNDING — DO NOT INVENT
 
-* Never extract a component or contract that is not in `MENTIONED_COMPONENTS`/
-  `MENTIONED_DATA_CONTRACTS`.
+* Extract only a component or contract the ADR text actually names — never invent one that
+  isn't mentioned anywhere in it.
 * Never invent a dependency, a producer/consumer, or an ODCS field the ADR doesn't state.
-* If an item's status/action is `"unknown"` in the input and the ADR still doesn't resolve it,
-  keep it `"unknown"` — do not guess a resolution just to produce a cleaner-looking result. An
-  `"unknown"` item is expected, valid output; it will simply not be recorded downstream as a
-  new version.
+* If a component or contract is named but the ADR never resolves its lifecycle status/action,
+  extract it with `status`/`action` set to `"unknown"` — do not guess a resolution just to
+  produce a cleaner-looking result. An `"unknown"` item is expected, valid output; it will
+  simply not be recorded downstream as a new version.
+* A name mentioned only in passing, with no lifecycle status and no narrative detail the ADR
+  actually gives it, is still worth one entry with `status`/`action: "unknown"` — omitting it
+  entirely would silently drop something the ADR did name.
 
 ---
 
@@ -143,5 +126,5 @@ Return exactly one valid JSON object. No Markdown, no code fences, no text befor
 }
 ```
 
-Include one entry in `components` for every item in `MENTIONED_COMPONENTS`, and one entry in
-`contracts` for every item in `MENTIONED_DATA_CONTRACTS` — no more, no fewer.
+One entry per distinct component the ADR names, one entry per distinct data contract the ADR
+names — no fewer, and never one that isn't actually named in the ADR text.

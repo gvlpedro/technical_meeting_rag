@@ -8,6 +8,9 @@ from agents.service import (
     generate_architecture_questions_for_batch,
     generate_data_contract_questions_for_batch,
     mentions_grounded_in_source,
+    own_previous_architecture_diagram,
+    previous_architecture_context,
+    previous_target_architecture_diagram,
 )
 from app.config import settings
 
@@ -240,3 +243,139 @@ def test_mentions_grounded_in_source_is_case_insensitive_and_can_match_more_than
 def test_mentions_grounded_in_source_returns_empty_list_when_nothing_matches():
     items = [{"name": "Checkout Service", "status": "new"}]
     assert mentions_grounded_in_source("A totally unrelated transcript about billing.", items) == []
+
+
+_SAMPLE_ADR = """# ADR — Introduce Payment Gateway
+
+## 1. ADR
+
+### Context
+
+Payment Gateway is a new component.
+
+## 2. Previous Architecture
+
+The previous architecture is not described by the transcript and clarifications.
+
+## 3. Target Architecture
+
+```mermaid
+flowchart LR
+    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]
+```
+
+## 4. Affected Components
+
+| Component | Change | Description |
+|---|---|---|
+| Payment Gateway | **NEW** | Processes card payments. |
+
+## 5. Affected Data Contracts
+
+No data contract changes were confirmed by the transcript and clarifications for this change.
+"""
+
+
+def test_previous_target_architecture_diagram_extracts_the_mermaid_block():
+    diagram = previous_target_architecture_diagram(_SAMPLE_ADR)
+    assert diagram == (
+        "flowchart LR\n    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]"
+    )
+
+
+def test_previous_target_architecture_diagram_is_empty_when_there_is_no_previous_adr():
+    assert previous_target_architecture_diagram(None) == ""
+    assert previous_target_architecture_diagram("") == ""
+
+
+def test_previous_target_architecture_diagram_is_empty_when_the_section_has_no_diagram():
+    adr_without_diagram = _SAMPLE_ADR.replace(
+        "```mermaid\n"
+        "flowchart LR\n"
+        "    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]\n"
+        "```",
+        "The previous architecture is not described by the transcript and clarifications.",
+    )
+    assert previous_target_architecture_diagram(adr_without_diagram) == ""
+
+
+def test_previous_architecture_context_includes_diagram_and_affected_components_only():
+    context = previous_architecture_context(_SAMPLE_ADR)
+    assert context.startswith("## 3. Target Architecture")
+    assert "flowchart LR" in context
+    assert "## 4. Affected Components" in context
+    assert "Payment Gateway" in context
+    # Stops before section 5 — data contracts are not part of "known architecture" context.
+    assert "## 5. Affected Data Contracts" not in context
+
+
+def test_previous_architecture_context_is_empty_when_there_is_no_previous_adr():
+    assert previous_architecture_context(None) == ""
+
+
+_SAMPLE_ADR_WITH_PREVIOUS_DIAGRAM = """# ADR — Enrich Payment Gateway
+
+## 1. ADR
+
+### Context
+
+Payment Gateway already exists; this change adds fraud scoring.
+
+## 2. Previous Architecture
+
+```mermaid
+flowchart LR
+    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]
+```
+
+## 3. Target Architecture
+
+```mermaid
+flowchart LR
+    classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22
+    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]
+    PaymentGateway --> FraudScorer[Fraud Scorer]
+    class FraudScorer nodeNew
+```
+
+**Legend:** \U0001f7e2 New
+
+## 4. Affected Components
+
+| Component | Change | Description |
+|---|---|---|
+| Fraud Scorer | **NEW** | Scores transactions for fraud risk. |
+"""
+
+
+def test_own_previous_architecture_diagram_extracts_this_drafts_own_section_2():
+    diagram = own_previous_architecture_diagram(_SAMPLE_ADR_WITH_PREVIOUS_DIAGRAM)
+    assert diagram == (
+        "flowchart LR\n    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]"
+    )
+    # Distinct from §3 — regenerating must never promote this draft's own target into "previous".
+    assert diagram != previous_target_architecture_diagram(_SAMPLE_ADR_WITH_PREVIOUS_DIAGRAM)
+
+
+def test_own_previous_architecture_diagram_is_empty_when_there_is_no_draft():
+    assert own_previous_architecture_diagram(None) == ""
+    assert own_previous_architecture_diagram("") == ""
+
+
+def test_previous_target_architecture_diagram_strips_color_classes_and_legend():
+    # §3 of this sample is colored (a NEW node, its classDef, and a legend line) — becoming a
+    # LATER ADR's §2 Previous Architecture must never carry that coloring forward: §2 is always
+    # a plain, colorless snapshot, regardless of how the ADR that drew this diagram styled it.
+    diagram = previous_target_architecture_diagram(_SAMPLE_ADR_WITH_PREVIOUS_DIAGRAM)
+    assert "classDef" not in diagram
+    assert "class FraudScorer" not in diagram
+    assert "Legend" not in diagram
+    assert diagram == (
+        "flowchart LR\n"
+        "    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]\n"
+        "    PaymentGateway --> FraudScorer[Fraud Scorer]"
+    )
+
+
+def test_own_previous_architecture_diagram_is_empty_when_section_2_has_no_diagram():
+    assert own_previous_architecture_diagram(_SAMPLE_ADR) == ""

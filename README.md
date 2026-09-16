@@ -36,7 +36,7 @@ Check document [doc/silver_process.md](doc/silver_process.md) for more details.
 
 ## Workflow
 
-Input transcription > Clarification (LLM / Human) > Pull Request > Enrich RAG 
+Input transcription > Clarification (LLM / Human) > Publish > Enrich RAG 
 
 Although the workflow shows how user understands the flow, internally data follows a layered approach in PostgreSQL due to raw transcriptions are processed to store the raw data and then we clarify the information in a silver layer and finally we cover a synthesis of the architecture in gold layer.
 
@@ -106,9 +106,9 @@ python3 scripts/download_transcript.py --session 20260906
 Once user authenticates in a session (isolating information) to show different tabs:
 
 * Input transcription: Upload transcriptions and pdfs for the same meeting, to be processed and clarified.
+* Architecture history: Browse every ADR published so far, and the current architecture diagram built live from Gold's own components.
+* Chat with RAG: Once an ADR is published the user can ask questions about architecture and all the timeline of components.
 * Test  monitor (only when confiration enables start_test_mode setting): Monitor the list of tests and token consumption for all application.
-* Pull request to clarify new information: Once clarification process is finished it requires some peple to accept the ADR generated.
-* Chat with RAG: Once the ADR is accepted the user can ask questions about architecture and all the timeline of components.
 
 # Glosary of terms
 
@@ -143,16 +143,13 @@ Once user authenticates in a session (isolating information) to show different t
   are clarified and turned into an ADR document; Gold is the versioned picture of each
   entity, built up from every Silver ADR over time.
 
-* **Pull Request** — In this project, not a code change: It is the result of the clarification process,
-  the ADR document waiting for someone to review and answer before the architecture record is updated 
-  in silve layer.
-
 # Architecture
 
 A single FastAPI application backed by Postgres (`pgvector` for embeddings) and a LangGraph agent
 that carries a transcript batch through the full Bronze → Silver → Gold pipeline in one run;
-Streamlit is the planned UI layer (see `## User interface` above — not yet wired, tracked in
-`.tmp/tasks.md`).
+Streamlit is the UI layer (see `## User interface` above and `frontend/`), calling the backend
+through `app/routers/frontend.py`. There is no real user system behind login — see
+GETTING_STARTED.md's "Frontend usage" section for the two example accounts and their tenants.
 
 ### System diagram
 
@@ -253,3 +250,6 @@ tracked here so the target is explicit before the tests are written):
 
 MCP for each output for internal agents
 
+# Next steps
+
+* Two users are only included, this should evolve to manage multiple users and multi tenant architecture.

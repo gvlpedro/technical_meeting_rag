@@ -118,37 +118,42 @@ def _qa_pairs_block(clarifications: list[QaPair]) -> str:
     return "\n".join(lines)
 
 
-def build_adr_generation_prompt(transcript_text: str, clarifications: list[QaPair]) -> list[dict]:
+def build_adr_generation_prompt(
+    transcript_text: str, clarifications: list[QaPair], previous_architecture_diagram: str = ""
+) -> list[dict]:
     """Renders `prompts/adr_generator.jinja` as a real Jinja template — see
     that file for the actual generation rules (component-inclusion discipline, no
     placeholders, `doc/adr_example.md`-shaped output). Takes a flat question/answer list
-    rather than the graph's own `ClarificationItem` state shape — see `QaPair`."""
+    rather than the graph's own `ClarificationItem` state shape — see `QaPair`.
+
+    `previous_architecture_diagram` is this source's own last "Target Architecture" diagram
+    (see `agents.service.previous_target_architecture_diagram`), empty only for a source with
+    no prior ADR. It grounds §2 "Previous Architecture" in what was actually last confirmed
+    instead of the model reconstructing it (or omitting it) purely from this run's own
+    transcript/clarifications."""
     role_template = jinja2.Template(load_adr_generation_role())
     prompt = role_template.render(
         transcript=transcript_text,
         clarifications=_qa_pairs_block(clarifications),
+        previous_architecture_diagram=previous_architecture_diagram,
     )
     return [{"role": "user", "content": prompt}]
 
 
-def build_gold_extraction_prompt(
-    adr_content: str, mentioned_components: list[dict], mentioned_data_contracts: list[dict]
-) -> list[dict]:
+def build_gold_extraction_prompt(adr_content: str) -> list[dict]:
     """Renders `prompts/gold_extraction.jinja` — one LLM call per source, run inside Silver's
     own graph right after the ADR is approved (`.tmp/gold_process_v5.md` §1-2), not a
-    separately triggered pass over `silver_documents` rows. `mentioned_components`/
-    `mentioned_data_contracts` here are already this source's own grounded lists (`agents.
-    service.mentions_grounded_in_source`'s output, the same one `write_document` persisted to
-    `SilverDocument.mentioned_component_names`/`mentioned_data_contract_names`) — plain dicts,
-    JSON-dumped directly rather than going through a block-formatter like
-    `_mentioned_data_contracts_block` above, since this prompt wants the raw shape (including
-    `status`/`action`), not a human-readable summary line."""
+    separately triggered pass over `silver_documents` rows.
+
+    Takes only the final, clarified ADR — no pre-given `mentioned_components`/
+    `mentioned_data_contracts` list. Gold discovers every component/contract directly from the
+    ADR itself, which is already the validated, enriched output of the clarification process;
+    grounding extraction against an EARLIER, pre-clarification list (the transcript-time
+    identification `generate_architecture_questions` drafts) meant a component introduced only
+    through a clarification answer — never named in that earlier list — could never reach Gold
+    at all, even though the final ADR plainly described it."""
     role_template = jinja2.Template(load_gold_extraction_role())
-    prompt = role_template.render(
-        adr_content=adr_content,
-        mentioned_components=json.dumps(mentioned_components),
-        mentioned_data_contracts=json.dumps(mentioned_data_contracts),
-    )
+    prompt = role_template.render(adr_content=adr_content)
     return [{"role": "user", "content": prompt}]
 
 

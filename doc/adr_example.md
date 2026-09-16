@@ -52,11 +52,16 @@ flowchart LR
 
 ```mermaid
 flowchart LR
+    classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22
+    classDef nodeModified fill:#fb923c,stroke:#c2410c,color:#431407
+    classDef nodeRemoved fill:#f87171,stroke:#b91c1c,color:#450a0a,stroke-dasharray: 5 5
+
     EC[Event Collector]
     EP[Event Processor]
     AS[Analytics Service]
     CDS[Customer Data Service]
     RNS[Risk Notification Service]
+    NS[Notification Service]
 
     EC -->|raw-event v1.0.0| EP
 
@@ -65,7 +70,13 @@ flowchart LR
 
     EP -->|processed-event v2.0.0| AS
     EP -->|risk-event v1.0.0| RNS
+
+    class CDS,RNS nodeNew
+    class EP,AS nodeModified
+    class NS nodeRemoved
 ```
+
+**Legend:** 🟢 New · 🟠 Modified · 🔴 Removed
 
 ---
 

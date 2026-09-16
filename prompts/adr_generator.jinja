@@ -19,7 +19,7 @@ longer, padded one.
 
 # INPUTS
 
-You receive two inputs.
+You receive three inputs.
 
 ## 1. TRANSCRIPT
 
@@ -42,9 +42,30 @@ or explicitly marked `(not answered)` when nobody resolved it.
 </CLARIFICATIONS>
 ```
 
-`TRANSCRIPT` and the answered part of `CLARIFICATIONS` together are the **only** source of truth.
-An unanswered clarification is not evidence of anything — it means that piece of information does
-not exist for this document.
+`TRANSCRIPT` and the answered part of `CLARIFICATIONS` together are the **only** source of truth
+for what changed. An unanswered clarification is not evidence of anything — it means that piece
+of information does not exist for this document.
+
+## 3. PREVIOUS_ARCHITECTURE_DIAGRAM
+
+The Target Architecture diagram this same source's own previous ADR ended with — this run's own
+starting point, not something to rediscover from `TRANSCRIPT`. Empty only when this source has
+no previous ADR at all (its first-ever run).
+
+```text
+<PREVIOUS_ARCHITECTURE_DIAGRAM>
+{% if previous_architecture_diagram %}
+{{ previous_architecture_diagram }}
+{% else %}
+No previous architecture exists for this source — this is its first ADR.
+{% endif %}
+</PREVIOUS_ARCHITECTURE_DIAGRAM>
+```
+
+`PREVIOUS_ARCHITECTURE_DIAGRAM`, when given, is a fact, not a claim to re-verify against
+`TRANSCRIPT` — it is exactly what the last approved ADR for this source already established.
+Treat every component and connection already in it as `DOCUMENTED_CONTENT`'s own known,
+pre-existing architecture, the same way `TRANSCRIPT`/`CLARIFICATIONS` establish what's new.
 
 ---
 
@@ -159,16 +180,74 @@ effects `DOCUMENTED_CONTENT` never raises.
 
 ## 2. Previous Architecture
 
-A Mermaid `flowchart LR` of the architecture **before** the change, built only from components and
-interactions `DOCUMENTED_CONTENT` establishes as already existing. If nothing about the prior
-architecture is established, write one sentence stating that the previous architecture is not
-described by the transcript and clarifications, and omit the diagram — do not draw an empty or
-invented one.
+If `PREVIOUS_ARCHITECTURE_DIAGRAM` is given, reproduce it here **verbatim** — it is already the
+confirmed record of this source's architecture before this change, not something to redraw or
+re-derive. Do not add, remove, or rename anything in it based on `TRANSCRIPT`/`CLARIFICATIONS`;
+whatever changed belongs in §3, not here.
+
+If `PREVIOUS_ARCHITECTURE_DIAGRAM` is empty (this source's first-ever ADR), build a Mermaid
+`flowchart LR` from only the components and interactions `DOCUMENTED_CONTENT` establishes as
+already existing before this change. If nothing about a prior architecture is established
+either, write one sentence stating that the previous architecture is not described by the
+transcript and clarifications, and omit the diagram — do not draw an empty or invented one.
+
+§2's diagram **never** carries a `classDef`/`class` color (see **DIAGRAM COLOR CODING** below) —
+not on a freshly-built one (relative to itself, nothing here is new, modified, or removed yet),
+and not on one reproduced from `PREVIOUS_ARCHITECTURE_DIAGRAM` either, even if that input happens
+to still have color lines in it. Strip any `classDef`/`class` line before placing the diagram in
+§2 — color always means "changed in the ADR that drew it," and §2 is never that ADR's own §3.
+Reproducing `PREVIOUS_ARCHITECTURE_DIAGRAM` "verbatim" means its nodes, edges, and labels only.
 
 ## 3. Target Architecture
 
-A Mermaid `flowchart LR` of the architecture **after** the change, built the same way, using only
-confirmed components and their confirmed interactions.
+Always produce a diagram here — never the "not described, diagram omitted" case §2 allows.
+Start from `PREVIOUS_ARCHITECTURE_DIAGRAM` (or, if it was empty, from whatever §2 drew) and
+apply only the confirmed changes `DOCUMENTED_CONTENT` establishes: add a confirmed `NEW`
+component and its confirmed connections, keep a confirmed `REMOVED` one **in the diagram** (see
+below — it is styled, never deleted), update a confirmed `MODIFIED` one's connections if those
+changed. Never touch a component or connection `DOCUMENTED_CONTENT` doesn't mention at all — it
+carries forward unchanged from §2.
+
+If `DOCUMENTED_CONTENT` confirms no change at all to anything in `PREVIOUS_ARCHITECTURE_DIAGRAM`,
+Target Architecture is identical to Previous Architecture — reproduce it verbatim again, do not
+invent a difference just to have one. The only case where §3 has no diagram at all is the same
+one where §2 has none: no previous architecture and nothing new confirmed either.
+
+### Diagram color coding
+
+§3's diagram is the one place the document visualizes *this round's* change, so every node in it
+is colored by the same status §4 assigns it — **this round only**, never a status carried over
+from an earlier diagram:
+
+* `NEW` → green
+* `MODIFIED` → orange
+* `REMOVED` → red, dashed — **do not delete the node from the diagram.** A removed component
+  still needs to be seen to understand what disappeared; drop only the connections
+  `DOCUMENTED_CONTENT` confirms no longer exist, never the node itself.
+* `UNCHANGED` this round → no color class at all, even if an earlier diagram (reproduced in §2)
+  had colored that same node — a color always describes what changed *in this ADR*, not the
+  node's whole history.
+
+Declare the three classes once, immediately after the `flowchart LR` line, then apply one `class`
+line per node that is `NEW`, `MODIFIED`, or `REMOVED` this round (group same-status nodes on one
+line, e.g. `class CDS,RNS nodeNew`). Use exactly this styling — do not invent different colors:
+
+```text
+classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22
+classDef nodeModified fill:#fb923c,stroke:#c2410c,color:#431407
+classDef nodeRemoved fill:#f87171,stroke:#b91c1c,color:#450a0a,stroke-dasharray: 5 5
+```
+
+Only components that pass the **COMPONENT INCLUSION RULE** (i.e. appear in §4) may receive a
+class — an unconfirmed component never appears in this diagram at all, colored or not.
+
+Immediately after the fenced diagram, add a one-line legend explaining the colors — only when
+the diagram actually uses at least one of them (skip it entirely if §3 is a verbatim, uncolored
+reproduction of §2 because nothing was confirmed changed):
+
+```text
+**Legend:** 🟢 New · 🟠 Modified · 🔴 Removed
+```
 
 ## 4. Affected Components
 
@@ -203,6 +282,18 @@ A `text` code block showing the file tree of `<contract-id>/v<version>.yaml` ent
 
 Before returning the document, verify internally:
 
+* §3 Target Architecture has a diagram, UNLESS §2 also has none (no previous architecture and
+  nothing new confirmed either) — §3 being empty while §2 has a diagram is always wrong.
+* If `PREVIOUS_ARCHITECTURE_DIAGRAM` was given, §2 reproduces its nodes/edges/labels verbatim,
+  and §3 carries forward every part of it that `DOCUMENTED_CONTENT` doesn't confirm a change to.
+* §2's diagram has **zero** `classDef`/`class` lines and no `**Legend:**` line — always, even
+  when `PREVIOUS_ARCHITECTURE_DIAGRAM` was itself colored. Color is a §3-only concept.
+* §3 declares the three `classDef` lines and colors every `NEW`/`MODIFIED`/`REMOVED` node from
+  §4 with the matching class — and nothing else: no `UNCHANGED` node carries a color, even one
+  reproduced from §2. A `REMOVED` node is still drawn (styled `nodeRemoved`), never deleted
+  from §3.
+* §3's diagram has the `**Legend:**` line right after it whenever the diagram carries at least
+  one color class, and has no legend at all when it carries none.
 * Every component in §4 has exactly one of `NEW`/`MODIFIED`/`REMOVED`/`UNCHANGED` — never
   `UNKNOWN`, never left blank.
 * No component appears in §4, in a diagram, or in a data-contract producer/consumer field unless

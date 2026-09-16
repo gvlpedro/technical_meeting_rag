@@ -14,6 +14,11 @@ COPY ingestion ./ingestion
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
 COPY tests ./tests
+# app/routers/frontend.py runs the real Silver+Gold graph, so the app image needs the same
+# two packages the CLI scripts always needed: agents/ (the graph itself) and prompts/ (the
+# Jinja templates agents/service.py and agents/graph.py load from disk at runtime).
+COPY agents ./agents
+COPY prompts ./prompts
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:${PATH}"

@@ -35,8 +35,8 @@ from db.session import async_session_factory
 DEFAULT_K = 8
 
 
-async def _chat(k: int, max_distance: float | None) -> None:
-    print("Gold RAG chat — ask about the architecture's evolution. Ctrl+D or 'exit' to quit.\n")
+async def _chat(k: int, max_distance: float | None, tenant: str) -> None:
+    print(f"Gold RAG chat (tenant={tenant!r}) — ask about the architecture's evolution. Ctrl+D or 'exit' to quit.\n")
     async with async_session_factory() as session:
         while True:
             try:
@@ -47,7 +47,7 @@ async def _chat(k: int, max_distance: float | None) -> None:
             if not question or question.lower() in {"exit", "quit"}:
                 return
             vector = await embed_question(question)
-            rows = await top_k_gold_evolution(session, vector, k, max_distance=max_distance)
+            rows = await top_k_gold_evolution(session, vector, k, max_distance=max_distance, tenant=tenant)
             latest = await latest_versions(session, rows)
             answer = await answer_question(question, rows, latest)
             print(f"\n{answer}\n")
@@ -62,5 +62,6 @@ if __name__ == "__main__":
         default=DEFAULT_MAX_DISTANCE,
         help="Drop rows past this cosine distance (lower = stricter). Pass a negative value to disable.",
     )
+    parser.add_argument("--tenant", default="default", help="Only search this tenant's Gold facts.")
     args = parser.parse_args()
-    asyncio.run(_chat(args.k, args.max_distance if args.max_distance >= 0 else None))
+    asyncio.run(_chat(args.k, args.max_distance if args.max_distance >= 0 else None, args.tenant))

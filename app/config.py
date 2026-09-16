@@ -1,6 +1,18 @@
 from typing import Literal
 
+from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class FrontendUser(BaseModel):
+    """One login the Streamlit frontend accepts — no user table, no signup, no password
+    hashing: this is a fixed, hardcoded roster for a project this size (see `frontend/`'s own
+    login page). `tenant` is what actually isolates data between logins — every row this user
+    uploads or asks about is tagged with it, and every query the frontend makes filters by it."""
+
+    username: str
+    password: str
+    tenant: str
 
 
 class Settings(BaseSettings):
@@ -34,6 +46,14 @@ class Settings(BaseSettings):
 
     max_architecture_pending_questions: int = 10
     max_data_contract_pending_questions: int = 10
+
+    # Hardcoded example logins for the Streamlit frontend — see GETTING_STARTED.md's
+    # "Frontend usage" section. Each maps to its own tenant, which is the actual isolation
+    # mechanism (see FrontendUser's own docstring); there is no user table behind this.
+    frontend_users: list[FrontendUser] = [
+        FrontendUser(username="pepe", password="1234", tenant="lidr"),
+        FrontendUser(username="peter", password="123", tenant="lotus"),
+    ]
 
 
 settings = Settings()

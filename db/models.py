@@ -22,6 +22,11 @@ class BronzeDocument(Base):
     __tablename__ = "bronze_documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Which frontend tenant uploaded this — a flat, copied-forward column, same no-FK
+    # convention as ingestion_date/source_component (never joined against a users table,
+    # there isn't one). Every query anywhere in Bronze/Silver/Gold must filter by tenant;
+    # nothing here enforces that at the DB level beyond the unique constraints that include it.
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     # Date the source video was uploaded on YouTube
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # Filename of the .vtt transcript this chunk was cut from (traceability).
@@ -60,9 +65,12 @@ class SilverDocument(Base):
     """
 
     __tablename__ = "silver_documents"
-    __table_args__ = (UniqueConstraint("source_component", "version", name="uq_silver_documents_source_version"),)
+    __table_args__ = (
+        UniqueConstraint("tenant", "source_component", "version", name="uq_silver_documents_source_version"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # Matches bronze_documents.source_component. No longer unique alone — see class
     # docstring; (source_component, version) is the real identity now.
@@ -101,6 +109,7 @@ class SilverClarification(Base):
     __tablename__ = "silver_clarifications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # Matches bronze_documents.source_component / silver_documents.source_component.
     source_component: Mapped[str] = mapped_column(String, nullable=False, index=True)
@@ -122,9 +131,12 @@ class SilverChunk(Base):
     """
 
     __tablename__ = "silver_chunks"
-    __table_args__ = (UniqueConstraint("source_component", "version", name="uq_silver_chunks_source_version"),)
+    __table_args__ = (
+        UniqueConstraint("tenant", "source_component", "version", name="uq_silver_chunks_source_version"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     source_component: Mapped[str] = mapped_column(String, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -155,10 +167,13 @@ class GoldEvolution(Base):
 
     __tablename__ = "gold_evolution"
     __table_args__ = (
-        UniqueConstraint("entity_type", "entity_id", "version", name="uq_gold_evolution_entity_version"),
+        UniqueConstraint(
+            "tenant", "entity_type", "entity_id", "version", name="uq_gold_evolution_entity_version"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     # Literal["component", "data_contract", "architecture"] — a subset of
     # agents.schemas.QuestionScope, not redeclared (v6 §3); enforced by Pydantic at the
     # application layer only, plain `String` here, same weak-DB-typing tradeoff already
@@ -204,13 +219,18 @@ class GoldAlias(Base):
 
     __tablename__ = "gold_aliases"
     __table_args__ = (
-        UniqueConstraint("entity_type", "entity_id", "alias", name="uq_gold_aliases_entity_alias"),
+        UniqueConstraint(
+            "tenant", "entity_type", "entity_id", "alias", name="uq_gold_aliases_entity_alias"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
     entity_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     entity_id: Mapped[str] = mapped_column(String, nullable=False)
     alias: Mapped[str] = mapped_column(String, nullable=False)
     source_component: Mapped[str] = mapped_column(String, nullable=False)
     source_adr_version: Mapped[int] = mapped_column(Integer, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+

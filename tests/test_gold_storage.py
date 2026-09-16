@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 
 from agents.gold_service import (
     already_extracted,
+    current_architecture_diagram,
     current_gold_state,
     ensure_alias,
     persist_entity_version,
@@ -307,3 +308,88 @@ async def test_current_gold_state_returns_only_the_latest_version_per_entity():
         assert matching[0].narrative == "v2 narrative"
     finally:
         await _cleanup_entity(entity_type, entity_id)
+
+
+async def test_current_architecture_diagram_draws_a_node_per_live_component_with_an_adr_link():
+    tenant = f"test-arch-{uuid4().hex[:8]}"
+    checkout_id, payment_id = str(uuid4()), str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=payment_id,
+                canonical_name="Payment Gateway",
+                operation="new",
+                narrative="Processes card payments.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+                tenant=tenant,
+            )
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=checkout_id,
+                canonical_name="Checkout Service",
+                operation="modified",
+                narrative="Calls the payment gateway.",
+                payload={"dependency_ids": [payment_id], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=2,
+                ingestion_date=date(2026, 6, 2),
+                tenant=tenant,
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            diagram = await current_architecture_diagram(session, tenant=tenant)
+
+        assert diagram.startswith("flowchart LR")
+        assert "classDef goldNode" in diagram
+        # Backtick markdown-string labels, never raw <br/>/<sub> HTML (see the function's own
+        # docstring for why: those broke node visibility under Streamlit's strict security mode).
+        assert "<br/>" not in diagram and "<sub>" not in diagram
+        assert '["`Payment Gateway\n*meeting v1*`"]' in diagram
+        assert '["`Checkout Service\n*meeting v2*`"]' in diagram
+        assert "-->" in diagram  # Checkout Service depends on Payment Gateway
+        assert 'click' in diagram and '?view_adr=meeting.en.vtt&view_adr_version=1' in diagram
+        assert "class n0,n1 goldNode" in diagram
+    finally:
+        await _cleanup_entity("component", checkout_id)
+        await _cleanup_entity("component", payment_id)
+
+
+async def test_current_architecture_diagram_is_empty_when_gold_has_no_live_component():
+    tenant = f"test-arch-empty-{uuid4().hex[:8]}"
+    async with async_session_factory() as session:
+        diagram = await current_architecture_diagram(session, tenant=tenant)
+    assert diagram == ""
+
+
+async def test_current_architecture_diagram_drops_a_removed_component():
+    tenant = f"test-arch-{uuid4().hex[:8]}"
+    entity_id = str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=entity_id,
+                canonical_name="Legacy Notifier",
+                operation="removed",
+                narrative="Decommissioned.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+                tenant=tenant,
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            diagram = await current_architecture_diagram(session, tenant=tenant)
+        assert diagram == ""
+    finally:
+        await _cleanup_entity("component", entity_id)

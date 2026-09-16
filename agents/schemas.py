@@ -116,6 +116,12 @@ class CritiqueClaim(BaseModel):
 
 class CritiqueResult(BaseModel):
     claims: list[CritiqueClaim]
+    # 0-100 — see prompts/adr_critic.jinja's COMPLETENESS SCORING section. Reuses the Critic's
+    # own document read instead of a second, dedicated LLM call: the Critic already reads the
+    # full document/transcript/clarifications to judge claim support, and completeness is the
+    # same read applied to a different question ("is anything left placeholder?").
+    completeness_score: int
+    unresolved_points: list[str] = []
 
 
 # --- Gold extraction (.tmp/gold_process.md v4, .tmp/gold_process_v5.md,

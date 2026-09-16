@@ -40,8 +40,11 @@ from agents.service import (
     distinct_sources,
     generate_architecture_questions_for_batch,
     generate_data_contract_questions_for_batch,
+    latest_document_content,
     load_bronze_rows,
     mentions_grounded_in_source,
+    previous_architecture_context,
+    previous_target_architecture_diagram,
     source_content,
     transcription_base_name,
 )
@@ -73,25 +76,40 @@ _QUESTIONS_PRIORITIES = {
 }
 
 
-def _top_questions(questions: list[str], scopes: dict[str, str] | None = None) -> list[str]:
+def _top_questions(
+    questions: list[str],
+    architecture_cap: int,
+    data_contract_cap: int,
+    scopes: dict[str, str] | None = None,
+) -> list[str]:
     """When `scopes` (question text -> scope) is given — classify-origin questions, which carry
     a real scope — splits into the architecture bucket (everything except `data_contract`,
-    ranked by `_QUESTIONS_PRIORITIES`, capped at `settings.max_architecture_pending_questions`) and
-    the data-contract bucket (capped at `settings.max_data_contract_pending_questions`,
-    truncated in drafted order). Boss-origin escalations (see `boss_decide`) have no scope of
-    their own (synthesized ad hoc from a Critic claim) and are already naturally few, so
-    without `scopes` they're just truncated to the architecture cap in their existing order."""
+    ranked by `_QUESTIONS_PRIORITIES`, capped at `architecture_cap`) and the data-contract
+    bucket (capped at `data_contract_cap`, truncated in drafted order). Boss-origin escalations
+    (see `boss_decide`) have no scope of their own (synthesized ad hoc from a Critic claim) and
+    are already naturally few, so without `scopes` they're just truncated to `architecture_cap`
+    in their existing order.
+
+    Both caps come from the run's own state (`state["max_architecture_pending_questions"]`/
+    `state["max_data_contract_pending_questions"]`), not read from `settings` directly here —
+    see `agents.state.initial_state` for where a caller (the frontend's upload form, a script,
+    a test) can override them, falling back to `settings`'s own defaults otherwise.
+
+    De-duplicates by exact text first, preserving first-seen order — two identical question
+    strings (`boss_decide` quoting the same Critic claim text twice, or the classify stage
+    drafting the same wording twice) must never reach `ask_human` as two separate pending
+    questions: this node's own resume payload and the frontend's one-widget-per-question
+    rendering both key off question text, so a real duplicate either silently collapses to one
+    answer or crashes the frontend outright (Streamlit requires unique widget keys)."""
+    questions = list(dict.fromkeys(questions))
     if scopes is None:
-        return questions[: settings.max_architecture_pending_questions]
+        return questions[:architecture_cap]
 
     architecture_qs = [q for q in questions if scopes.get(q) != "data_contract"]
     data_contract_qs = [q for q in questions if scopes.get(q) == "data_contract"]
     architecture_qs.sort(key=lambda q: _QUESTIONS_PRIORITIES.get(scopes.get(q, ""), len(_QUESTIONS_PRIORITIES)))
 
-    return (
-        architecture_qs[: settings.max_architecture_pending_questions]
-        + data_contract_qs[: settings.max_data_contract_pending_questions]
-    )
+    return architecture_qs[:architecture_cap] + data_contract_qs[:data_contract_cap]
 
 
 def checkpointer_dsn() -> str:
@@ -100,18 +118,47 @@ def checkpointer_dsn() -> str:
     return settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
+def _is_inside_code_fence(content: str, index: int) -> bool:
+    """True if `index` falls inside a ` ``` `-fenced block — an odd number of fence markers
+    before it means we're currently between an opening and a closing one."""
+    return content.count("```", 0, index) % 2 == 1
+
+
 def _downgrade_claim(content: str, claim: str) -> str:
-    if not claim or claim not in content:
+    """Appends `_DOWNGRADE_MARKER` right after the first occurrence of `claim` that is NOT
+    inside a ` ```mermaid ` fence — the ADR's own "previous"/"target architecture" diagrams
+    live in fenced blocks (`prompts/adr_generator.jinja`'s OUTPUT STRUCTURE), and the
+    Critic's claim text is a verbatim quote from anywhere in the document, diagram node
+    labels included (`prompts/adr_critic.jinja`'s own quoting rule doesn't exempt them).
+    Splicing `**[unknown — flagged by review]**` into a Mermaid label breaks its syntax —
+    Mermaid has no idea what to do with a stray `**` — and the rendered diagram fails outright
+    instead of just looking annotated. If `claim` only ever occurs inside a fence, this
+    returns `content` unchanged rather than corrupt the diagram: there is no prose sentence
+    to annotate, but the diagram must still render."""
+    if not claim:
         return content
     marked = claim + _DOWNGRADE_MARKER
     if marked in content:
         return content  # already downgraded — idempotent against a second pass
-    return content.replace(claim, marked, 1)
+
+    search_from = 0
+    while True:
+        index = content.find(claim, search_from)
+        if index == -1:
+            return content
+        if not _is_inside_code_fence(content, index):
+            return content[:index] + marked + content[index + len(claim) :]
+        search_from = index + 1
 
 
 async def load_bronze(state: SilverState) -> dict:
     async with async_session_factory() as session:
-        rows = await load_bronze_rows(state["ingestion_date"], session)
+        rows = await load_bronze_rows(
+            state["ingestion_date"],
+            session,
+            tenant=state["tenant"],
+            source_components=state["source_components"],
+        )
 
     return {
         "bronze_documents": rows,
@@ -120,9 +167,23 @@ async def load_bronze(state: SilverState) -> dict:
 
 
 async def generate_architecture_questions(state: SilverState) -> dict:
-    """Architecture questions and mentions"""
+    """Architecture questions and mentions.
+
+    `architecture_diagram` (this stage's own KNOWN_ARCHITECTURE input) is built from each
+    distinct source's own previous ADR, if one exists — Silver's own version history, never
+    Gold (see `agents.service.previous_architecture_context`). A source with no prior ADR
+    contributes nothing here, which is exactly "no prior architecture known" to the prompt."""
+    known_architecture_parts = []
+    async with async_session_factory() as session:
+        for source in distinct_sources(state["bronze_documents"]):
+            previous = await latest_document_content(session, state["tenant"], source)
+            context = previous_architecture_context(previous)
+            if context:
+                known_architecture_parts.append(f"### {source}\n\n{context}")
+    known_architecture = "\n\n".join(known_architecture_parts)
+
     result = await generate_architecture_questions_for_batch(
-        state["ingestion_date"], state["bronze_documents"], architecture_diagram=""
+        state["ingestion_date"], state["bronze_documents"], architecture_diagram=known_architecture
     )
     # A name the LLM put in BOTH lists is a data contract wearing a component's clothes, not two
     # distinct entities — "Topic"/"Queue" is a legal component type (architecture_questions.jinja
@@ -180,6 +241,8 @@ async def classify_questions(state: SilverState) -> dict:
     needs_clarification = [c for c in clarifications if c["status"] == "needs_clarification"]
     pending = _top_questions(
         [c["question"] for c in needs_clarification],
+        state["max_architecture_pending_questions"],
+        state["max_data_contract_pending_questions"],
         scopes={c["question"]: c["scope"] for c in needs_clarification},
     )
 
@@ -251,10 +314,15 @@ async def synthesize_document(state: SilverState) -> dict:
     qa_pairs = [{"question": c["question"], "answer": c["answer"]} for c in state["clarifications"]]
 
     documents = dict(state["documents"])
-    for source in sources:
-        messages = build_adr_generation_prompt(source_content(state["bronze_documents"], source), qa_pairs)
-        response = await router.complete(messages)
-        documents[source] = response.choices[0].message.content
+    async with async_session_factory() as session:
+        for source in sources:
+            previous = await latest_document_content(session, state["tenant"], source)
+            previous_diagram = previous_target_architecture_diagram(previous)
+            messages = build_adr_generation_prompt(
+                source_content(state["bronze_documents"], source), qa_pairs, previous_diagram
+            )
+            response = await router.complete(messages)
+            documents[source] = response.choices[0].message.content
 
     return {
         "documents": documents,
@@ -264,8 +332,13 @@ async def synthesize_document(state: SilverState) -> dict:
 
 
 async def critic_document(state: SilverState) -> dict:
-    """Mandatory, always runs, no confidence threshold that skips it."""
+    """Mandatory, always runs, no confidence threshold that skips it. Also produces this
+    source's `completeness_score`/`unresolved_points` (see `prompts/adr_critic.jinja`'s
+    COMPLETENESS SCORING section) from the same read — no second LLM call needed just to
+    grade the document separately from reviewing its claims."""
     critiques = dict(state["critiques"])
+    adr_scores = dict(state["adr_scores"])
+    adr_unresolved_points = dict(state["adr_unresolved_points"])
     for source in state["active_sources"]:
         messages = build_critic_prompt(
             state["documents"][source],
@@ -275,8 +348,14 @@ async def critic_document(state: SilverState) -> dict:
         response = await router.complete(messages, response_format=CritiqueResult)
         result = CritiqueResult.model_validate(load_json_response(response.choices[0].message.content))
         critiques[source] = [c.model_dump() for c in result.claims]
+        adr_scores[source] = result.completeness_score
+        adr_unresolved_points[source] = result.unresolved_points
 
-    return {"critiques": critiques}
+    return {
+        "critiques": critiques,
+        "adr_scores": adr_scores,
+        "adr_unresolved_points": adr_unresolved_points,
+    }
 
 
 def boss_decide(state: SilverState) -> dict:
@@ -325,7 +404,11 @@ def boss_decide(state: SilverState) -> dict:
     }
     if escalate_sources:
         update["redraft_only"] = escalate_sources
-        update["pending_questions"] = _top_questions(pending_questions)
+        update["pending_questions"] = _top_questions(
+            pending_questions,
+            state["max_architecture_pending_questions"],
+            state["max_data_contract_pending_questions"],
+        )
         update["interrupt_origin"] = "boss"
     return update
 
@@ -341,6 +424,7 @@ async def _persist_document_version(
     content: str,
     mentioned_component_names: list[dict],
     mentioned_data_contract_names: list[dict],
+    tenant: str,
 ) -> int:
     """Writes one `SilverDocument` row, deciding the version deterministically from
     content alone — never from what the LLM says about itself. Compares the new ADR's
@@ -360,7 +444,7 @@ async def _persist_document_version(
     latest = (
         await session.execute(
             select(SilverDocument)
-            .where(SilverDocument.source_component == source_component)
+            .where(SilverDocument.tenant == tenant, SilverDocument.source_component == source_component)
             .order_by(SilverDocument.version.desc())
             .limit(1)
         )
@@ -368,6 +452,7 @@ async def _persist_document_version(
 
     def _row_fields(version: int) -> dict:
         return {
+            "tenant": tenant,
             "ingestion_date": ingestion_date,
             "source_component": source_component,
             "version": version,
@@ -427,12 +512,14 @@ async def write_document(state: SilverState) -> dict:
                 content,
                 mentions_grounded_in_source(source_text, state["mentioned_components"]),
                 mentions_grounded_in_source(source_text, state["mentioned_data_contracts"]),
+                state["tenant"],
             )
             _write_adr_audit_file(state["ingestion_date"], source, content)
 
             for item in state["clarifications"]:
                 session.add(
                     SilverClarification(
+                        tenant=state["tenant"],
                         ingestion_date=ingestion_date,
                         source_component=source,
                         question=item["question"],
@@ -459,12 +546,15 @@ async def chunk_and_embed(state: SilverState) -> dict:
             version = state["document_versions"][source]
             await session.execute(
                 delete(SilverChunk).where(
-                    SilverChunk.source_component == source, SilverChunk.version == version
+                    SilverChunk.tenant == state["tenant"],
+                    SilverChunk.source_component == source,
+                    SilverChunk.version == version,
                 )
             )
             [embedding] = await asyncio.to_thread(embed, [content])
             session.add(
                 SilverChunk(
+                    tenant=state["tenant"],
                     ingestion_date=ingestion_date,
                     source_component=source,
                     version=version,
@@ -489,14 +579,16 @@ async def extract_gold_facts(state: SilverState) -> dict:
     version)` Gold has already processed (`gold_service.already_extracted`), so a re-run of
     this graph for an unchanged transcript spends no extra LLM call here either.
 
-    Reuses what Silver's own run already computed instead of a separately-triggered pass
-    re-deriving it from the finished Markdown: `state["documents"][source]` (the final
-    approved ADR, already in memory) and this source's own grounded mention lists, recomputed
-    via `mentions_grounded_in_source` from the same `state["mentioned_components"]`/
-    `state["mentioned_data_contracts"]` + this source's transcript content that
-    `write_document` already used to persist `SilverDocument.mentioned_component_names`/
-    `mentioned_data_contract_names` — cheap, pure, no Postgres round-trip needed to get them
-    back."""
+    Reads only `state["documents"][source]` — the final, clarified, boss-approved ADR — and
+    nothing else. Gold used to also pass this source's grounded `mentioned_components`/
+    `mentioned_data_contracts` (drafted by `generate_architecture_questions`, BEFORE any
+    clarification happened) as a fixed list extraction couldn't go beyond; that meant a
+    component introduced only through a clarification answer, never named in that
+    pre-clarification list, could never reach Gold even though the final ADR plainly described
+    it. Now Gold discovers every component/contract straight from the ADR text itself — the
+    ADR is already the validated, enriched source of truth by the time this node runs, so it
+    needs no earlier list to ground against (see `build_gold_extraction_prompt`'s own
+    docstring)."""
     gold_extractions = dict(state["gold_extractions"])
     async with async_session_factory() as session:
         # Every source that had a document written this run, not just `active_sources` — the
@@ -510,15 +602,10 @@ async def extract_gold_facts(state: SilverState) -> dict:
             if state["boss_verdicts"].get(source) != "ok":
                 continue
             version = state["document_versions"][source]
-            if await gold_service.already_extracted(session, source, version):
+            if await gold_service.already_extracted(session, source, version, tenant=state["tenant"]):
                 continue
 
-            source_text = source_content(state["bronze_documents"], source)
-            component_mentions = mentions_grounded_in_source(source_text, state["mentioned_components"])
-            contract_mentions = mentions_grounded_in_source(source_text, state["mentioned_data_contracts"])
-            result = await gold_service.extract_gold_facts_for_source(
-                state["documents"][source], component_mentions, contract_mentions
-            )
+            result = await gold_service.extract_gold_facts_for_source(state["documents"][source])
             gold_extractions[source] = result.model_dump()
 
     return {"gold_extractions": gold_extractions}
@@ -546,19 +633,23 @@ async def resolve_gold_identity(state: SilverState) -> dict:
             for component in extraction["components"]:
                 if component["status"] == "unknown":
                     continue
-                await gold_service.resolve_and_alias(session, "component", component["name"], name_to_id, source, version)
+                await gold_service.resolve_and_alias(
+                    session, "component", component["name"], name_to_id, source, version, tenant=state["tenant"]
+                )
                 for dep_name in component.get("dependency_names", []):
-                    await gold_service.resolve_and_alias(session, "component", dep_name, name_to_id, source, version)
+                    await gold_service.resolve_and_alias(
+                        session, "component", dep_name, name_to_id, source, version, tenant=state["tenant"]
+                    )
                 for contract_name in component.get("contract_names", []):
                     await gold_service.resolve_and_alias(
-                        session, "data_contract", contract_name, name_to_id, source, version
+                        session, "data_contract", contract_name, name_to_id, source, version, tenant=state["tenant"]
                     )
 
             for contract in extraction["contracts"]:
                 if contract["action"] == "unknown":
                     continue
                 await gold_service.resolve_and_alias(
-                    session, "data_contract", contract["name"], name_to_id, source, version
+                    session, "data_contract", contract["name"], name_to_id, source, version, tenant=state["tenant"]
                 )
 
             entity_id_maps[source] = name_to_id
@@ -568,7 +659,7 @@ async def resolve_gold_identity(state: SilverState) -> dict:
 
 
 async def _persist_components(
-    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date
+    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date, tenant: str
 ) -> None:
     for component in extraction["components"]:
         if component["status"] == "unknown":
@@ -600,11 +691,12 @@ async def _persist_components(
             source_component=source,
             source_adr_version=version,
             ingestion_date=ingestion_date,
+            tenant=tenant,
         )
 
 
 async def _persist_contracts(
-    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date
+    session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date, tenant: str
 ) -> None:
     for contract in extraction["contracts"]:
         if contract["action"] == "unknown":
@@ -625,10 +717,13 @@ async def _persist_contracts(
             source_component=source,
             source_adr_version=version,
             ingestion_date=ingestion_date,
+            tenant=tenant,
         )
 
 
-async def _persist_architecture(session, extraction: dict, source: str, version: int, ingestion_date) -> None:
+async def _persist_architecture(
+    session, extraction: dict, source: str, version: int, ingestion_date, tenant: str
+) -> None:
     """Scoped **per source_component**, not one global "architecture as a whole" entity across
     every source in the batch — reconciling multiple sources' architecture views into one entity
     is cross-source coordination, which `.tmp/gold_process_v5.md` §6 explicitly keeps out of a
@@ -652,6 +747,7 @@ async def _persist_architecture(session, extraction: dict, source: str, version:
         source_component=source,
         source_adr_version=version,
         ingestion_date=ingestion_date,
+        tenant=tenant,
     )
 
 
@@ -668,9 +764,10 @@ async def persist_gold_evolution(state: SilverState) -> dict:
         for source, extraction in state["gold_extractions"].items():
             version = state["document_versions"][source]
             name_to_id = state["gold_entity_ids"].get(source, {})
-            await _persist_components(session, extraction, name_to_id, source, version, ingestion_date)
-            await _persist_contracts(session, extraction, name_to_id, source, version, ingestion_date)
-            await _persist_architecture(session, extraction, source, version, ingestion_date)
+            tenant = state["tenant"]
+            await _persist_components(session, extraction, name_to_id, source, version, ingestion_date, tenant)
+            await _persist_contracts(session, extraction, name_to_id, source, version, ingestion_date, tenant)
+            await _persist_architecture(session, extraction, source, version, ingestion_date, tenant)
         await session.commit()
 
     return {}

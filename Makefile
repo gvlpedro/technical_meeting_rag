@@ -8,7 +8,7 @@ INTERACTIVE ?=
 TEST_DB_NAME ?= technical_meeting_rag_test
 TEST_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:5433/$(TEST_DB_NAME)
 
-.PHONY: test test-acb up down db migrate test-db migrate-test ingestion questions questions-arch questions-data-contracts clarify test-gold-arch-evolution chat
+.PHONY: test test-acb up down db migrate clean test-db migrate-test ingestion questions questions-arch questions-data-contracts clarify test-gold-arch-evolution chat frontend
 
 db:
 	docker compose up -d postgres < /dev/null
@@ -16,6 +16,9 @@ db:
 
 migrate: db
 	uv run alembic upgrade head
+
+clean: migrate
+	PYTHONPATH=. uv run python scripts/clean_dev_data.py
 
 # Creates the test database on first run only. createdb fails if the database
 # already exists, so this checks first and skips createdb when it does.
@@ -71,4 +74,8 @@ clarify: migrate
 
 chat: migrate
 	PYTHONPATH=. uv run python scripts/chat_gold.py
+
+frontend:
+	@echo "Backend must be running separately — 'make up' (docker) or 'uv run uvicorn app.main:app --reload'."
+	STREAMLIT_SERVER_HEADLESS=true uv run streamlit run frontend/app.py
 

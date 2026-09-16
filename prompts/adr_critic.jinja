@@ -15,6 +15,36 @@ expected, not a defect — mark those `"low"` if you flag them at all).
 
 Only flag claims that are actually wrong or unsupported; do not flag every sentence.
 
+---
+
+# COMPLETENESS SCORING
+
+Beyond claim review, judge how complete this document is as a production-ready ADR: every
+named component and data contract should have every field this ADR format requires fully
+resolved — a confirmed lifecycle status, a real ODCS `version`/`status`/`schema.properties`
+for a data contract — not a placeholder value standing in for information nobody has actually
+confirmed yet. `version: not-specified`, `status: not-specified`, and an empty
+`schema.properties: {}` next to a data contract that IS included in the document are exactly
+this: unresolved information dressed up as a finished field, not a genuinely empty section.
+
+`completeness_score` — an integer from 0 to 100. 100 means every included component and data
+contract has every required field fully resolved, with no placeholder-like value anywhere.
+Deduct roughly in proportion to how much of the document's required structure is
+placeholder/unresolved rather than a confirmed fact — one contract with an unresolved
+version/status/schema out of an otherwise complete document should cost noticeably more than
+a few points.
+
+`unresolved_points` — one entry per specific field or fact left placeholder/unresolved, e.g.
+`"notification-created contract: version not specified"`,
+`"notification-created contract: no schema properties defined"`,
+`"Email Worker: dependency list not confirmed"`. Empty only when `completeness_score` is 100.
+
+Do not list something as unresolved if the document correctly leaves it out entirely for lack
+of evidence (a component/contract the transcript only mentions in passing, with no confirmed
+role, is expected to be absent from the affected-components/contracts sections) — a correct
+omission is not an unresolved point, and does not reduce `completeness_score`. Only a field
+that IS present, on an item the document DOES include, but holds a placeholder value counts.
+
 Return JSON matching the requested schema, nothing else.
 
 ---

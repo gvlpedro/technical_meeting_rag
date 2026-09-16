@@ -1,5 +1,7 @@
 from typing import Literal, TypedDict
 
+from app.config import settings
+
 ClarificationStatus = Literal["answered", "unknown", "needs_clarification", "human_answered"]
 
 
@@ -68,6 +70,21 @@ class SilverState(TypedDict):
     just be a second, redundant place for the same value to live.
     """
 
+    tenant: str  # which frontend tenant this run belongs to — threaded into every DB write/query
+    # Per-run override of settings.max_architecture_pending_questions/
+    # max_data_contract_pending_questions (see _top_questions) — the frontend's "Input
+    # transcription" tab lets a user set one shared number for both per upload; a run started
+    # any other way (a script, a test) falls back to the settings default (see initial_state).
+    max_architecture_pending_questions: int
+    max_data_contract_pending_questions: int
+    # Restricts this run's Bronze batch to exactly these source_components, instead of every
+    # bronze_documents row that happens to share (tenant, ingestion_date) — see
+    # `agents.service.load_bronze_rows`'s own docstring for why this matters: two unrelated
+    # frontend uploads picking the same calendar date would otherwise get pooled into one
+    # batch, cross-contaminating each other's questions/ADR. `None` (a script, a test, `make
+    # clarify`) keeps the original "everything for this date" pooling — that one is
+    # intentional, a real batch of same-day transcripts meant to be processed together.
+    source_components: list[str] | None
     ingestion_date: str
     bronze_documents: list[BronzeRow]
     transcript_text: str
@@ -79,6 +96,8 @@ class SilverState(TypedDict):
     documents: dict[str, str]  # source_component -> synthesized ADR Markdown (Actor)
     document_versions: dict[str, int]  # source_component -> version write_document just wrote
     critiques: dict[str, list[CritiqueItem]]  # source_component -> Critic's findings
+    adr_scores: dict[str, int]  # source_component -> Critic's completeness_score (0-100)
+    adr_unresolved_points: dict[str, list[str]]  # source_component -> Critic's unresolved_points
     boss_verdicts: dict[str, str]  # source_component -> "ok" | "needs_human_review"
     revision_attempted: dict[str, bool]  # source_component -> already retried once?
     active_sources: list[str]  # source_components synthesize/critic/boss are working on this pass
@@ -93,8 +112,26 @@ class SilverState(TypedDict):
     gold_entity_ids: dict[str, dict[str, str]]  # source_component -> {raw name -> resolved entity_id}
 
 
-def initial_state(ingestion_date: str) -> SilverState:
+def initial_state(
+    ingestion_date: str,
+    tenant: str = "default",
+    max_architecture_pending_questions: int | None = None,
+    max_data_contract_pending_questions: int | None = None,
+    source_components: list[str] | None = None,
+) -> SilverState:
     return {
+        "tenant": tenant,
+        "max_architecture_pending_questions": (
+            max_architecture_pending_questions
+            if max_architecture_pending_questions is not None
+            else settings.max_architecture_pending_questions
+        ),
+        "max_data_contract_pending_questions": (
+            max_data_contract_pending_questions
+            if max_data_contract_pending_questions is not None
+            else settings.max_data_contract_pending_questions
+        ),
+        "source_components": source_components,
         "ingestion_date": ingestion_date,
         "bronze_documents": [],
         "transcript_text": "",
@@ -106,6 +143,8 @@ def initial_state(ingestion_date: str) -> SilverState:
         "documents": {},
         "document_versions": {},
         "critiques": {},
+        "adr_scores": {},
+        "adr_unresolved_points": {},
         "boss_verdicts": {},
         "revision_attempted": {},
         "active_sources": [],

@@ -58,6 +58,8 @@ def _make_fake_acompletion(
     mentioned_data_contracts: list[dict] | None = None,
     data_contract_questions: list[dict] | None = None,
     gold_extraction: dict | None = None,
+    completeness_score: int = 100,
+    unresolved_points: list[str] | None = None,
 ):
     """Dispatches on which prompt was sent (architecture questions / data-contract
     questions / classify / synthesize / critic). Each question-generation stage and
@@ -105,7 +107,13 @@ def _make_fake_acompletion(
         elif "Architecture Decision Record" in content_in:
             content = synthesis_queue.pop(0)
         elif "You review a drafted architecture document" in content_in:
-            content = json.dumps({"claims": critique_queue.pop(0)})
+            content = json.dumps(
+                {
+                    "claims": critique_queue.pop(0),
+                    "completeness_score": completeness_score,
+                    "unresolved_points": unresolved_points if unresolved_points is not None else [],
+                }
+            )
         else:
             raise AssertionError(f"unexpected prompt: {content_in[:80]!r}")
         return _fake_response(content)
@@ -184,6 +192,10 @@ DATE_BOUNDED_RETRY = date(2026, 6, 5)
 DATE_DATA_CONTRACT_QUESTIONS = date(2026, 6, 7)
 DATE_MENTIONED_NAMES = date(2026, 6, 8)
 DATE_GOLD_EXTRACTION = date(2026, 6, 9)
+DATE_MERMAID_DOWNGRADE = date(2026, 6, 10)
+DATE_GOLD_DISCOVERS_NEW_COMPONENT = date(2026, 6, 11)
+DATE_DUPLICATE_MATERIAL_CLAIMS = date(2026, 6, 12)
+DATE_CRITIC_SCORE = date(2026, 6, 13)
 
 
 async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
@@ -293,7 +305,9 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
             if "Architecture Decision Record" in content_in:
                 return _fake_response("# ADR — Checkout Service\n\nCheckout: unchanged.")
             if "You review a drafted architecture document" in content_in:
-                return _fake_response(json.dumps({"claims": []}))
+                return _fake_response(
+                    json.dumps({"claims": [], "completeness_score": 100, "unresolved_points": []})
+                )
             if "extracting structured, versionable facts" in content_in:
                 return _fake_response(json.dumps(_DEFAULT_GOLD_EXTRACTION))
             raise AssertionError(f"unexpected prompt: {content_in[:80]!r}")
@@ -372,6 +386,36 @@ async def test_clean_transcript_completes_with_no_interrupt_and_persists(monkeyp
         assert len(docs_after) == 1  # upserted, not duplicated
     finally:
         await _cleanup_date(DATE_CLEAN)
+
+
+async def test_critic_completeness_score_reaches_the_final_state(monkeypatch):
+    """`critic_document` (agents/graph.py) must surface the Critic's own `completeness_score`/
+    `unresolved_points` (prompts/adr_critic.jinja's COMPLETENESS SCORING section) in
+    `state["adr_scores"]`/`state["adr_unresolved_points"]`, keyed by source — this is what
+    `app/routers/frontend.py::_to_response` reads to show the reviewer a completeness
+    percentage and the specific unresolved fields, instead of a silently-placeholder ADR."""
+    await _insert_bronze(DATE_CRITIC_SCORE, "meeting_score.en.vtt", ["The reporting pipeline was discussed."])
+    try:
+        monkeypatch.setattr(
+            litellm,
+            "acompletion",
+            _make_fake_acompletion(
+                classification={"classifications": []},
+                synthesis_queue=["# Architecture Description / Evolution\n\nReporting pipeline is unchanged."],
+                critique_queue=[[]],
+                completeness_score=55,
+                unresolved_points=["reporting-events contract: version not specified"],
+            ),
+        )
+        result = await _run("critic-score-1", initial_state("20260613"))
+        assert "__interrupt__" not in result
+
+        assert result["adr_scores"]["meeting_score.en.vtt"] == 55
+        assert result["adr_unresolved_points"]["meeting_score.en.vtt"] == [
+            "reporting-events contract: version not specified"
+        ]
+    finally:
+        await _cleanup_date(DATE_CRITIC_SCORE)
 
 
 async def test_write_document_grounds_batch_mentions_per_source(monkeypatch):
@@ -544,6 +588,57 @@ async def test_contradiction_escalates_once_and_passes_after_human_informed_redr
         await _cleanup_date(DATE_CONTRADICTION)
 
 
+async def test_duplicate_material_claims_produce_one_pending_question_not_two(monkeypatch):
+    """Regression test for a real bug: the Critic can flag two distinct claim entries with the
+    exact same `claim` text (e.g. the same sentence quoted twice, once per severity read) —
+    `boss_decide` used to turn each into its own pending-question string, so two IDENTICAL
+    question strings could reach `ask_human`. The frontend renders one text_input per pending
+    question, keyed off the question itself at the time — Streamlit crashed outright
+    (`StreamlitDuplicateElementKey`) on two widgets sharing a key. `_top_questions`
+    (`agents/graph.py`) now de-dupes by exact text before returning; this drives that same
+    duplicate-claim shape through the real graph and asserts exactly one question survives."""
+    await _insert_bronze(DATE_DUPLICATE_MATERIAL_CLAIMS, "meeting_g.en.vtt", ["The billing service was discussed."])
+    try:
+        duplicate_claim = "Billing Service now charges customers automatically."
+        duplicate_rationale = "transcript never confirms automatic charging"
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=[
+                "# Architecture Description / Evolution\n\nBilling Service now charges customers automatically."
+            ],
+            critique_queue=[
+                # Two claim entries, byte-identical claim AND rationale — this is what makes
+                # boss_decide's own formatted question strings collide exactly, the real shape
+                # of the bug: different rationale per entry would already produce two distinct
+                # strings, no de-dupe needed at all.
+                [
+                    {
+                        "claim": duplicate_claim,
+                        "supported": False,
+                        "rationale": duplicate_rationale,
+                        "severity": "material",
+                    },
+                    {
+                        "claim": duplicate_claim,
+                        "supported": False,
+                        "rationale": duplicate_rationale,
+                        "severity": "material",
+                    },
+                ]
+            ],
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("duplicate-material-claims-1", initial_state("20260612"))
+        assert "__interrupt__" in result
+        pending = result["__interrupt__"][0].value["pending_questions"]
+
+        assert len(pending) == len(set(pending)), f"duplicate pending questions reached ask_human: {pending}"
+        assert len(pending) == 1
+    finally:
+        await _cleanup_date(DATE_DUPLICATE_MATERIAL_CLAIMS)
+
+
 async def test_low_severity_claim_is_downgraded_without_any_interrupt(monkeypatch):
     await _insert_bronze(DATE_LOW_SEVERITY, "meeting_d.en.vtt", ["The reporting pipeline was discussed."])
     try:
@@ -581,6 +676,71 @@ async def test_low_severity_claim_is_downgraded_without_any_interrupt(monkeypatc
         assert "runs nightly **[unknown — flagged by review]**" in doc.content
     finally:
         await _cleanup_date(DATE_LOW_SEVERITY)
+
+
+async def test_downgrading_a_claim_never_corrupts_a_mermaid_diagram(monkeypatch):
+    """Regression test for a real bug: the Critic's claim text is a verbatim quote from
+    anywhere in the document (`prompts/adr_critic.jinja`), diagram node labels included. Boss
+    downgrading such a claim used to splice `**[unknown — flagged by review]**` straight into
+    the ```mermaid fence, breaking the diagram's syntax (Mermaid has no `**` token) — this
+    reproduces exactly that: "integration layer" appears ONLY inside the target-architecture
+    diagram, nowhere in prose. `_downgrade_claim` (agents/graph.py) must leave the diagram
+    byte-for-byte untouched, even though it still downgrades a claim quoted from prose."""
+    await _insert_bronze(DATE_MERMAID_DOWNGRADE, "meeting_f.en.vtt", ["The reporting pipeline was discussed."])
+    try:
+        mermaid_diagram = '    A["integration layer"] --> B["Reporting Service"]'
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=[
+                "# Architecture Description / Evolution\n\n"
+                "The reporting pipeline was migrated to streaming ingestion.\n\n"
+                "## Target architecture\n\n"
+                "```mermaid\n"
+                "graph TD\n"
+                f"{mermaid_diagram}\n"
+                "```\n"
+            ],
+            critique_queue=[
+                [
+                    {
+                        "claim": "migrated to streaming ingestion",
+                        "supported": False,
+                        "rationale": "not explicitly confirmed as a completed migration",
+                        "severity": "low",
+                    },
+                    {
+                        "claim": "integration layer",
+                        "supported": False,
+                        "rationale": "quoted from the diagram node label, not confirmed as a real component",
+                        "severity": "low",
+                    },
+                ]
+            ],
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("mermaid-downgrade-1", initial_state("20260610"))
+        assert "__interrupt__" not in result
+
+        async with async_session_factory() as session:
+            doc = (
+                (
+                    await session.execute(
+                        select(SilverDocument).where(SilverDocument.ingestion_date == DATE_MERMAID_DOWNGRADE)
+                    )
+                )
+                .scalars()
+                .one()
+            )
+
+        # The prose claim is downgraded normally...
+        assert "migrated to streaming ingestion **[unknown — flagged by review]**" in doc.content
+        # ...but the diagram — the only place "integration layer" appears — is untouched.
+        assert mermaid_diagram in doc.content
+        mermaid_block = doc.content.split("```mermaid")[1].split("```")[0]
+        assert "**" not in mermaid_block
+    finally:
+        await _cleanup_date(DATE_MERMAID_DOWNGRADE)
 
 
 async def test_claim_still_material_after_one_retry_proceeds_without_a_third_ask(monkeypatch):
@@ -741,3 +901,81 @@ async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
         await _run("gold-extraction-2", initial_state("20260609"))
     finally:
         await _cleanup_date(DATE_GOLD_EXTRACTION)
+
+
+async def test_gold_discovers_a_component_never_in_the_pre_clarification_mentioned_list(monkeypatch):
+    """Regression test for a real bug: a component introduced only through a clarification
+    answer (never named in `generate_architecture_questions`'s own pre-clarification
+    `mentioned_components`) used to be permanently invisible to Gold, because
+    `extract_gold_facts` was grounded against that earlier list and could never extract
+    anything outside it (`prompts/gold_extraction.jinja`'s old "fixed list, never extract
+    beyond it" rule). Gold now discovers components straight from the final, clarified ADR
+    (see `build_gold_extraction_prompt`'s own docstring) — this fakes exactly that shape:
+    `mentioned_components` only ever names "Checkout Service", but the (faked) extraction
+    result — standing in for what a real LLM reading the final ADR would find — also reports
+    a brand-new "Notification Bus" the ADR's own clarification answers introduced. Both must
+    reach `gold_evolution`; the node must not filter the extraction against the earlier list."""
+    source = "meeting_new_component.en.vtt"
+    await _insert_bronze(
+        DATE_GOLD_DISCOVERS_NEW_COMPONENT, source, ["Checkout Service handles order checkout flows."]
+    )
+    try:
+        gold_extraction = {
+            "components": [
+                {
+                    "name": "Checkout Service",
+                    "status": "unchanged",
+                    "narrative": "Checkout Service continues to handle order checkout flows.",
+                    "dependency_names": [],
+                    "contract_names": [],
+                },
+                {
+                    "name": "Notification Bus",
+                    "status": "new",
+                    "narrative": "A new asynchronous message broker introduced via clarification, "
+                    "never named in the original transcript.",
+                    "dependency_names": [],
+                    "contract_names": [],
+                },
+            ],
+            "contracts": [],
+            "architecture_change": "changed",
+            "architecture_narrative": "A Notification Bus was added to the architecture.",
+            "mermaid_diagram": "",
+        }
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=["# ADR — Checkout\n\nA Notification Bus was introduced via clarification."],
+            critique_queue=[[]],
+            # Only "Checkout Service" was ever identified before clarification happened —
+            # "Notification Bus" is not, and must never need to be, in this list.
+            mentioned_components=[{"name": "checkout service", "status": "unchanged"}],
+            gold_extraction=gold_extraction,
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("gold-discovers-new-component-1", initial_state("20260611"))
+        assert "__interrupt__" not in result
+
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(GoldEvolution).where(
+                            GoldEvolution.ingestion_date == DATE_GOLD_DISCOVERS_NEW_COMPONENT
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        by_name = {r.canonical_name: r for r in rows if r.entity_type == "component"}
+
+        assert "Notification Bus" in by_name, (
+            "a component only named in the (faked) final-ADR extraction, never in the "
+            "pre-clarification mentioned_components list, must still reach gold_evolution"
+        )
+        assert by_name["Notification Bus"].operation == "new"
+        assert by_name["Checkout Service"].operation == "unchanged"
+    finally:
+        await _cleanup_date(DATE_GOLD_DISCOVERS_NEW_COMPONENT)
