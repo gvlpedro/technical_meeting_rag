@@ -8,7 +8,7 @@ make up
 
 ## Tests
 
-In total there are 13 tests available
+The fast suite (mocked LLM calls, safe to run anytime) currently has 75 tests
 
 ```bash
 make test
@@ -72,29 +72,38 @@ make test-gold-arch-evolution
 ## Frontend usage
 
 The Streamlit frontend (`frontend/`) is the "User interface" described in the root
-README — one tab each for uploading a transcript, reviewing/accepting its ADR, chatting
-with Gold, and (only when `start_test_mode` is on) monitoring test results and LLM cost.
+README — one tab each for uploading/clarifying a transcript, browsing the architecture
+history and every published ADR, chatting with Gold, and (only when `start_test_mode` is
+on) monitoring test results and LLM cost.
 
 There is no real user system — `app/config.py`'s `frontend_users` is a fixed, hardcoded
 roster. Each login maps to its own **tenant**, which is what actually isolates data: a file
-`pepe` uploads, or an ADR `pepe` accepts, is invisible to `peter`, and vice versa.
+`pepe` uploads, or an ADR `pepe` publishes, is invisible to `peter`, and vice versa.
 
 | Username | Password | Tenant  |
 | -------- | -------- | ------- |
 | `pepe`   | `1234`   | `lidr`  |
 | `peter`  | `123`    | `lotus` |
 
-Run the backend first, then the frontend in a second terminal:
+One command starts everything — Postgres, the backend, and the frontend, all in Docker:
 
 ```bash
-make up          # backend on http://localhost:8010 (docker), or:
-# uv run uvicorn app.main:app --reload   # backend without docker
-
-make frontend     # Streamlit on http://localhost:8501
+make up
 ```
 
-If the backend runs somewhere other than `http://localhost:8010`, point the frontend at it
-with `BACKEND_URL`:
+Open **http://localhost:8522** once it's up (the frontend waits on the backend's own
+healthcheck before starting, so give it a few seconds on a cold `make up`).
+
+For local frontend development instead — live reload on every save, without rebuilding a
+Docker image each time — run the backend on its own and the frontend separately:
+
+```bash
+make up          # or: uv run uvicorn app.main:app --reload   (backend without docker)
+make frontend    # Streamlit on http://localhost:8501, live-reloading from your working copy
+```
+
+If the backend runs somewhere other than `http://localhost:8010`, point the local frontend
+at it with `BACKEND_URL`:
 
 ```bash
 BACKEND_URL=http://localhost:8010 make frontend
@@ -102,8 +111,9 @@ BACKEND_URL=http://localhost:8010 make frontend
 
 Log in as `pepe`/`1234` or `peter`/`123`, then:
 
-1. **Input transcription** — upload a `.txt`, `.vtt`, `.md`, or `.pdf` for one meeting and
-   click "Process and clarify". If the clarification loop needs a human answer, the tab shows the pending
+1. **Input transcription** — type something directly into the "Prompt" box, upload a `.txt`,
+   `.vtt`, `.md`, or `.pdf` for one meeting, or both, then click "Process and clarify" (enabled
+   once either has content). If the clarification loop needs a human answer, the tab shows the pending
    questions right there — answer them and submit to finish the run. Once you're happy with the
    generated ADR, click "Publish" — its facts are in Gold and retrievable from Chat immediately.
 2. **Architecture history** — every ADR published so far, in a table (click "View ADR" to open

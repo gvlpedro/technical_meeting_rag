@@ -38,8 +38,10 @@ from agents.schemas import (
 from agents.service import (
     NoBronzeDocumentsError,
     distinct_sources,
+    extract_authors_line,
     generate_architecture_questions_for_batch,
     generate_data_contract_questions_for_batch,
+    insert_authors_line,
     latest_document_content,
     load_bronze_rows,
     mentions_grounded_in_source,
@@ -63,8 +65,17 @@ logfire.configure(
     service_name="silver-clarification-loop",
 )
 
-_DECLINE_PHRASES = {"", "no sé", "no se", "unknown", "n/a", "idk", "i don't know"}
+_DECLINE_PHRASES = {"", "no sé", "no se", "unknown", "n/a", "idk", "i don't know", "[irrelevant]"}
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
+
+# The frontend's per-question "Infer an answer"/"Suggest info" buttons (see `frontend/app.py`)
+# send one of these two literal strings as the answer instead of free text — never added to
+# `_DECLINE_PHRASES` above, since they must survive into `SilverClarification.answer` as real
+# answered text for `prompts/adr_generator.jinja`'s own CLARIFICATION ANSWER MARKERS section to
+# interpret. "Irrelevant" (unlike these two) genuinely means "no answer" and belongs in the
+# decline set instead — it has no special downstream interpretation of its own.
+INFER_FROM_CONTEXT_MARKER = "[INFER FROM CONTEXT]"
+SUGGEST_INFO_MARKER = "[SUGGEST INFO]"
 
 _QUESTIONS_PRIORITIES = {
     "adr": 0,      # Decisions
@@ -439,8 +450,15 @@ async def _persist_document_version(
     (or differently-grounded) mention list even when the synthesized ADR text itself hashes
     identical. `_row_fields` is the single place all three branches (insert-first, overwrite,
     insert-next-version) read shared column values from, so a future column addition is a
-    one-line change here instead of a hand-edit repeated across three constructor calls."""
+    one-line change here instead of a hand-edit repeated across three constructor calls.
+
+    `authored_by` is read straight out of `content`'s own `**Authors:**` line
+    (`agents.service.extract_authors_line`) — never a separate parameter — so this function has
+    exactly one source of truth for who authored a version, matching whatever the document
+    itself says, including on the overwrite branch (an identical-hash re-run still refreshes it,
+    same reasoning as the mention lists above)."""
     new_hash = gold_service.content_hash(content)
+    authored_by = extract_authors_line(content)
     latest = (
         await session.execute(
             select(SilverDocument)
@@ -460,6 +478,7 @@ async def _persist_document_version(
             "content_hash": new_hash,
             "mentioned_component_names": mentioned_component_names,
             "mentioned_data_contract_names": mentioned_data_contract_names,
+            "authored_by": authored_by,
         }
 
     if latest is None:
@@ -488,33 +507,51 @@ def _write_adr_audit_file(ingestion_date_str: str, source_component: str, conten
 
 
 async def write_document(state: SilverState) -> dict:
-    """Persists each synthesized ADR at its own (`source_component`, `version`) —
-    see `_persist_document_version` for the overwrite-vs-new-version decision — and
-    appends this run's clarifications to `silver_clarifications` — one row per
-    (source, question), inserted fresh every run rather than upserted, so it
-    accumulates a history instead of only the latest state. Also writes each ADR to disk
-    (`_write_adr_audit_file`) for manual inspection alongside the Postgres write.
+    """Persists each synthesized ADR at its own (`source_component`, `version`) — see
+    `_persist_document_version` for the overwrite-vs-new-version decision — and writes each ADR
+    to disk (`_write_adr_audit_file`) for manual inspection alongside the Postgres write. Only
+    when `state["persist"]` is true: the frontend's initial upload runs with it false, so this
+    ADR (and everything downstream — see `route_after_write_document`) stays a draft until a
+    human explicitly clicks "Publish". Publishing later calls `_persist_document_version` itself
+    (`finalize_document`), so nothing here needs a second, deferred write path.
+
+    Always appends this run's clarifications to `silver_clarifications` — one row per (source,
+    question), inserted fresh every run rather than upserted, so it accumulates a history instead
+    of only the latest state — regardless of `persist`: this is the Q&A audit trail
+    `agents.service.qa_pairs_for_source` reads back for `regenerate_document`/
+    `ask_more_questions`, which must keep working on a still-unpublished draft.
 
     `mentioned_components`/`mentioned_data_contracts` are drafted once over the whole
     batch's pooled transcript (`generate_architecture_questions`), not per source — grounds
     each mention against this specific source's own content (`mentions_grounded_in_source`)
     before persisting, so a future Gold extraction pass reads a per-ADR grounded list instead
-    of re-deriving it from the finished Markdown."""
+    of re-deriving it from the finished Markdown.
+
+    Stamps `state["username"]` onto every document here, via `insert_authors_line` — AFTER
+    `critic_document`/`boss_decide` have already run (this is the last node before Gold), so the
+    Critic never sees this line and can't flag it as an unsupported claim. Returns the stamped
+    `documents` dict regardless of `persist`, so the frontend's draft preview shows the same
+    `**Authors:**` line the eventually-published version will have."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
+    documents = {
+        source: insert_authors_line(content, state["username"])
+        for source, content in state["documents"].items()
+    }
     document_versions: dict[str, int] = dict(state["document_versions"])
     async with async_session_factory() as session:
-        for source, content in state["documents"].items():
-            source_text = source_content(state["bronze_documents"], source)
-            document_versions[source] = await _persist_document_version(
-                session,
-                ingestion_date,
-                source,
-                content,
-                mentions_grounded_in_source(source_text, state["mentioned_components"]),
-                mentions_grounded_in_source(source_text, state["mentioned_data_contracts"]),
-                state["tenant"],
-            )
-            _write_adr_audit_file(state["ingestion_date"], source, content)
+        for source, content in documents.items():
+            if state["persist"]:
+                source_text = source_content(state["bronze_documents"], source)
+                document_versions[source] = await _persist_document_version(
+                    session,
+                    ingestion_date,
+                    source,
+                    content,
+                    mentions_grounded_in_source(source_text, state["mentioned_components"]),
+                    mentions_grounded_in_source(source_text, state["mentioned_data_contracts"]),
+                    state["tenant"],
+                )
+                _write_adr_audit_file(state["ingestion_date"], source, content)
 
             for item in state["clarifications"]:
                 session.add(
@@ -528,7 +565,15 @@ async def write_document(state: SilverState) -> dict:
                 )
         await session.commit()
 
-    return {"document_versions": document_versions}
+    return {"documents": documents, "document_versions": document_versions}
+
+
+def route_after_write_document(state: SilverState) -> Literal["chunk_and_embed", "skip_to_end"]:
+    """Gold (`chunk_and_embed` onward) only ever runs for a run that's actually persisting its
+    own document — see `SilverState.persist`'s own docstring. A frontend draft ends right here,
+    with nothing in Silver/Gold beyond the `silver_clarifications` audit trail
+    `write_document` always writes."""
+    return "chunk_and_embed" if state["persist"] else "skip_to_end"
 
 
 async def chunk_and_embed(state: SilverState) -> dict:
@@ -704,7 +749,7 @@ async def _persist_contracts(
         payload = DataContractPayload(
             producer=contract["producer"],
             consumer=contract["consumer"],
-            odcs_spec=contract.get("odcs_spec", {}),
+            odcs_spec=gold_service.parse_odcs_spec(contract.get("odcs_spec", "")),
         ).model_dump()
         await gold_service.persist_entity_version(
             session,
@@ -814,7 +859,11 @@ def build_graph(checkpointer) -> CompiledStateGraph:
         route_after_boss,
         {"ask_human": "ask_human", "write_document": "write_document"},
     )
-    graph.add_edge("write_document", "chunk_and_embed")
+    graph.add_conditional_edges(
+        "write_document",
+        route_after_write_document,
+        {"chunk_and_embed": "chunk_and_embed", "skip_to_end": END},
+    )
     graph.add_edge("chunk_and_embed", "extract_gold_facts")
     graph.add_edge("extract_gold_facts", "resolve_gold_identity")
     graph.add_edge("resolve_gold_identity", "persist_gold_evolution")

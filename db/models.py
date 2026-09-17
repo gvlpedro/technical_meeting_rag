@@ -31,6 +31,11 @@ class BronzeDocument(Base):
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # Filename of the .vtt transcript this chunk was cut from (traceability).
     source_component: Mapped[str] = mapped_column(String, nullable=False)
+    # Who uploaded this chunk — the frontend's logged-in username (see FrontendUser), threaded
+    # through from `ingest_uploaded_files`. `""` for the disk-based `ingest_bronze` path
+    # (`scripts/ingest.py`/`POST /v1/ingest`), which predates the frontend and has no user to
+    # attribute a row to.
+    uploaded_by: Mapped[str] = mapped_column(String, nullable=False, server_default="")
     # The chunk's actual text, as fed to the embedding model.
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Vector embedding of `content` (dimension fixed by settings.embedding_dim / the
@@ -84,6 +89,12 @@ class SilverDocument(Base):
     # without diffing full document text on every run.
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Who generated THIS version — extracted from `content`'s own `**Authors:** <username>`
+    # line (`agents.graph._extract_authors_line`), not a separately-passed parameter, so there
+    # is exactly one source of truth for "who wrote this" and it can never drift from what the
+    # document itself says. `""` when `content` has no Authors line at all (a CLI/script/test
+    # run with no real user — see `agents.state.SilverState.username`).
+    authored_by: Mapped[str] = mapped_column(String, nullable=False, server_default="")
     # Raw, unresolved component/data-contract mentions grounded in THIS row's own source —
     # `MentionedComponent`/`MentionedDataContract`-shaped dicts (agents/schemas.py), filtered
     # from generate_architecture_questions' batch-wide output down to just the ones whose name

@@ -19,6 +19,10 @@ COPY tests ./tests
 # Jinja templates agents/service.py and agents/graph.py load from disk at runtime).
 COPY agents ./agents
 COPY prompts ./prompts
+# One image serves both `docker-compose.yml` services (app and frontend) — the Streamlit UI
+# is just a different CMD (see that file's `frontend` service) over the same dependency set,
+# since streamlit/requests are already ordinary (non-dev) pyproject.toml dependencies.
+COPY frontend ./frontend
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:${PATH}"

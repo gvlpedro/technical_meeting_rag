@@ -110,44 +110,11 @@ flowchart LR
 
 ## 6. ODCS Data Contract Specifications
 
-### 6.1 `raw-event` — Unchanged
+`raw-event` (Event Collector → Event Processor) is not specified here — it is `UNCHANGED`
+(present only because it sits on Event Processor's own inbound edge, itself `MODIFIED` this
+round; see §5), so it stays a reference in §5 with no full specification below.
 
-**Action:** `UNCHANGED`  
-**Version:** `1.0.0`  
-**Producer:** `Event Collector`  
-**Consumer:** `Event Processor`
-
-```yaml
-apiVersion: v3.1.0
-kind: DataContract
-
-name: raw-event
-version: 1.0.0
-status: active
-
-description: Raw event received from the event collector.
-
-schema:
-  type: object
-  properties:
-    event_id:
-      type: string
-      required: true
-      description: Unique identifier of the event.
-
-    timestamp:
-      type: string
-      format: date-time
-      required: true
-
-    payload:
-      type: object
-      required: true
-```
-
----
-
-### 6.2 `customer-lookup-request` — New
+### 6.1 `customer-lookup-request` — New
 
 **Action:** `NEW`  
 **Version:** `1.0.0`  
@@ -175,7 +142,7 @@ schema:
 
 ---
 
-### 6.3 `customer-lookup-response` — New
+### 6.2 `customer-lookup-response` — New
 
 **Action:** `NEW`  
 **Version:** `1.0.0`  
@@ -214,7 +181,7 @@ schema:
 
 ---
 
-### 6.4 `processed-event` — Modified
+### 6.3 `processed-event` — Modified
 
 **Action:** `MODIFIED`  
 **Previous version:** `1.0.0`  
@@ -304,7 +271,7 @@ processed-event v2.0.0
 
 ---
 
-### 6.5 `risk-event` — New
+### 6.4 `risk-event` — New
 
 **Action:** `NEW`  
 **Version:** `1.0.0`  
@@ -352,7 +319,7 @@ schema:
 
 ---
 
-### 6.6 `processed-event` v1.0.0 — Deprecated
+### 6.5 `processed-event` v1.0.0 — Deprecated
 
 **Action:** `DEPRECATED`  
 **Version:** `1.0.0`  
@@ -393,7 +360,7 @@ schema:
 
 ---
 
-### 6.7 `notification-input` — Removed
+### 6.6 `notification-input` — Removed
 
 **Action:** `REMOVED`  
 **Version:** `1.0.0`  
@@ -420,9 +387,6 @@ description: >
 
 ```text
 contracts/
-├── raw-event/
-│   └── v1.0.0.yaml
-│
 ├── customer-lookup-request/
 │   └── v1.0.0.yaml
 │

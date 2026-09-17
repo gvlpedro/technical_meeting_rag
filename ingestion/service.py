@@ -83,13 +83,16 @@ async def ingest_bronze(ingestion_date: str, db: AsyncSession, *, tenant: str = 
 
 
 async def ingest_uploaded_files(
-    files: list[tuple[str, bytes]], ingestion_date: str, tenant: str, db: AsyncSession
+    files: list[tuple[str, bytes]], ingestion_date: str, tenant: str, db: AsyncSession, *, uploaded_by: str = ""
 ) -> IngestResult:
     """Ingest files uploaded straight from the frontend's "Input transcription" tab — no disk
     partition involved, unlike `ingest_bronze` above. `files` is `[(filename, raw_bytes), ...]`;
     `.vtt` goes through `parse_vtt_text`, `.pdf` through `extract_pdf_text`, `.txt`/`.md` are
     decoded as plain text directly (no cue-timing/metadata stripping needed), anything else is
     rejected with `ValueError` naming the file.
+
+    `uploaded_by` is the logged-in username that submitted this batch — stamped on every
+    `BronzeDocument` row written here (see that column's own docstring in `db/models.py`).
 
     Raises `ValueError` for a malformed `ingestion_date` or an unsupported file extension,
     `NoTranscriptsFoundError` if `files` is empty."""
@@ -125,6 +128,7 @@ async def ingest_uploaded_files(
                     tenant=tenant,
                     ingestion_date=parsed_date,
                     source_component=filename,
+                    uploaded_by=uploaded_by,
                     content=chunk_content,
                     embedding=embedding,
                 )

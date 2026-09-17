@@ -1,4 +1,5 @@
 PORT ?= 8010
+FRONTEND_PORT ?= 8522
 DATE ?=
 
 INTERACTIVE ?=
@@ -49,8 +50,10 @@ down:
 	docker compose down
 
 up: down
-	HOST_PORT=$(PORT) docker compose up -d --build
-	@echo "Server up, verify on http://localhost:$(PORT)/health"
+	HOST_PORT=$(PORT) FRONTEND_HOST_PORT=$(FRONTEND_PORT) docker compose up -d --build
+	@echo "Backend up, verify on http://localhost:$(PORT)/health"
+	@echo "Frontend starting (waits on the backend's own healthcheck first) — give it a few"
+	@echo "seconds, then open http://localhost:$(FRONTEND_PORT)"
 
 ingestion: migrate
 	@test -n "$(DATE)" || (echo "Usage: make ingestion DATE=YYYYMMDD" >&2; exit 1)
@@ -76,6 +79,8 @@ chat: migrate
 	PYTHONPATH=. uv run python scripts/chat_gold.py
 
 frontend:
+	@echo "For local development only, with live reload on save — 'make up' alone already runs"
+	@echo "the frontend in Docker too, at http://localhost:$(FRONTEND_PORT)."
 	@echo "Backend must be running separately — 'make up' (docker) or 'uv run uvicorn app.main:app --reload'."
 	STREAMLIT_SERVER_HEADLESS=true uv run streamlit run frontend/app.py
 

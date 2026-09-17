@@ -71,6 +71,22 @@ class SilverState(TypedDict):
     """
 
     tenant: str  # which frontend tenant this run belongs to — threaded into every DB write/query
+    # The logged-in username driving this run, if any — `write_document` stamps it onto every
+    # synthesized ADR as a `**Authors:**` line (`agents.service.insert_authors_line`), then
+    # `_persist_document_version` reads it straight back out of that same content into
+    # `SilverDocument.authored_by`. `""` for a CLI/script/test run with no real user — see
+    # `insert_authors_line`'s own docstring for why that's a safe no-op, not a placeholder.
+    username: str
+    # Whether `write_document` may persist this run's own `SilverDocument`/on-disk audit file,
+    # and whether the graph continues on into Gold at all (`route_after_write_document`) — `True`
+    # everywhere except the frontend's initial upload (`app/routers/frontend.py::
+    # upload_transcription` passes `False`). The clarification loop's own draft (and any
+    # "Regenerate ADR"/"Ask me more" refinement of it) is temporary until a human explicitly
+    # clicks "Publish" (`finalize_document`); nothing before that click may create a Silver
+    # version or a Gold fact. `SilverClarification` (the Q&A audit trail) is the one exception —
+    # `write_document` always logs it regardless of `persist`, since `regenerate_document`/
+    # `ask_more_questions` read it back to keep grounding a still-unpublished draft.
+    persist: bool
     # Per-run override of settings.max_architecture_pending_questions/
     # max_data_contract_pending_questions (see _top_questions) — the frontend's "Input
     # transcription" tab lets a user set one shared number for both per upload; a run started
@@ -118,9 +134,13 @@ def initial_state(
     max_architecture_pending_questions: int | None = None,
     max_data_contract_pending_questions: int | None = None,
     source_components: list[str] | None = None,
+    persist: bool = True,
+    username: str = "",
 ) -> SilverState:
     return {
         "tenant": tenant,
+        "persist": persist,
+        "username": username,
         "max_architecture_pending_questions": (
             max_architecture_pending_questions
             if max_architecture_pending_questions is not None

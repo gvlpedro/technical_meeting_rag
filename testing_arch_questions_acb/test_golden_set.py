@@ -164,9 +164,18 @@ def _check_mentioned_data_contracts_are_grounded(
     other identification output: every claimed contract `name` must appear in the transcript
     verbatim (case-insensitive, word-boundary-safe) — this stage identifies contracts, it
     doesn't invent them, and an invented one here would feed straight into the data-contract
-    stage as if it were real."""
+    stage as if it were real.
+
+    `"unknown"` is exempt, never a violation: `architecture_questions.jinja`'s PHASE 6B
+    explicitly requires that literal sentinel for a contract implied only by a connection the
+    transcript never named — that is the documented alternative to inventing a plausible-sounding
+    name, not a hallucination this check exists to catch."""
     transcript_lower = transcript.lower()
-    ungrounded = [c.name for c in mentioned_data_contracts if not name_appears_in_text(c.name, transcript_lower)]
+    ungrounded = [
+        c.name
+        for c in mentioned_data_contracts
+        if c.name != "unknown" and not name_appears_in_text(c.name, transcript_lower)
+    ]
     if ungrounded:
         return [f"{len(ungrounded)} mentioned_data_contracts not found in the transcript: {ungrounded}"]
     return []

@@ -13,6 +13,7 @@ for the two stages' own golden-set tests.
 """
 
 import re
+from datetime import date
 from pathlib import Path
 
 from sqlalchemy import select
@@ -60,6 +61,40 @@ def distinct_sources(bronze_documents: list[BronzeRow]) -> list[str]:
 
 def source_content(bronze_documents: list[BronzeRow], source_component: str) -> str:
     return " ".join(r["content"] for r in bronze_documents if r["source_component"] == source_component)
+
+
+def insert_authors_line(document: str, username: str) -> str:
+    """Inserts a `**Authors:** <username>` line right after the ADR's own `# ADR — <title>`
+    heading — deterministic Python, never left to the LLM: the reviewer's identity is already
+    known from their session, not something to extract from the transcript, so asking the model
+    to write it would only add a hallucination risk for zero benefit.
+
+    Called AFTER the Critic has already reviewed the document (`agents.graph.write_document`,
+    `app/routers/frontend.py::regenerate_document`) — never before. The Critic grounds every
+    claim against `TRANSCRIPT`/`CLARIFICATIONS`, which never mention who is running this
+    session; inserting this line earlier would make the Critic flag it as an unsupported claim
+    and downgrade it into a `[unknown — flagged by review]` marker.
+
+    A no-op when `username` is falsy (a CLI/script/test run with no real logged-in user) — the
+    document comes back byte-for-byte unchanged, so no existing golden-set/exact-match test
+    output shifts just because this function now exists."""
+    if not username:
+        return document
+    heading, _, rest = document.partition("\n")
+    return f"{heading}\n\n**Authors:** {username}\n\n{rest.lstrip(chr(10))}"
+
+
+_AUTHORS_LINE_RE = re.compile(r"^\*\*Authors:\*\*\s*(.+)$", re.MULTILINE)
+
+
+def extract_authors_line(document: str) -> str:
+    """The inverse of `insert_authors_line` — pulls the username back out of a document's own
+    `**Authors:**` line, so `agents.graph._persist_document_version` has exactly one source of
+    truth for `SilverDocument.authored_by` (the content itself) instead of a second, independently
+    passed value that could drift from what the document actually says. `""` if the document has
+    no such line (a CLI/script/test run — see `insert_authors_line`)."""
+    match = _AUTHORS_LINE_RE.search(document)
+    return match.group(1).strip() if match else ""
 
 
 def transcription_base_name(source_component: str) -> str:
@@ -286,21 +321,21 @@ async def bronze_content_for_source(session: AsyncSession, tenant: str, source_c
 
 async def bronze_ingestion_date_for_source(
     session: AsyncSession, tenant: str, source_component: str
-) -> str | None:
-    """This source's own `ingestion_date`, formatted the same `YYYYMMDD` way
-    `generate_architecture_questions_for_batch`/`generate_data_contract_questions_for_batch`
-    take it — needed by the frontend's "ask me more" endpoint, which calls both standalone
-    (outside any graph run, so there is no `state["ingestion_date"]` to read) purely to name
-    their own audit files under `output/ingestion_date=<date>/...`. `None` if this source has
-    no bronze rows at all."""
+) -> date | None:
+    """This source's own `ingestion_date`, as `BronzeDocument` itself stores it — needed by two
+    callers with no `SilverDocument` row to read it from instead: the frontend's "ask me more"
+    endpoint (which calls the question generators standalone, outside any graph run, purely to
+    name their own audit files under `output/ingestion_date=<date>/...` — format with
+    `.strftime("%Y%m%d")` there) and `finalize_document`'s first-ever "Publish" for a source
+    (`_persist_document_version` takes a `date`, not a string). `None` if this source has no
+    bronze rows at all."""
     result = await session.execute(
         select(BronzeDocument.ingestion_date)
         .where(BronzeDocument.tenant == tenant, BronzeDocument.source_component == source_component)
         .order_by(BronzeDocument.id)
         .limit(1)
     )
-    ingestion_date = result.scalar_one_or_none()
-    return ingestion_date.strftime("%Y%m%d") if ingestion_date else None
+    return result.scalar_one_or_none()
 
 
 async def qa_pairs_for_source(session: AsyncSession, tenant: str, source_component: str) -> list[dict]:

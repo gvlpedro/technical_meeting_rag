@@ -9,7 +9,7 @@ Run:
 See GETTING_STARTED.md's "Frontend usage" section for the two example logins.
 """
 
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import quote
 
 import requests
@@ -20,9 +20,85 @@ import theme
 
 st.set_page_config(page_title="Technical Meeting RAG", layout="wide")
 
+# The three literal answer strings a clarification-question action button sends instead of typed
+# text — must match `agents.graph.py`'s own copies exactly (`INFER_FROM_CONTEXT_MARKER`/
+# `SUGGEST_INFO_MARKER`, and `"[irrelevant]"` in `_DECLINE_PHRASES`) since frontend and backend
+# are separate processes with no shared import; `prompts/adr_generator.jinja`'s CLARIFICATION
+# ANSWER MARKERS section is what actually interprets the two non-decline ones.
+_IRRELEVANT_MARKER = "[IRRELEVANT]"
+_INFER_MARKER = "[INFER FROM CONTEXT]"
+_SUGGEST_MARKER = "[SUGGEST INFO]"
+
+
+def _render_question_row(question: str, key_prefix: str, disabled: bool) -> str:
+    """One clarification question: its text input, plus three always-colored action buttons
+    (red/orange/green — `theme.py`'s own `qbtn-*` CSS) the reviewer can click instead of typing —
+    "Irrelevant" (this doesn't need answering), "Infer an answer" (already established elsewhere
+    in what's already provided — don't ask, look it up), "Suggest info" (explicitly authorize the
+    ADR to propose an answer, always visibly labeled `LLM SUGGESTION:` in the output). Returns
+    whatever should be sent as this question's answer: the typed text, or the matching marker.
+
+    Clicking an already-selected action toggles it back off (no separate "clear" control needed).
+    While an action is selected, the text input is disabled — the two are mutually exclusive, a
+    typed answer and a marker can't both apply to the same question.
+
+    Two rows, not one: the question takes the full row on its own line (it's often longer than
+    the 60% an inline label would leave it), then a second row splits 60/40 between the answer
+    box and the three action buttons — same row, so both start at the same y position instead of
+    the buttons sitting a line higher than the input (which is what happens if the question is
+    used as the input's own label instead of its own line)."""
+    action_key = f"{key_prefix}::action"
+    selected = st.session_state.get(action_key)
+
+    st.markdown(f"**{question}**")
+    text_col, buttons_col = st.columns([6, 4])
+    typed = text_col.text_input(
+        question,
+        key=f"{key_prefix}::text",
+        label_visibility="collapsed",
+        disabled=disabled or selected is not None,
+    )
+    irrelevant_col, infer_col, suggest_col = buttons_col.columns(3)
+
+    if irrelevant_col.button("Irrelevant", key=f"qbtn-irrelevant-{key_prefix}", disabled=disabled, use_container_width=True):
+        st.session_state[action_key] = None if selected == "irrelevant" else "irrelevant"
+        st.rerun()
+    if infer_col.button("Infer an answer", key=f"qbtn-infer-{key_prefix}", disabled=disabled, use_container_width=True):
+        st.session_state[action_key] = None if selected == "infer" else "infer"
+        st.rerun()
+    if suggest_col.button("Suggest info", key=f"qbtn-suggest-{key_prefix}", disabled=disabled, use_container_width=True):
+        st.session_state[action_key] = None if selected == "suggest" else "suggest"
+        st.rerun()
+
+    if selected == "irrelevant":
+        st.caption("Marked irrelevant — will be submitted as not needing an answer.")
+        return _IRRELEVANT_MARKER
+    if selected == "infer":
+        st.caption("Will ask the system to infer this from information already provided, "
+                   "instead of leaving it unresolved.")
+        return _INFER_MARKER
+    if selected == "suggest":
+        st.caption("Will let the system suggest new info for this — always labeled "
+                   "\"LLM SUGGESTION:\" in the resulting ADR.")
+        return _SUGGEST_MARKER
+    return typed
+
+
+def _error_detail(exc: requests.HTTPError) -> str:
+    """The backend's own `{"detail": ...}` message when there is one — but the backend doesn't
+    always get to send that shape. An unhandled exception (e.g. every real LLM provider failing
+    at once, which is what actually triggered this once — see `llm.router.AllProvidersFailedError`)
+    never reaches a FastAPI `HTTPException`; Starlette's own default handler returns a **plain
+    text** 500 body instead, and `response.json()` on that raises its own `JSONDecodeError` —
+    which used to crash this screen instead of showing the original error at all. Falls back to
+    the raw response text, then to the exception itself, so this can never crash the caller."""
+    try:
+        return str(exc.response.json().get("detail", exc))
+    except ValueError:
+        return exc.response.text.strip() or str(exc)
+
 
 def _login_screen() -> None:
-    st.title("Technical Meeting RAG")
     st.caption("Log in with one of the example accounts in GETTING_STARTED.md.")
     with st.form("login_form"):
         username = st.text_input("Username")
@@ -39,7 +115,36 @@ def _login_screen() -> None:
             st.error(f"Could not reach the backend at {api_client.BACKEND_URL}: {exc}")
 
 
-def _render_adr_candidates(tenant: str, result: dict) -> None:
+def _reset_input_transcription_state(thread_id: str, sources: list[str]) -> None:
+    """Clears every session_state key tied to one upload/clarification cycle once every ADR
+    candidate it produced has been published — the transcript's lifecycle ends at Publish, so
+    nothing about that cycle (the upload result, its drafts, its per-question widget state)
+    needs to survive into the next one. Called right before the `st.rerun()` that follows a
+    Publish click, so "Input transcription" renders its blank initial form again on the next
+    run instead of the finalized card staying on screen forever."""
+    st.session_state.pop("last_upload", None)
+    st.session_state.pop("upload_payload", None)
+    st.session_state.pop("upload_ingestion_date", None)
+    st.session_state.pop("upload_max_questions", None)
+    # Salts the date/prompt/uploader/max-questions widgets' keys (see `_input_transcription_tab`)
+    # so they render with fresh, empty defaults instead of the last typed/uploaded values a
+    # no-explicit-key widget would otherwise keep across reruns on its own.
+    st.session_state["upload_form_generation"] = st.session_state.get("upload_form_generation", 0) + 1
+    candidates = st.session_state.get("adr_candidates", {})
+    for source in sources:
+        candidates.pop(source, None)
+        for prefix in (
+            "regen_in_progress",
+            "ask_more_in_progress",
+            "ask_more_pending",
+            "ask_more_no_questions",
+            "feedback_pending",
+        ):
+            st.session_state.pop(f"{prefix}::{source}", None)
+        st.session_state.pop(f"feedback::{thread_id}::{source}", None)
+
+
+def _render_adr_candidates(tenant: str, username: str, result: dict) -> None:
     """Renders one review card per generated ADR: completeness score, unresolved points, the
     document itself, a feedback box, "Regenerate ADR", and "Publish".
 
@@ -95,8 +200,8 @@ def _render_adr_candidates(tenant: str, result: dict) -> None:
                 st.info("Answer these to add more detail, then submit to regenerate the ADR.")
                 answers: dict[str, str] = {}
                 for index, question in enumerate(pending_questions):
-                    answers[question] = st.text_input(
-                        question, key=f"ask_more_answer::{source}::{index}", disabled=busy
+                    answers[question] = _render_question_row(
+                        question, key_prefix=f"ask_more_answer::{source}::{index}", disabled=busy
                     )
                 if st.button("Submit answers", key=f"ask_more_submit::{source}", disabled=busy):
                     st.session_state[f"feedback_pending::{source}"] = "\n".join(
@@ -106,28 +211,49 @@ def _render_adr_candidates(tenant: str, result: dict) -> None:
                     st.session_state[pending_key] = None
                     st.rerun()
             else:
+                # Feedback and "Regenerate ADR" grouped together — the button acts on exactly
+                # this text box's content, nothing else. "Ask me more" and "Publish" are
+                # deliberately in their own section below: neither one consumes the feedback box
+                # by submitting it (Ask me more only *reads* it, to ground its new questions —
+                # see below).
+                feedback_key = f"feedback::{result['thread_id']}::{source}"
                 feedback = st.text_area(
                     "Feedback — request changes or details to include",
-                    key=f"feedback::{result['thread_id']}::{source}",
+                    key=feedback_key,
                     disabled=busy,
                 )
-
-                ask_more_col, regen_col, launch_col = st.columns(3)
-                if ask_more_col.button("Ask me more", key=f"ask_more::{source}", disabled=busy):
-                    st.session_state[ask_more_key] = True
-                    st.rerun()
-
-                if regen_col.button(
+                if st.button(
                     "Regenerate ADR", key=f"regenerate::{source}", disabled=busy or not feedback
                 ):
                     st.session_state[f"feedback_pending::{source}"] = feedback
                     st.session_state[regen_key] = True
                     st.rerun()
 
+                st.markdown("---")
+                ask_more_col, launch_col = st.columns(2)
+                if ask_more_col.button("Ask me more", key=f"ask_more::{source}", disabled=busy):
+                    st.session_state[ask_more_key] = True
+                    st.rerun()
+
                 if launch_col.button("Publish", key=f"launch::{source}", type="primary", disabled=busy):
-                    finalize_result = api_client.finalize_document(tenant, source, candidate["document"])
-                    candidates[source]["finalized"] = True
-                    candidates[source]["finalized_version"] = finalize_result["version"]
+                    try:
+                        finalize_result = api_client.finalize_document(tenant, source, candidate["document"])
+                        candidates[source]["finalized"] = True
+                        candidates[source]["finalized_version"] = finalize_result["version"]
+                        st.toast(
+                            f"Published — version {finalize_result['version']} saved to Gold.",
+                            icon="✅",
+                        )
+                        # Only reset once every candidate from THIS upload is published — a
+                        # multi-file batch still has other cards to review/publish, and those
+                        # must keep their state until they, too, are done.
+                        thread_sources = [
+                            s for s, c in candidates.items() if c["thread_id"] == result["thread_id"]
+                        ]
+                        if all(candidates[s]["finalized"] for s in thread_sources):
+                            _reset_input_transcription_state(result["thread_id"], thread_sources)
+                    except requests.HTTPError as exc:
+                        st.error(f"Publish failed: {_error_detail(exc)}")
                     st.rerun()
 
             if st.session_state[ask_more_key]:
@@ -136,11 +262,20 @@ def _render_adr_candidates(tenant: str, result: dict) -> None:
                         # The number the reviewer set on "Input transcription" — "Ask me more"
                         # reuses it rather than asking again, per the user's own request.
                         max_questions = st.session_state.get("upload_max_questions", 10)
-                        ask_result = api_client.ask_more_questions(tenant, source, max_questions)
+                        # The draft as it stands right now, plus whatever's currently sitting in
+                        # the feedback box (submitted or not) — grounding on a stale DB copy of
+                        # the ORIGINAL draft is exactly what made this re-ask already-answered
+                        # questions before.
+                        current_feedback = st.session_state.get(f"feedback::{result['thread_id']}::{source}", "")
+                        ask_result = api_client.ask_more_questions(
+                            tenant, source, max_questions, candidate["document"], current_feedback
+                        )
                         if ask_result["questions"]:
                             st.session_state[pending_key] = ask_result["questions"]
                         else:
                             st.session_state[no_questions_key] = True
+                    except requests.HTTPError as exc:
+                        st.error(f"Ask me more failed: {_error_detail(exc)}")
                     finally:
                         st.session_state[ask_more_key] = False
                 st.rerun()
@@ -149,7 +284,11 @@ def _render_adr_candidates(tenant: str, result: dict) -> None:
                 with st.spinner("Regenerating the ADR with your feedback..."):
                     try:
                         regen_result = api_client.regenerate_document(
-                            tenant, source, st.session_state[f"feedback_pending::{source}"]
+                            tenant,
+                            source,
+                            st.session_state[f"feedback_pending::{source}"],
+                            username,
+                            candidate["document"],
                         )
                         candidates[source] = {
                             **candidate,
@@ -157,23 +296,43 @@ def _render_adr_candidates(tenant: str, result: dict) -> None:
                             "score": regen_result["score"],
                             "unresolved_points": regen_result["unresolved_points"],
                         }
+                    except requests.HTTPError as exc:
+                        st.error(f"Regenerate failed: {_error_detail(exc)}")
                     finally:
                         st.session_state[regen_key] = False
                 st.rerun()
 
 
-def _input_transcription_tab(tenant: str) -> None:
+def _input_transcription_tab(tenant: str, username: str) -> None:
     st.subheader("Input transcription")
-    st.caption("Upload transcriptions and PDFs for one meeting, to be processed and clarified.")
+    st.caption(
+        "Type a prompt, upload transcriptions/PDFs, or both, for one meeting, to be processed "
+        "and clarified."
+    )
 
     uploading = st.session_state.setdefault("upload_in_progress", False)
+    # Salts every initial-form widget's key — bumped by `_reset_input_transcription_state` after
+    # a full publish, so each of these gets a brand-new, never-before-seen key and Streamlit has
+    # no prior value to restore. Without this, a plain `pop()` of the *old* key doesn't help: a
+    # widget with no explicit key keeps its own last-typed value across reruns regardless.
+    form_gen = st.session_state.setdefault("upload_form_generation", 0)
 
-    ingestion_date = st.date_input("Meeting date", value=date.today(), disabled=uploading)
+    ingestion_date = st.date_input(
+        "Meeting date", value=date.today(), disabled=uploading, key=f"ingestion_date::{form_gen}"
+    )
+    prompt_text = st.text_area(
+        "Prompt — type the discussion directly instead of uploading a .txt file",
+        disabled=uploading,
+        help="Treated exactly like an uploaded prompt.txt — useful for a quick test without "
+        "creating a file first. Fine to use together with real uploads below.",
+        key=f"prompt_text::{form_gen}",
+    )
     uploaded = st.file_uploader(
         "Transcript (.vtt, .txt, .md) or notes (.pdf) — you can select several files for the same meeting",
         type=["txt", "vtt", "md", "pdf"],
         accept_multiple_files=True,
         disabled=uploading,
+        key=f"uploaded_files::{form_gen}",
     )
     max_questions_per_stage = st.number_input(
         "Max questions per stage (architecture + data contracts)",
@@ -184,15 +343,27 @@ def _input_transcription_tab(tenant: str) -> None:
         disabled=uploading,
         help="Applies the same limit to both stages — 4 here means at most 4 architecture "
         "questions and 4 data-contract questions, 8 in total.",
+        key=f"max_questions_per_stage::{form_gen}",
     )
 
-    if st.button("Process and clarify", disabled=uploading or not uploaded, type="primary"):
+    has_input = bool(uploaded) or bool(prompt_text.strip())
+    if st.button("Process and clarify", disabled=uploading or not has_input, type="primary"):
         # Snapshot the file bytes and the click's own inputs into session_state, then rerun
         # once *before* the actual (slow, real-LLM) call — this is what lets the button below
         # render as disabled while the call is in flight. Without this extra rerun, the button
         # would only re-render disabled AFTER the blocking call already finished, leaving a
         # window where an impatient extra click starts a second, separately-billed graph run.
-        st.session_state.upload_payload = [(f.name, f.getvalue()) for f in uploaded]
+        payload = [(f.name, f.getvalue()) for f in uploaded] if uploaded else []
+        if prompt_text.strip():
+            # Same extension the file uploader itself accepts — the backend never learns this
+            # came from a text box instead of a real file (`ingestion.service.
+            # ingest_uploaded_files` decodes .txt as plain text either way). Timestamped, not a
+            # fixed "prompt.txt": a fixed name would make every typed prompt, across totally
+            # unrelated test sessions, resolve to the SAME source_component — silently pooling
+            # or version-chaining content that has nothing to do with each other.
+            prompt_filename = f"prompt_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt"
+            payload.append((prompt_filename, prompt_text.encode("utf-8")))
+        st.session_state.upload_payload = payload
         st.session_state.upload_ingestion_date = ingestion_date.strftime("%Y%m%d")
         st.session_state.upload_max_questions = int(max_questions_per_stage)
         st.session_state.upload_in_progress = True
@@ -209,9 +380,10 @@ def _input_transcription_tab(tenant: str) -> None:
                     st.session_state.upload_ingestion_date,
                     st.session_state.upload_payload,
                     st.session_state.upload_max_questions,
+                    username,
                 )
             except requests.HTTPError as exc:
-                st.error(f"Upload failed: {exc.response.json().get('detail', exc)}")
+                st.error(f"Upload failed: {_error_detail(exc)}")
             finally:
                 st.session_state.upload_in_progress = False
         st.rerun()
@@ -232,8 +404,8 @@ def _input_transcription_tab(tenant: str) -> None:
         # LLM-generated question text is fragile regardless — an index is always unique and
         # always short.
         for index, question in enumerate(result["pending_questions"]):
-            answers[question] = st.text_input(
-                question, key=f"answer::{result['thread_id']}::{index}", disabled=resuming
+            answers[question] = _render_question_row(
+                question, key_prefix=f"answer::{result['thread_id']}::{index}", disabled=resuming
             )
 
         if st.button("Submit answers", disabled=resuming):
@@ -251,12 +423,14 @@ def _input_transcription_tab(tenant: str) -> None:
                     st.session_state.last_upload = api_client.resume_transcription(
                         st.session_state.resume_thread_id, st.session_state.resume_answers
                     )
+                except requests.HTTPError as exc:
+                    st.error(f"Resume failed: {_error_detail(exc)}")
                 finally:
                     st.session_state.resume_in_progress = False
             st.rerun()
     else:
         st.success(f"Done. Files ingested: {', '.join(result['files_ingested']) or '(none — already ingested)'}")
-        _render_adr_candidates(tenant, result)
+        _render_adr_candidates(tenant, username, result)
 
 
 def _architecture_history_tab(tenant: str) -> None:
@@ -270,6 +444,12 @@ def _architecture_history_tab(tenant: str) -> None:
 
     if history["diagram"]:
         st.mermaid_chart(history["diagram"])
+        # If the rendered diagram above ever looks wrong (boxes missing, only edges visible),
+        # this is the exact Mermaid source it was given — compare the two to tell a generation
+        # bug (source itself is wrong) apart from a rendering one (source is fine, `st.
+        # mermaid_chart` isn't drawing it) before reporting anything as a bug.
+        with st.expander("View Mermaid source"):
+            st.code(history["diagram"], language="text")
     else:
         st.info("No components in Gold yet — publish an ADR from Input transcription to see it here.")
 
@@ -339,13 +519,13 @@ def _chat_tab(tenant: str) -> None:
 
 
 def _test_monitor_tab() -> None:
-    st.subheader("Test monitor")
+    st.subheader("Monitor")
     st.caption("Test suite results and LLM token/cost consumption for the whole application.")
 
     try:
         data = api_client.test_monitor()
     except requests.HTTPError:
-        st.info("Test monitor is disabled (start_test_mode is off).")
+        st.info("Monitor is disabled (start_test_mode is off).")
         return
 
     st.write("#### LLM usage by tenant")
@@ -371,9 +551,9 @@ def _main_app() -> None:
 
     nav_items = ["Input transcription", "Architecture history", "Chat with RAG"]
     if st.session_state.get("start_test_mode", False):
-        nav_items.append("Test monitor")
+        nav_items.append("Monitor")
     active_page = st.session_state.setdefault("active_page", nav_items[0])
-    if active_page not in nav_items:  # e.g. Test monitor got disabled mid-session
+    if active_page not in nav_items:  # e.g. Monitor got disabled mid-session
         active_page = nav_items[0]
 
     with st.sidebar:
@@ -400,12 +580,12 @@ def _main_app() -> None:
             st.rerun()
 
     if active_page == "Input transcription":
-        _input_transcription_tab(user["tenant"])
+        _input_transcription_tab(user["tenant"], user["username"])
     elif active_page == "Architecture history":
         _architecture_history_tab(user["tenant"])
     elif active_page == "Chat with RAG":
         _chat_tab(user["tenant"])
-    elif active_page == "Test monitor":
+    elif active_page == "Monitor":
         _test_monitor_tab()
 
 

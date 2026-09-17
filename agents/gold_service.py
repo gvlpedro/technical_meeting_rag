@@ -17,7 +17,6 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import date
-from urllib.parse import quote
 from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select
@@ -52,6 +51,26 @@ def content_hash(content: str) -> str:
     definition of "how we turn a string into our version-hash" for both Silver's whole-document
     hash and Gold's per-entity hash, even though they hash different-shaped things (v6 §4)."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def parse_odcs_spec(raw: str) -> dict:
+    """Parses `ExtractedDataContract.odcs_spec`'s JSON-encoded string back into the dict
+    `DataContractPayload.odcs_spec` actually stores — see `ExtractedDataContract.odcs_spec`'s own
+    docstring for why it's a string on the extraction side at all (OpenAI's strict
+    structured-output mode can't express a deliberately open object field). Shared by both real
+    callers of this conversion (`extract_and_persist_gold_facts` below and `agents.graph.
+    _persist_contracts`) so the parsing/fallback rule can't drift between them.
+
+    Falls back to `{}` on anything that isn't a JSON object — a malformed spec string should
+    degrade to "no spec captured" for that one contract, never crash Gold persistence for the
+    whole ADR over one contract's own formatting slip."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _entity_hash(operation: GoldOperation, narrative: str, payload: dict) -> str:
@@ -375,7 +394,9 @@ async def extract_and_persist_gold_facts(
         if contract.action == "unknown":
             continue
         payload = DataContractPayload(
-            producer=contract.producer, consumer=contract.consumer, odcs_spec=contract.odcs_spec
+            producer=contract.producer,
+            consumer=contract.consumer,
+            odcs_spec=parse_odcs_spec(contract.odcs_spec),
         ).model_dump()
         await persist_entity_version(
             session,
@@ -440,21 +461,14 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
     currently has on record across every ADR, with a `removed` one dropped.
 
     Backs the frontend's "Architecture history" tab. Each node's label carries a small italic
-    subtitle naming the `(source_component, source_adr_version)` that last touched it, and a
-    `click ... href` line pointing back at the SAME query-param scheme `frontend/app.py`'s
-    `_adr_viewer_page` reads (`?view_adr=<source>&view_adr_version=<version>`) — clicking a node
-    opens that ADR in a new tab. `""` if Gold has no live component yet.
+    subtitle naming the `(source_component, source_adr_version)` that last touched it. `""` if
+    Gold has no live component yet. Navigating to a node's ADR is handled by the plain "View
+    ADR" links in the table `frontend/app.py`'s `_architecture_history_tab` renders below the
+    diagram — deliberately NOT a `click <id> href ...` directive on the node itself (see below).
 
     Two node-label choices are a defensive response to a real, reported bug: `st.mermaid_chart`
     rendered every node as an invisible/zero-size box here, with only the connecting edges
-    visible. `st.mermaid_chart` hardcodes `securityLevel: "strict"` for `mermaid.initialize`
-    (found in Streamlit's own bundled JS) — a mode this function's raw `<br/>`/`<sub>` HTML
-    labels and Mermaid's own default theme fill were never tested against directly (a standalone
-    `mermaid-cli` render under an equivalent strict config did NOT reproduce the invisible-node
-    symptom, so the exact mechanism inside Streamlit's own component remains unconfirmed).
-    Rather than leave that unexplained, this switches to the two choices least likely to depend
-    on ambient theme/security-level resolution, verified to render correctly (real `<rect>` +
-    visible text, via `mermaid-cli`) under an equivalent strict config:
+    visible:
 
     1. The subtitle uses Mermaid's own backtick "markdown string" label syntax (a literal
        newline plus `*italic*`) instead of raw `<br/>`/`<sub>` HTML — the officially supported
@@ -465,9 +479,21 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
        DIAGRAM COLOR CODING section already applies to ADR diagrams: never trust ambient/default
        coloring to remain visible across renderers.
 
-    If a viewer still reports invisible nodes after this, the cause is elsewhere in Streamlit's
-    own mermaid embedding and needs a fresh look — this only rules out this function's own
-    output as the culprit.
+    Neither of those was the actual cause. ROOT CAUSE (confirmed by driving a real headless
+    Chrome against the live Streamlit app via `st.mermaid_chart`, then fetching and inspecting
+    the `blob:` SVG it renders to): a `click <id> href "..." "_blank"` directive — present in
+    every earlier version of this diagram, to make a node open its ADR — makes `st.mermaid_chart`
+    render `<g class="nodes"/>` completely empty (zero node elements) while still rendering the
+    edge paths, exactly matching the "only edges" symptom. Reproduced in isolation: a
+    single-word plain-text node with a `click ... href` line, no classDef, no markdown label,
+    fails the same way; the same diagram with the `click` line removed renders every node
+    correctly. Standalone `mermaid-cli` under an equivalent `securityLevel: "strict"` config does
+    NOT reproduce this — `st.mermaid_chart`'s own render pipeline is where interactivity
+    directives specifically break, most likely because Mermaid's click-binding step needs the
+    SVG attached to the live document to resolve node ids, and Streamlit's component renders
+    off-screen before converting to a blob image. Do not reintroduce `click` directives into
+    this diagram without re-verifying against a real running `st.mermaid_chart`, not just
+    `mermaid-cli` — that's exactly the gap that let this ship broken multiple times.
 
     Edges are drawn `component --> dependency` from `ComponentPayload.dependency_ids` — a
     dependency not itself a live component (removed, or unresolved) is silently skipped rather
@@ -490,9 +516,6 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
         for dependency_id in dependency_ids:
             if dependency_id in node_id and dependency_id != c.entity_id:
                 lines.append(f"    {node_id[c.entity_id]} --> {node_id[dependency_id]}")
-    for c in live:
-        url = f"?view_adr={quote(c.source_component, safe='')}&view_adr_version={c.source_adr_version}"
-        lines.append(f'    click {node_id[c.entity_id]} href "{url}" "_blank"')
     lines.append(f"    class {','.join(node_id.values())} goldNode")
     return "\n".join(lines)
 

@@ -28,7 +28,11 @@ def get_config() -> dict:
 
 
 def upload_transcription(
-    tenant: str, ingestion_date: str, files: list[tuple[str, bytes]], max_questions_per_stage: int
+    tenant: str,
+    ingestion_date: str,
+    files: list[tuple[str, bytes]],
+    max_questions_per_stage: int,
+    username: str,
 ) -> dict:
     multipart_files = [("files", (name, content)) for name, content in files]
     response = requests.post(
@@ -37,6 +41,7 @@ def upload_transcription(
             "tenant": tenant,
             "ingestion_date": ingestion_date,
             "max_questions_per_stage": max_questions_per_stage,
+            "username": username,
         },
         files=multipart_files,
         timeout=600,  # a real graph run makes several sequential LLM calls
@@ -55,23 +60,35 @@ def resume_transcription(thread_id: str, answers: dict[str, str]) -> dict:
     return response.json()
 
 
-def regenerate_document(tenant: str, source_component: str, feedback: str) -> dict:
+def regenerate_document(
+    tenant: str, source_component: str, feedback: str, username: str, current_document: str
+) -> dict:
     response = requests.post(
         f"{BACKEND_URL}/v1/frontend/transcriptions/regenerate",
-        json={"tenant": tenant, "source_component": source_component, "feedback": feedback},
+        json={
+            "tenant": tenant,
+            "source_component": source_component,
+            "feedback": feedback,
+            "username": username,
+            "current_document": current_document,
+        },
         timeout=120,
     )
     response.raise_for_status()
     return response.json()
 
 
-def ask_more_questions(tenant: str, source_component: str, max_questions_per_stage: int) -> dict:
+def ask_more_questions(
+    tenant: str, source_component: str, max_questions_per_stage: int, current_document: str, feedback: str = ""
+) -> dict:
     response = requests.post(
         f"{BACKEND_URL}/v1/frontend/transcriptions/ask-more",
         json={
             "tenant": tenant,
             "source_component": source_component,
             "max_questions_per_stage": max_questions_per_stage,
+            "current_document": current_document,
+            "feedback": feedback,
         },
         timeout=120,
     )

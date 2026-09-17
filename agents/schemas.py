@@ -195,15 +195,24 @@ class ExtractedComponent(BaseModel):
 
 class ExtractedDataContract(BaseModel):
     """One data contract as `extract_gold_facts` reads it out of the finished ADR — same
-    grounding/narrative rules as `ExtractedComponent`. `odcs_spec` flows straight into
-    `DataContractPayload.odcs_spec`, opaque both here and there."""
+    grounding/narrative rules as `ExtractedComponent`.
+
+    `odcs_spec` is a **JSON-encoded string** here, not a nested object like
+    `DataContractPayload.odcs_spec` (which this flows into, via `agents.gold_service.
+    parse_odcs_spec`) — deliberately, because this class is used as an OpenAI structured-output
+    `response_format`, and OpenAI's strict JSON-schema mode requires every *object*-typed field
+    to declare `additionalProperties: false`. That's fundamentally incompatible with an
+    intentionally open, unvalidated ODCS blob (see `DataContractPayload.odcs_spec`'s own
+    docstring for why it stays untyped at all) — a real bug this schema used to trip on OpenAI
+    every single time, silently masked whenever the Anthropic fallback happened to be the one
+    that actually ran. A plain string field has no such constraint."""
 
     name: str
     action: ContractAction
     narrative: str
     producer: str
     consumer: str
-    odcs_spec: dict[str, Any] = {}
+    odcs_spec: str = "{}"
 
 
 class GoldExtractionResult(BaseModel):

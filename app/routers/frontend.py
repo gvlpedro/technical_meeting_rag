@@ -32,7 +32,7 @@ from agents.service import (
     bronze_ingestion_date_for_source,
     generate_architecture_questions_for_batch,
     generate_data_contract_questions_for_batch,
-    latest_document_content,
+    insert_authors_line,
     own_previous_architecture_diagram,
     previous_architecture_context,
     qa_pairs_for_source,
@@ -146,12 +146,19 @@ async def upload_transcription(
     tenant: str = Form(...),
     ingestion_date: str = Form(...),
     max_questions_per_stage: int = Form(...),
+    username: str = Form(...),
     files: list[UploadFile] = File(...),
     db: AsyncSession = Depends(get_session),
 ) -> TranscriptionResponse:
-    """Ingests every uploaded file into Bronze, then runs the full Silver+Gold graph on it —
+    """Ingests every uploaded file into Bronze, then runs the Silver clarification loop on it —
     "to be processed and clarified" in one step, per the tab's own description. A transcript
     that needs human input pauses here (`status: "pending_review"`); answer it via `/resume`.
+
+    Runs with `persist=False`: the ADR this produces (and any later "Regenerate ADR"/"Ask me
+    more" refinement of it) is a draft only. Nothing lands in `silver_documents` or Gold until
+    the reviewer explicitly clicks "Publish" (`finalize_document`) — see `SilverState.persist`'s
+    own docstring for why this run must never write those on its own, only its clarification
+    audit trail (`write_document` always writes `silver_clarifications` regardless).
 
     `max_questions_per_stage` caps both the architecture and the data-contract pending-
     question lists at the SAME number — see `agents.state.initial_state` and
@@ -159,7 +166,7 @@ async def upload_transcription(
     """
     payloads = [(f.filename or "upload", await f.read()) for f in files]
     try:
-        result = await ingest_uploaded_files(payloads, ingestion_date, tenant, db)
+        result = await ingest_uploaded_files(payloads, ingestion_date, tenant, db, uploaded_by=username)
     except (ValueError, NoTranscriptsFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -170,11 +177,13 @@ async def upload_transcription(
         initial_state(
             ingestion_date,
             tenant=tenant,
+            username=username,
             max_architecture_pending_questions=max_questions_per_stage,
             max_data_contract_pending_questions=max_questions_per_stage,
             # Scope this run to exactly the files just uploaded — a second, unrelated upload
             # that happens to reuse today's date must never get pooled with this one.
             source_components=result.files_ingested,
+            persist=False,
         ),
     )
     return _to_response(thread_id, ingestion_date, result.files_ingested, state)
@@ -196,6 +205,14 @@ class RegenerateRequest(BaseModel):
     tenant: str
     source_component: str
     feedback: str
+    username: str
+    # The draft exactly as the reviewer is looking at it right now — see `AskMoreRequest.
+    # current_document`'s own docstring for why this must be the client's copy, not a DB
+    # re-fetch: since the initial upload now runs with `persist=False` (`SilverState.persist`),
+    # there is often no `SilverDocument` row at all yet to read a "previous architecture" from,
+    # and when one DOES exist it may belong to an earlier, unrelated PUBLISHED change for this
+    # same source_component — never this session's own current draft.
+    current_document: str
 
 
 class RegenerateResponse(BaseModel):
@@ -223,13 +240,10 @@ async def regenerate_document(
     qa_pairs = await qa_pairs_for_source(db, request.tenant, request.source_component)
     qa_pairs = [*qa_pairs, {"question": "Reviewer feedback on the previous draft", "answer": request.feedback}]
 
-    # This draft's own latest SilverDocument row — already persisted by `write_document`
-    # before the reviewer ever saw it, since nothing here is approved yet. Its §2 (not §3) is
-    # this regeneration's "previous architecture": the change itself hasn't finalized, so the
-    # previous architecture must stay whatever it already was, not shift to this same draft's
-    # own just-generated target — see `own_previous_architecture_diagram`.
-    previous = await latest_document_content(db, request.tenant, request.source_component)
-    previous_diagram = own_previous_architecture_diagram(previous)
+    # §2 (not §3) of the reviewer's own current draft — the change itself hasn't finalized, so
+    # the previous architecture must stay whatever it already was, not shift to this same
+    # draft's own just-generated target — see `own_previous_architecture_diagram`.
+    previous_diagram = own_previous_architecture_diagram(request.current_document)
 
     messages = build_adr_generation_prompt(transcript_text, qa_pairs, previous_diagram)
     response = await llm_complete(messages)
@@ -247,6 +261,10 @@ async def regenerate_document(
     critic_response = await llm_complete(critic_messages, response_format=CritiqueResult)
     critique = CritiqueResult.model_validate(load_json_response(critic_response.choices[0].message.content))
 
+    # Stamped AFTER the Critic has already reviewed `document` — see `insert_authors_line`'s own
+    # docstring for why doing this any earlier would get the line flagged as an unsupported claim.
+    document = insert_authors_line(document, request.username)
+
     return RegenerateResponse(
         document=document, score=critique.completeness_score, unresolved_points=critique.unresolved_points
     )
@@ -256,6 +274,16 @@ class AskMoreRequest(BaseModel):
     tenant: str
     source_component: str
     max_questions_per_stage: int
+    # The draft exactly as the reviewer is looking at it right now — the original synthesis, or
+    # whatever a prior "Regenerate ADR"/"Ask me more" round produced. Nothing about a redraft is
+    # ever persisted until "Publish" (see `finalize_document`), so the backend has no other way
+    # to know what this ADR currently says — reading `SilverDocument` here would silently fall
+    # back to the FIRST draft and re-ask questions the reviewer already resolved.
+    current_document: str
+    # Free-text notes currently sitting in the feedback box, submitted or not — the reviewer may
+    # have typed something ("also handle X", "Y is wrong") without clicking "Regenerate ADR" yet;
+    # that's still live information this round of questions should account for.
+    feedback: str = ""
 
 
 class AskMoreResponse(BaseModel):
@@ -273,11 +301,14 @@ async def ask_more_questions(request: AskMoreRequest, db: AsyncSession = Depends
     `/transcriptions/regenerate` with the Q&A folded into one feedback string, reusing that
     endpoint rather than duplicating its Actor/Critic call.
 
-    Grounds the new questions on this draft's own latest content via
-    `previous_architecture_context` (its §3/§4 — everything already established, including this
-    session's own earlier answers, not its §2 — see `own_previous_architecture_diagram`'s
-    docstring for why that distinction matters elsewhere) so it asks about what is still
-    missing instead of re-asking anything already resolved.
+    Grounds the new questions on `request.current_document` — the reviewer's own current draft,
+    NOT a DB re-fetch (see `AskMoreRequest.current_document`'s own docstring for why) — via
+    `previous_architecture_context` (its §3/§4, not its §2; see
+    `own_previous_architecture_diagram`'s docstring for why that distinction matters elsewhere).
+    Also appends `request.feedback`, when given, to the transcript text itself before drafting —
+    a live complaint or extra detail the reviewer typed is exactly the kind of thing
+    `architecture_questions.jinja` should ground new questions on, the same way it would if it
+    had been said in the meeting itself.
 
     `_top_questions` is `agents.graph`'s own private dedupe-and-cap helper, reused here (not
     reimplemented) for the same reason `_persist_document_version` is reused by
@@ -288,19 +319,29 @@ async def ask_more_questions(request: AskMoreRequest, db: AsyncSession = Depends
         raise HTTPException(
             status_code=404, detail=f"No bronze content found for {request.source_component!r}"
         )
-    ingestion_date_str = await bronze_ingestion_date_for_source(
+    if request.feedback.strip():
+        transcript_text = f"{transcript_text}\n\n[REVIEWER FEEDBACK ON THE CURRENT DRAFT]\n{request.feedback}"
+    bronze_ingestion_date = await bronze_ingestion_date_for_source(
         db, request.tenant, request.source_component
-    ) or date.today().strftime("%Y%m%d")
+    )
+    ingestion_date_str = (bronze_ingestion_date or date.today()).strftime("%Y%m%d")
     bronze_rows = [{"source_component": request.source_component, "content": transcript_text}]
 
-    previous = await latest_document_content(db, request.tenant, request.source_component)
-    known_architecture = previous_architecture_context(previous)
+    known_architecture = previous_architecture_context(request.current_document)
 
     architecture_result = await generate_architecture_questions_for_batch(
         ingestion_date_str, bronze_rows, architecture_diagram=known_architecture
     )
+    # `generate_data_contract_questions_for_batch` takes `MentionedDataContractItem` (a plain
+    # dict/TypedDict) — `architecture_result.mentioned_data_contracts` is a list of Pydantic
+    # `MentionedDataContract` objects, so this must `.model_dump()` each one first, the same
+    # conversion `agents.graph.generate_architecture_questions` already does before writing them
+    # into graph state. Skipping it crashes downstream with `'MentionedDataContract' object is
+    # not subscriptable` the moment a real contract was identified.
     contract_result = await generate_data_contract_questions_for_batch(
-        ingestion_date_str, bronze_rows, architecture_result.mentioned_data_contracts
+        ingestion_date_str,
+        bronze_rows,
+        [c.model_dump() for c in architecture_result.mentioned_data_contracts],
     )
     drafted = list(architecture_result.questions) + list(contract_result.questions)
     if not drafted:
@@ -350,7 +391,13 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
     immediately, with no separate approval step. Reuses `_persist_document_version` (the same
     hash-compare-then-bump `write_document` uses inside the graph) and `gold_service.
     extract_and_persist_gold_facts` (the same shared body `scripts/backfill_gold.py` uses) —
-    this is the second and third real callers of each, not a third/fourth copy of either."""
+    this is the second and third real callers of each, not a third/fourth copy of either.
+
+    This is very often the FIRST time this source gets a `SilverDocument` row at all — the
+    initial upload runs with `persist=False` (see `SilverState.persist`), so there is usually no
+    existing row to read `ingestion_date` off yet. Falls back to `BronzeDocument`'s own
+    `ingestion_date` for exactly that case; only a source with no bronze content either is a
+    real 404 ("nothing was ever uploaded for this name")."""
     bind_tenant(request.tenant)
     latest_row = (
         await db.execute(
@@ -363,12 +410,17 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
             .limit(1)
         )
     ).scalars().first()
-    if latest_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No existing SilverDocument for {request.source_component!r} — upload it first",
+    if latest_row is not None:
+        ingestion_date = latest_row.ingestion_date
+    else:
+        ingestion_date = await bronze_ingestion_date_for_source(
+            db, request.tenant, request.source_component
         )
-    ingestion_date = latest_row.ingestion_date
+        if ingestion_date is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No bronze content found for {request.source_component!r} — upload it first",
+            )
 
     version = await _persist_document_version(
         db, ingestion_date, request.source_component, request.content, [], [], request.tenant

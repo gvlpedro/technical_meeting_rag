@@ -10,9 +10,83 @@ attributes rather than its internal (hashed, version-fragile) class names — th
 technique Streamlit's own docs recommend for custom CSS.
 """
 
+import base64
+from pathlib import Path
+
 import streamlit as st
 
-CSS = """
+# Read once per process (module-level, not per rerun) — Streamlit reruns this whole script on
+# every interaction, but re-importing an already-imported module is a no-op, so this only ever
+# reads+encodes the file once. Relative to the CWD (repo root, both locally via
+# `uv run streamlit run frontend/app.py` and in Docker via the image's WORKDIR) — the same
+# convention the rest of the app already uses for on-disk paths. Base64-embedded as a data URI
+# because a plain `<img src="app/img/logo.png">` inside `unsafe_allow_html` HTML can't resolve a
+# server-side filesystem path — the browser has no access to it.
+_LOGO_PATH = Path("app/img/logo.png")
+_LOGO_DATA_URI = (
+    f"data:image/png;base64,{base64.b64encode(_LOGO_PATH.read_bytes()).decode('ascii')}"
+    if _LOGO_PATH.exists()
+    else ""
+)
+
+# Height of the fixed full-width header bar `render_header` draws — every other fixed/absolute
+# Streamlit layout piece (`stHeader`, `stSidebar`, `stAppViewContainer`) gets pushed down by
+# exactly this much (see the CSS's "HEADER BAR" section) so nothing renders underneath it.
+HEADER_HEIGHT_PX = 64
+
+CSS = f"""
+/* ================= FULL-WIDTH PAGE HEADER =================
+   A plain top bar — logo + bold title, no menu — spanning the ENTIRE browser width, including
+   over the sidebar, like a website's top nav bar. `position: fixed` escapes whatever column/
+   container `render_header`'s `st.markdown` call happens to sit inside (that's what makes a
+   normal Streamlit element "full width" in the first place: it can only ever fill its own
+   container, never the viewport) and a `z-index` above both `stHeader` (999990) and `stSidebar`
+   (999991, confirmed on the live DOM) keeps it on top of both. Every other top-level layout
+   piece is then shifted down by `HEADER_HEIGHT_PX` so it starts below the bar instead of
+   underneath it — `.stApp` is the single outermost container both the sidebar and the header/
+   main content live inside, so shifting it once pushes everything uniformly. */
+.app-header-bar {{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: {HEADER_HEIGHT_PX}px;
+    z-index: 1000000;
+    background: var(--background);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    box-sizing: border-box;
+}}
+.app-header-bar img {{
+    height: 36px;
+    width: 36px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+}}
+.app-header-bar .app-header-title {{
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}}
+/* `[data-testid="stAppViewContainer"]` is the one container holding BOTH the sidebar and the
+   main content — itself `position: absolute; top: 0`, so shifting IT down (rather than
+   `.stApp`'s `padding-top`, which does nothing here: padding never moves an absolutely
+   positioned box's own origin, confirmed on the live DOM — the sidebar and its collapse button
+   stayed at `top: 0`, hidden under this bar, even with that padding in place) carries the
+   sidebar, its collapse button, `stHeader`'s Deploy/menu, and the main content down together as
+   one unit, preserving whatever positioning each already had relative to it. */
+[data-testid="stAppViewContainer"] {{
+    top: {HEADER_HEIGHT_PX}px !important;
+    height: calc(100vh - {HEADER_HEIGHT_PX}px) !important;
+}}
+"""
+
+CSS += """
 :root {
     /* ---- Sidebar (dark) ---- */
     --sidebar-bg: #262931;
@@ -113,7 +187,18 @@ h1, h2, h3, h4, .stApp strong {
 [data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"] {
     background: var(--purple);
     border-color: var(--purple);
-    color: #ffffff;
+}
+/* `!important` + targeting every descendant, not just the button itself: Streamlit wraps a
+   button's label in nested <div>/<span>/<p> elements, and the generic `.stApp span`/`.stApp p`
+   rule above sets its own `color` directly on those — a direct rule on an element always wins
+   over an inherited one, regardless of the ancestor selector's specificity. Without this, the
+   label read as --text-secondary gray on the purple fill even though the <button> itself
+   computed white correctly (confirmed via the actual rendered DOM, not just the stylesheet). */
+[data-testid="stAppViewContainer"] .stButton button[kind="primary"],
+[data-testid="stAppViewContainer"] .stButton button[kind="primary"] *,
+[data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"],
+[data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"] * {
+    color: #ffffff !important;
 }
 [data-testid="stAppViewContainer"] .stButton button[kind="primary"]:hover {
     background: var(--purple-text);
@@ -123,6 +208,66 @@ h1, h2, h3, h4, .stApp strong {
     background: var(--surface);
     color: var(--text-muted);
     border-color: var(--border-subtle);
+}
+
+/* Per-question clarification action buttons (Irrelevant / Infer an answer / Suggest info) —
+   `frontend/app.py::_render_question_row` gives each one a `key` starting with `qbtn-<action>-`,
+   which Streamlit turns into a `st-key-<key>` class it attaches near the button; `[class*=...]`
+   matches that class regardless of the unique per-question suffix or whether Streamlit puts it
+   on the button itself or a wrapping element. `!important` so these permanent colors always win
+   over the plain-button/primary-button rules above, regardless of rule order.
+
+   Text color is set on the button AND on every descendant (`* { color: ... !important }`) for
+   the same reason the primary-button fix above needs it: Streamlit wraps the label in nested
+   <div>/<span>/<p> elements that `.stApp span`/`.stApp p` give their own direct `color`, which
+   otherwise wins over whatever the <button> itself computes (confirmed against the live DOM).
+   White text (not the previous dark-on-bright shades) is what actually reads on these
+   saturated fills; the smaller font keeps "Infer an answer" from being clipped in a ~13%-wide
+   button (see `_render_question_row`'s 60/40 answer/buttons split). */
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-irrelevant-"] button,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-irrelevant-"],
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-irrelevant-"] button *,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-irrelevant-"] * {
+    background: var(--red) !important;
+    border-color: var(--red-text) !important;
+    color: #ffffff !important;
+}
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-infer-"] button,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-infer-"],
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-infer-"] button *,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-infer-"] * {
+    background: var(--orange) !important;
+    border-color: var(--orange-text) !important;
+    color: #ffffff !important;
+}
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-suggest-"] button,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-suggest-"],
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-suggest-"] button *,
+[data-testid="stAppViewContainer"] button[class*="st-key-qbtn-suggest-"] * {
+    background: var(--green) !important;
+    border-color: var(--green-text) !important;
+    color: #ffffff !important;
+}
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-"] button {
+    font-size: 0.68rem !important;
+    padding: 6px 4px !important;
+    height: auto !important;
+    min-height: 2.2rem !important;
+    line-height: 1.15 !important;
+    white-space: normal !important;
+}
+/* The label sits inside a Streamlit-generic text-wrapper div (not one of our own classes) that
+   defaults to `overflow:hidden; text-overflow:ellipsis; white-space:nowrap` — fine for the
+   arbitrary-length labels it's normally built for, but it was clipping "Infer an answer" to
+   "Infer an…" even after the font-size cut above (confirmed on the live DOM: that div's own
+   `clientWidth` was 58px against a 90px `scrollWidth`). Forcing wrap on every descendant here,
+   scoped to just these three buttons, lets the label break onto a second line instead of being
+   cut — the buttons are short enough that two lines still reads fine. */
+[data-testid="stAppViewContainer"] [class*="st-key-qbtn-"] button * {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+    word-break: break-word !important;
 }
 
 /* ---- Inputs ---- */
@@ -230,9 +375,20 @@ section[data-testid="stSidebar"] .stButton button[kind="primary"]:hover {
 
 
 def inject() -> None:
-    """Injects the theme's `<style>` block — call this once, early in `main()`, on every
-    script run (cheap; Streamlit re-runs the whole script on every interaction anyway)."""
+    """Injects the theme's `<style>` block AND the full-width page header (logo + bold title,
+    see the CSS's "FULL-WIDTH PAGE HEADER" section) — call this once, early in `main()`, on
+    every script run (cheap; Streamlit re-runs the whole script on every interaction anyway).
+    Called unconditionally before `main()`'s login check, so the header is the very first thing
+    on every page — the login screen included — not something each page has to remember to
+    render for itself."""
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+    st.markdown(
+        f"""<div class="app-header-bar">
+            <img src="{_LOGO_DATA_URI}" alt="logo" />
+            <span class="app-header-title">Technical Meeting RAG</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
 
 def score_bar_html(score: int) -> str:

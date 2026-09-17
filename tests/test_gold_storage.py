@@ -16,10 +16,11 @@ from agents.gold_service import (
     current_architecture_diagram,
     current_gold_state,
     ensure_alias,
+    parse_odcs_spec,
     persist_entity_version,
     resolve_entity_id,
 )
-from agents.schemas import ArchitecturePayload, ComponentPayload, DataContractPayload
+from agents.schemas import ArchitecturePayload, ComponentPayload, DataContractPayload, ExtractedDataContract
 from db.models import GoldAlias, GoldEvolution
 from db.session import async_session_factory
 
@@ -62,6 +63,38 @@ def test_data_contract_payload_keeps_odcs_spec_opaque():
     spec = {"apiVersion": "v3.1.0", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
     payload = DataContractPayload(producer="checkout", consumer="billing", odcs_spec=spec)
     assert payload.model_dump()["odcs_spec"] == spec  # not destructured/validated, stored as given
+
+
+def test_extracted_data_contract_takes_odcs_spec_as_a_string():
+    """`ExtractedDataContract` (the `response_format` for the Gold-extraction LLM call) must
+    keep `odcs_spec` as `str`, never `dict` — OpenAI's strict structured-output mode rejects any
+    object-typed field without `additionalProperties: false`, which a deliberately open ODCS
+    blob can never declare. Regressing this to `dict` breaks every real Gold extraction call
+    that reaches OpenAI, with no error surfaced until the Anthropic fallback also fails."""
+    contract = ExtractedDataContract(
+        name="checkout-events",
+        action="new",
+        narrative="...",
+        producer="checkout",
+        consumer="billing",
+        odcs_spec='{"apiVersion": "v3.1.0"}',
+    )
+    assert contract.odcs_spec == '{"apiVersion": "v3.1.0"}'
+    with pytest.raises(Exception):
+        ExtractedDataContract(
+            name="x", action="new", narrative="...", producer="a", consumer="b",
+            odcs_spec={"apiVersion": "v3.1.0"},  # a real dict must be rejected, not silently accepted
+        )
+
+
+def test_parse_odcs_spec_round_trips_valid_json():
+    assert parse_odcs_spec('{"apiVersion": "v3.1.0"}') == {"apiVersion": "v3.1.0"}
+
+
+def test_parse_odcs_spec_falls_back_to_empty_dict_on_garbage():
+    assert parse_odcs_spec("") == {}
+    assert parse_odcs_spec("not json") == {}
+    assert parse_odcs_spec("[1, 2, 3]") == {}  # valid JSON, but not an object — still {}
 
 
 def test_architecture_payload_defaults():
@@ -310,7 +343,7 @@ async def test_current_gold_state_returns_only_the_latest_version_per_entity():
         await _cleanup_entity(entity_type, entity_id)
 
 
-async def test_current_architecture_diagram_draws_a_node_per_live_component_with_an_adr_link():
+async def test_current_architecture_diagram_draws_a_node_per_live_component():
     tenant = f"test-arch-{uuid4().hex[:8]}"
     checkout_id, payment_id = str(uuid4()), str(uuid4())
     try:
@@ -354,7 +387,11 @@ async def test_current_architecture_diagram_draws_a_node_per_live_component_with
         assert '["`Payment Gateway\n*meeting v1*`"]' in diagram
         assert '["`Checkout Service\n*meeting v2*`"]' in diagram
         assert "-->" in diagram  # Checkout Service depends on Payment Gateway
-        assert 'click' in diagram and '?view_adr=meeting.en.vtt&view_adr_version=1' in diagram
+        # No `click ... href` directive — confirmed (via a real headless-Chrome run against
+        # `st.mermaid_chart`, not just mermaid-cli) to make Streamlit render an empty node group
+        # while still drawing edges, i.e. exactly the "only edges" bug. ADR navigation happens
+        # through the plain link table `_architecture_history_tab` renders instead.
+        assert "click" not in diagram
         assert "class n0,n1 goldNode" in diagram
     finally:
         await _cleanup_entity("component", checkout_id)

@@ -94,7 +94,7 @@ def _make_fake_acompletion(
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         content_in = messages[0]["content"]
-        if "Senior Software Architecture Requirements Analyst" in content_in:
+        if "Senior Software/Data Architect" in content_in:
             content = json.dumps(
                 {"mentioned_components": components, "mentioned_data_contracts": contracts, "questions": questions}
             )
@@ -196,6 +196,7 @@ DATE_MERMAID_DOWNGRADE = date(2026, 6, 10)
 DATE_GOLD_DISCOVERS_NEW_COMPONENT = date(2026, 6, 11)
 DATE_DUPLICATE_MATERIAL_CLAIMS = date(2026, 6, 12)
 DATE_CRITIC_SCORE = date(2026, 6, 13)
+DATE_IRRELEVANT_MARKER = date(2026, 6, 14)
 
 
 async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
@@ -287,7 +288,7 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
 
         async def fake_acompletion(*, model, api_key, messages, **kwargs):
             content_in = messages[0]["content"]
-            if "Senior Software Architecture Requirements Analyst" in content_in:
+            if "Senior Software/Data Architect" in content_in:
                 assert "The checkout service was discussed." in content_in  # got the real transcript
                 assert "# Architecture Description / Evolution" in content_in  # got the real template
                 return _fake_response(
@@ -979,3 +980,58 @@ async def test_gold_discovers_a_component_never_in_the_pre_clarification_mention
         assert by_name["Checkout Service"].operation == "unchanged"
     finally:
         await _cleanup_date(DATE_GOLD_DISCOVERS_NEW_COMPONENT)
+
+
+async def test_irrelevant_marker_from_the_ui_is_treated_as_a_decline(monkeypatch):
+    """The frontend's "Irrelevant" question-action button (`frontend/app.py::
+    _render_question_row`) sends the literal string "[IRRELEVANT]" as the answer instead of
+    typed text — `ask_human` must fold it into `_DECLINE_PHRASES` (case-insensitively, same as
+    "unknown"/"n/a") so it ends up recorded as no answer at all, not as literal answer text."""
+    await _insert_bronze(DATE_IRRELEVANT_MARKER, "meeting_irrelevant.en.vtt", ["Someone mentioned a detail."])
+    try:
+        fake = _make_fake_acompletion(
+            classification={
+                "classifications": [
+                    {"id": "component.detail.owner", "answer": None, "status": "needs_clarification"}
+                ]
+            },
+            synthesis_queue=["# Architecture Description / Evolution\n\nDetail: unresolved."],
+            critique_queue=[[]],
+            generated_questions=[
+                {
+                    "id": "component.detail.owner",
+                    "scope": "component",
+                    "target": "detail",
+                    "requirement": "owner",
+                    "question": "does this detail matter?",
+                }
+            ],
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        first = await _run("irrelevant-marker-1", initial_state("20260614"))
+        assert "__interrupt__" in first
+
+        from langgraph.types import Command
+
+        second = await _run("irrelevant-marker-1", Command(resume={"does this detail matter?": "[IRRELEVANT]"}))
+        assert "__interrupt__" not in second
+
+        async with async_session_factory() as session:
+            clarification_row = (
+                (
+                    await session.execute(
+                        select(SilverClarification).where(
+                            SilverClarification.ingestion_date == DATE_IRRELEVANT_MARKER
+                        )
+                    )
+                )
+                .scalars()
+                .one()
+            )
+        assert clarification_row.answer is None, (
+            "the [IRRELEVANT] marker must be folded into a decline, never persisted as literal "
+            "answer text"
+        )
+    finally:
+        await _cleanup_date(DATE_IRRELEVANT_MARKER)

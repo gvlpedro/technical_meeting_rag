@@ -105,7 +105,7 @@ python3 scripts/download_transcript.py --session 20260906
 
 Once user authenticates in a session (isolating information) to show different tabs:
 
-* Input transcription: Upload transcriptions and pdfs for the same meeting, to be processed and clarified.
+* Input transcription: Type a prompt or upload transcriptions and pdfs for the same meeting, to be processed and clarified.
 * Architecture history: Browse every ADR published so far, and the current architecture diagram built live from Gold's own components.
 * Chat with RAG: Once an ADR is published the user can ask questions about architecture and all the timeline of components.
 * Test  monitor (only when confiration enables start_test_mode setting): Monitor the list of tests and token consumption for all application.

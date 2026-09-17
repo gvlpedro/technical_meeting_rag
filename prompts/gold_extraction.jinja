@@ -53,9 +53,11 @@ each one, extract:
   never states what changed about it.
 * `narrative` — same prose rules as a component's narrative, scoped to this one contract.
 * `producer` / `consumer` — as stated in the ADR.
-* `odcs_spec` — the contract's ODCS specification as a raw JSON object, exactly as the ADR
-  states it (its own `apiVersion`/`schema`/`versioning`/etc. blocks). Do not invent fields the
-  ADR doesn't state; an empty object is correct if the ADR gives no ODCS detail at all.
+* `odcs_spec` — the contract's ODCS specification, exactly as the ADR states it (its own
+  `apiVersion`/`schema`/`versioning`/etc. blocks), encoded as a **JSON string** (i.e. this
+  field's own value is a string containing JSON text, not a nested JSON object — escape it like
+  any other string value). Do not invent fields the ADR doesn't state; `"{}"` is correct if the
+  ADR gives no ODCS detail at all.
 
 ## Architecture, as a whole
 
@@ -117,7 +119,7 @@ Return exactly one valid JSON object. No Markdown, no code fences, no text befor
       "narrative": "...",
       "producer": "...",
       "consumer": "...",
-      "odcs_spec": {}
+      "odcs_spec": "{}"
     }
   ],
   "architecture_change": "changed|unchanged",

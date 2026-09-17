@@ -15,6 +15,13 @@ expected, not a defect — mark those `"low"` if you flag them at all).
 
 Only flag claims that are actually wrong or unsupported; do not flag every sentence.
 
+Never flag a claim that starts with the literal prefix `LLM SUGGESTION:` — the document generator
+only ever writes that prefix when the reviewer explicitly authorized a suggestion for that one
+specific gap (`prompts/adr_generator.jinja`'s CLARIFICATION ANSWER MARKERS), and the prefix
+already discloses that status more precisely than a generic unsupported-claim flag would. Flagging
+it anyway would just append a redundant, confusing second marker next to one that already says
+the same thing on purpose.
+
 ---
 
 # COMPLETENESS SCORING

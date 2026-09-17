@@ -13,6 +13,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # No curl in the python:3.14-slim base — stdlib urllib avoids adding a package just for
+      # this. `frontend` below waits on this passing before it starts, so a fresh `make up`
+      # never race the frontend's first login attempt against a backend still starting up.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build: .
+    command: ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    ports:
+      - "${FRONTEND_HOST_PORT:-8522}:8501"
+    environment:
+      BACKEND_URL: http://app:8000
+      # Suppresses Streamlit's first-run "share your email" prompt, which otherwise waits on
+      # stdin input that a detached container never provides.
+      STREAMLIT_SERVER_HEADLESS: "true"
+    depends_on:
+      app:
+        condition: service_healthy
 
   postgres:
     image: pgvector/pgvector:pg17
