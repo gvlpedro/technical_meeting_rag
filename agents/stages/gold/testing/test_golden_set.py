@@ -1,7 +1,11 @@
 """This test suite checks Gold's real-time retrieval.
 
 It proves that agents/graph.py writes correct facts to gold_evolution.
-It also proves a RAG consumer can retrieve those facts by similarity search.
+It also proves a RAG consumer can retrieve those facts, via `top_k_gold_evolution`'s
+`mode="hybrid"` (vector cosine-distance search fused with a lexical `ts_rank` search via
+Reciprocal Rank Fusion — see `.tmp/advanced_techniques.md` §1) — the same retrieval strategy
+`scripts/chat_gold.py` and `/v1/frontend/chat` use in production, not a plain-vector snapshot
+from before hybrid search existed.
 
 The suite sends 5 real meeting transcripts through the real graph.
 Each transcript adds one month to the same architecture (2026-01-15 to 2026-05-15).
@@ -239,9 +243,15 @@ async def _run_qa(qa_items: list[dict], step_name: str) -> list[dict]:
 
 
 async def _score_qa_item(session, item: dict) -> dict:
-    """Retrieve Gold rows for one question, generate an answer, and score both."""
+    """Retrieve Gold rows for one question, generate an answer, and score both.
+
+    `mode="hybrid"` matches what `scripts/chat_gold.py` and `/v1/frontend/chat` actually use in
+    production (see `.tmp/advanced_techniques.md` §1) — this suite tests the retrieval strategy
+    real traffic gets, not a stale `mode="vector"` snapshot from before hybrid search existed."""
     vector = await embed_question(item["question"])
-    rows = await top_k_gold_evolution(session, vector, k=8, source_component=SOURCE_COMPONENT)
+    rows = await top_k_gold_evolution(
+        session, vector, k=8, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=item["question"]
+    )
     answer = await answer_question(item["question"], rows)
     expected = item["expected_entity"]
 
@@ -393,7 +403,9 @@ async def _check_legacy_monolith_retrieval() -> tuple[list[str], str]:
     question = "What happened to the legacy monolith?"
     async with async_session_factory() as session:
         vector = await embed_question(question)
-        rows = await top_k_gold_evolution(session, vector, k=8, source_component=SOURCE_COMPONENT)
+        rows = await top_k_gold_evolution(
+            session, vector, k=8, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
+        )
 
     removed_hit = any(
         row.entity_type == "component"
@@ -474,7 +486,9 @@ async def _check_summary_judgment() -> tuple[str, dict]:
     question = "Summarize how this architecture evolved from start to finish."
     async with async_session_factory() as session:
         vector = await embed_question(question)
-        rows = await top_k_gold_evolution(session, vector, k=10, source_component=SOURCE_COMPONENT)
+        rows = await top_k_gold_evolution(
+            session, vector, k=10, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
+        )
 
     answer = await answer_question(question, rows)
     judgment = await _critique_summary(answer)

@@ -632,8 +632,11 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     history ("how has X evolved over time?" / "qué evolución ha tenido X") gets that one
     entity's COMPLETE version history (`gold.entity_history`), narrated chronologically
     (`gold.answer_evolution_question`) — never embedding similarity, since the entity is
-    already known and top-k could otherwise drop an early version. Every other question keeps
-    using plain top-k similarity search, exactly as before.
+    already known and top-k could otherwise drop an early version. Every other question uses
+    hybrid top-k retrieval (`mode="hybrid"`): vector similarity fused with a lexical `ts_rank`
+    search via Reciprocal Rank Fusion, so an exact component name/acronym/ODCS field name the
+    embedding alone might blur still surfaces — see `top_k_gold_evolution`'s own docstring and
+    `.tmp/advanced_techniques.md` §1.
 
     `tenant` comes from `_tenant_for_username(request.username)`, never a client-supplied
     field — this is what stops a chat question from ever retrieving another tenant's Gold
@@ -661,7 +664,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
             return ChatResponse(answer=answer, retrieved=retrieved)
 
     vector = await gold.embed_question(request.question)
-    rows = await gold.top_k_gold_evolution(db, vector, k=request.k, tenant=tenant)
+    rows = await gold.top_k_gold_evolution(
+        db, vector, k=request.k, tenant=tenant, mode="hybrid", question_text=request.question
+    )
 
     if not rows:
         return ChatResponse(answer="No Gold facts were relevant to this question.", retrieved=[])

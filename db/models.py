@@ -1,8 +1,8 @@
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Date, DateTime, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Computed, Date, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import settings
@@ -244,6 +244,18 @@ class GoldEvolution(Base):
     # changed_at below.
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # A Postgres GENERATED ALWAYS AS ... STORED column (see migration 188c1b98dd96),
+    # combining `canonical_name` + `narrative` into one `tsvector`, GIN-indexed. `Computed(...)`
+    # tells SQLAlchemy this column is server-computed: it is never part of an INSERT/UPDATE
+    # statement, the same way `changed_at`'s `server_default` is never overridden by application
+    # code. `agents.stages.gold.service.top_k_gold_evolution`'s hybrid-search branch reads this
+    # with `ts_rank`, fused with vector cosine distance via Reciprocal Rank Fusion — a lexical
+    # ranking signal for exact terms (a component's proper name, an acronym, ODCS jargon) that a
+    # semantic embedding alone can blur.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('english', coalesce(canonical_name, '') || ' ' || coalesce(narrative, ''))"),
+    )
 
 
 class GoldAlias(Base):

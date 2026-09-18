@@ -18,9 +18,11 @@ from agents.stages.gold.schemas import (
     ExtractedDataContract,
 )
 from agents.stages.gold.service import (
+    _reciprocal_rank_fusion,
     already_extracted,
     current_architecture_diagram,
     current_gold_state,
+    embed_question,
     ensure_alias,
     entity_history,
     find_entity_by_name_in_text,
@@ -29,6 +31,7 @@ from agents.stages.gold.service import (
     persist_entity_version,
     resolve_entity_id,
     resolve_entity_id_for_lookup,
+    top_k_gold_evolution,
 )
 from db.models import GoldAlias, GoldEvolution
 from db.session import async_session_factory
@@ -682,3 +685,103 @@ def test_is_evolution_question_recognizes_english_and_spanish_phrasing():
 def test_is_evolution_question_is_false_for_an_ordinary_factual_question():
     assert not is_evolution_question("Who is the producer of the OrderCreated contract?")
     assert not is_evolution_question("What is the current status of the Checkout Service?")
+
+
+# =====================================================================================
+# Hybrid search (vector + lexical, fused with RRF) — see `.tmp/advanced_techniques.md` §1
+# =====================================================================================
+
+
+def test_reciprocal_rank_fusion_lets_a_strong_lexical_match_outrank_a_lone_vector_top_hit():
+    """id 7 ranks only 7th in the vector ranking, but 1st (and only) in the lexical one.
+    `1/(60+7) + 1/(60+1) ≈ 0.0313` beats id 1's `1/(60+1) ≈ 0.0164` — a lone rank-1 hit in one
+    signal, with zero support from the other. This is the concrete case hybrid search exists
+    for: a moderate embedding match that is ALSO the best lexical match should outrank a
+    perfect embedding match that no lexical signal agrees with."""
+    vector_ranking = list(range(1, 11))  # id 7 sits at position 7
+    lexical_ranking = [7]
+    fused = _reciprocal_rank_fusion([vector_ranking, lexical_ranking])
+    assert fused[0] == 7
+
+
+def test_reciprocal_rank_fusion_id_absent_from_a_ranking_gets_no_penalty_from_it():
+    """An id missing from one input ranking contributes nothing from that ranking — never a
+    negative score. Two ids that each appear in exactly one ranking, both at rank 1, must tie
+    (both score `1/(60+1)`), not have the "missing" one penalized below a real rank."""
+    fused = _reciprocal_rank_fusion([[1], [2]])
+    assert set(fused) == {1, 2}
+
+
+def test_reciprocal_rank_fusion_returns_empty_for_no_candidates():
+    assert _reciprocal_rank_fusion([]) == []
+    assert _reciprocal_rank_fusion([[], []]) == []
+
+
+async def test_top_k_gold_evolution_hybrid_mode_finds_a_lexical_match_a_bad_vector_search_misses():
+    """This proves the lexical branch actually rescues a row the vector branch alone would
+    never surface — not just that the function runs. The query vector is deliberately set to
+    the EXACT embedding of an unrelated distractor row (cosine distance 0), so `mode="vector"`
+    is guaranteed to return only that distractor at `k=1`. `mode="hybrid"`, given the SAME
+    adversarial vector but the real question text, must still surface the target row through
+    `ts_rank` + RRF."""
+    target_id, distractor_id = str(uuid4()), str(uuid4())
+    unique_token = f"xzqv{uuid4().hex[:10]}"
+    adversarial_vector = await embed_question("Completely unrelated text about weather forecasting.")
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=target_id,
+                canonical_name=f"{unique_token} Adapter",
+                operation="new",
+                narrative=f"{unique_token} is a proprietary internal protocol adapter.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+            )
+            # A hand-built row whose embedding is IDENTICAL to the query vector — guaranteed
+            # cosine distance 0, so it always wins rank 1 under mode="vector", regardless of
+            # whatever else exists in this test database.
+            session.add(
+                GoldEvolution(
+                    tenant="default",
+                    entity_type="component",
+                    entity_id=distractor_id,
+                    canonical_name="Weather Distractor",
+                    version=1,
+                    operation="new",
+                    narrative="Completely unrelated text about weather forecasting.",
+                    payload={},
+                    embedding=adversarial_vector,
+                    entity_hash="distractor",
+                    source_component="meeting.en.vtt",
+                    source_adr_version=1,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            vector_only = await top_k_gold_evolution(session, adversarial_vector, k=1, mode="vector")
+            hybrid = await top_k_gold_evolution(
+                session, adversarial_vector, k=5, mode="hybrid", question_text=f"What is {unique_token}?"
+            )
+        assert {r.entity_id for r in vector_only} == {distractor_id}
+        assert target_id in {r.entity_id for r in hybrid}
+    finally:
+        await _cleanup_entity("component", target_id)
+        await _cleanup_entity("component", distractor_id)
+
+
+async def test_top_k_gold_evolution_hybrid_mode_requires_question_text():
+    # `session=None`: both validation errors below raise before the function ever touches
+    # `session`, so no real database session is needed to prove them.
+    with pytest.raises(ValueError, match="question_text"):
+        await top_k_gold_evolution(None, [0.0], mode="hybrid")
+
+
+async def test_top_k_gold_evolution_rejects_an_unknown_mode():
+    with pytest.raises(ValueError, match="unknown"):
+        await top_k_gold_evolution(None, [0.0], mode="bm25")

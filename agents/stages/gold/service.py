@@ -19,6 +19,8 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import date
+from typing import Literal
+
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -639,6 +641,22 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
 # `agents.stages.gold.testing`'s already real-LLM-verified assertions see.
 DEFAULT_MAX_DISTANCE = 0.6
 
+# `mode="hybrid"` fetches this many candidates from EACH ranking (vector, lexical) before fusing
+# them, not just `k`. RRF needs depth on both sides to do anything useful: a row that ranks,
+# say, 7th by embedding similarity and 2nd by lexical match should still be able to win a fused
+# top-5 over two rows that only rank in the top 5 of one signal and nowhere in the other. Fusing
+# two lists already cut to `k` would never give a moderate-vector/strong-lexical row that
+# chance. This is deliberately NOT the same thing as the "expand-then-dedupe-by-entity" idea in
+# `.tmp/advanced_techniques.md` — no deduplication happens here, only wider recall for fusion.
+HYBRID_RECALL_POOL = 30
+
+# Reciprocal Rank Fusion's own smoothing constant. 60 is the value the original RRF paper (Cormack
+# et al., 2009) tuned against, and it is what most hybrid-search implementations still default
+# to — a larger value flattens the gap between rank 1 and rank 30, a smaller one makes rank 1
+# dominate almost completely. Nothing about this corpus has been measured against a different
+# value yet, so this stays at the well-established default rather than an invented number.
+RRF_K_CONSTANT = 60
+
 
 async def embed_question(text: str) -> list[float]:
     """`ingestion.embedder.embed` is a blocking, batched call. This wraps it in
@@ -646,6 +664,69 @@ async def embed_question(text: str) -> list[float]:
     question at a time."""
     [vector] = await asyncio.to_thread(embed, [text])
     return vector
+
+
+def _reciprocal_rank_fusion(rankings: list[list[int]], k_constant: int = RRF_K_CONSTANT) -> list[int]:
+    """Fuses any number of ranked id lists into one combined ranking. Each id's fused score is
+    the sum, across every input ranking it appears in, of `1 / (k_constant + rank)` (rank
+    counted from 1). An id absent from one of the rankings contributes nothing from it — not a
+    penalty. That is the entire point of fusing instead of intersecting: a row only needs to
+    rank well in ONE of the two signals (semantic OR lexical) to surface near the top, since a
+    row that is the single best lexical match but a mediocre embedding match (an exact proper
+    noun, an acronym) is exactly the case hybrid search exists to rescue.
+
+    Returns ids sorted by fused score, descending. Ties (an id with the same fused score as
+    another, which only realistically happens for two ids appearing in neither ranking) keep
+    Python's stable sort order — the order they were first seen in `rankings`."""
+    scores: dict[int, float] = {}
+    for ranking in rankings:
+        for rank, item_id in enumerate(ranking, start=1):
+            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k_constant + rank)
+    return sorted(scores, key=lambda item_id: scores[item_id], reverse=True)
+
+
+async def _top_k_ids_by_vector(
+    session: AsyncSession,
+    vector: list[float],
+    limit: int,
+    source_component: str | None,
+    max_distance: float | None,
+    tenant: str,
+) -> list[int]:
+    distance = GoldEvolution.embedding.cosine_distance(vector)
+    query = select(GoldEvolution.id).where(GoldEvolution.tenant == tenant).order_by(distance).limit(limit)
+    if source_component is not None:
+        query = query.where(GoldEvolution.source_component == source_component)
+    if max_distance is not None:
+        query = query.where(distance <= max_distance)
+    return list((await session.execute(query)).scalars().all())
+
+
+async def _top_k_ids_by_lexical_rank(
+    session: AsyncSession,
+    question_text: str,
+    limit: int,
+    source_component: str | None,
+    tenant: str,
+) -> list[int]:
+    """The lexical half of hybrid search: Postgres full-text search over `search_vector` (see
+    that column's own comment in `db/models.py` and migration `188c1b98dd96`), ranked by
+    `ts_rank`. `plainto_tsquery` treats `question_text` as plain text, not `tsquery` syntax — a
+    question typed by a person is not a search-operator expression, and letting `&`/`|`/`!`
+    characters in a question be interpreted as tsquery operators would be a second, unrelated
+    injection surface. A question that reduces to an empty tsquery (all stopwords, or no
+    recognized lexemes) matches nothing here — RRF then falls back to whatever the vector
+    ranking alone found, which is the correct degrade: no lexical signal is not an error."""
+    tsquery = func.plainto_tsquery("english", question_text)
+    query = (
+        select(GoldEvolution.id)
+        .where(GoldEvolution.tenant == tenant, GoldEvolution.search_vector.op("@@")(tsquery))
+        .order_by(func.ts_rank(GoldEvolution.search_vector, tsquery).desc())
+        .limit(limit)
+    )
+    if source_component is not None:
+        query = query.where(GoldEvolution.source_component == source_component)
+    return list((await session.execute(query)).scalars().all())
 
 
 async def top_k_gold_evolution(
@@ -656,11 +737,11 @@ async def top_k_gold_evolution(
     max_distance: float | None = None,
     *,
     tenant: str = "default",
+    mode: Literal["vector", "hybrid"] = "vector",
+    question_text: str | None = None,
 ) -> list[GoldEvolution]:
-    """This runs cosine-distance top-k search over ALL versions of `gold_evolution`, not just the
-    latest version per entity. Getting the latest version per entity is `current_gold_state`'s
-    job instead. Results are ordered by `.cosine_distance(vector)`, so the query shape matches
-    `GoldEvolution.embedding`'s HNSW index (`vector_cosine_ops`) and can actually use it.
+    """This runs top-k search over ALL versions of `gold_evolution`, not just the latest version
+    per entity. Getting the latest version per entity is `current_gold_state`'s job instead.
 
     This always scopes to one `tenant` first. The Chat tab must never retrieve, let alone answer
     from, another tenant's architecture facts. `source_component`, when given, narrows the search
@@ -668,15 +749,43 @@ async def top_k_gold_evolution(
 
     `max_distance`, when given (see `DEFAULT_MAX_DISTANCE`), drops rows past that distance instead
     of always returning `k` rows regardless of relevance. This filter runs in SQL, not after the
-    fact, so a tight bound also means less data fetched over the wire."""
-    distance = GoldEvolution.embedding.cosine_distance(vector)
-    query = select(GoldEvolution).where(GoldEvolution.tenant == tenant).order_by(distance).limit(k)
-    if source_component is not None:
-        query = query.where(GoldEvolution.source_component == source_component)
-    if max_distance is not None:
-        query = query.where(distance <= max_distance)
-    result = await session.execute(query)
-    return list(result.scalars().all())
+    fact, so a tight bound also means less data fetched over the wire. It only ever applies to
+    the vector-distance ranking — `ts_rank`'s scale is not comparable to cosine distance, so there
+    is no equivalent bound on the lexical side; a question with no lexical match simply
+    contributes zero lexical candidates, handled by `_reciprocal_rank_fusion` itself.
+
+    `mode="vector"` (the default, unchanged from before hybrid search existed) orders purely by
+    `.cosine_distance(vector)`, matching `GoldEvolution.embedding`'s HNSW index
+    (`vector_cosine_ops`) so it can actually use it. `mode="hybrid"` additionally runs a lexical
+    `ts_rank` search over `search_vector` and fuses both rankings with Reciprocal Rank Fusion
+    (`_reciprocal_rank_fusion`) before cutting to `k` — see `.tmp/advanced_techniques.md` §1 for
+    why: an embedding can blur an exact component name, acronym, or ODCS field name that a plain
+    keyword match finds immediately, at close to zero extra cost (the GIN index, versus the
+    embedding API/model call already being paid for `vector`). `mode="hybrid"` requires
+    `question_text` — the original question, not `vector`'s embedding of it, since the lexical
+    branch does its own tokenization, never the embedding."""
+    if mode == "vector":
+        ids = await _top_k_ids_by_vector(session, vector, k, source_component, max_distance, tenant)
+    elif mode == "hybrid":
+        if not question_text:
+            raise ValueError("mode='hybrid' requires question_text (the lexical ranking needs the raw question)")
+        # Sequential, not `asyncio.gather` — a single `AsyncSession` cannot run two queries
+        # concurrently over one DBAPI connection. Doing so raised a real
+        # `sqlalchemy.exc.IllegalStateChangeError` here, confirmed against the actual running
+        # app, not just a theoretical concern: two coroutines sharing `session` inside
+        # `gather` both took the connection into an "in progress" state at once, and closing
+        # the session afterward hit that half-finished state.
+        vector_ids = await _top_k_ids_by_vector(session, vector, HYBRID_RECALL_POOL, source_component, max_distance, tenant)
+        lexical_ids = await _top_k_ids_by_lexical_rank(session, question_text, HYBRID_RECALL_POOL, source_component, tenant)
+        ids = _reciprocal_rank_fusion([vector_ids, lexical_ids])[:k]
+    else:
+        raise ValueError(f"unknown top_k_gold_evolution mode: {mode!r}")
+
+    if not ids:
+        return []
+    rows = (await session.execute(select(GoldEvolution).where(GoldEvolution.id.in_(ids)))).scalars().all()
+    rows_by_id = {row.id: row for row in rows}
+    return [rows_by_id[item_id] for item_id in ids if item_id in rows_by_id]
 
 
 async def latest_versions(session: AsyncSession, rows: Sequence[GoldEvolution]) -> dict[tuple[str, str], int]:
@@ -919,7 +1028,9 @@ __all__ = [
     "DEFAULT_MAX_DISTANCE",
     "DataContractPayload",
     "FUZZY_MATCH_THRESHOLD",
+    "HYBRID_RECALL_POOL",
     "MIN_ALIAS_MATCH_LENGTH",
+    "RRF_K_CONSTANT",
     "already_extracted",
     "answer_evolution_question",
     "answer_question",

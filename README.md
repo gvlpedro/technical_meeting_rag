@@ -257,3 +257,4 @@ MCP for each output for internal agents
 # Next steps
 
 * Two users are only included, this should evolve to manage multiple users and multi tenant architecture.
+* Resolve Anthropic API limits ""You have reached your specified API usage limits. You will regain access" ¿?

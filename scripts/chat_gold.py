@@ -10,9 +10,13 @@ point. It picks between two different retrieval strategies per question, not jus
     when, why, and what changed at each later step. This never uses embedding similarity: the
     entity is already known, so there is nothing to rank, and top-k could otherwise drop an
     early version whose narrative just does not word-match the question.
-  - **Top-k similarity retrieval**, for everything else. This does cosine-similarity search
-    over `gold_evolution.embedding` (HNSW-indexed, using `vector_cosine_ops`), then a real LLM
-    writes an answer from the retrieved rows.
+  - **Hybrid top-k retrieval**, for everything else: cosine-similarity search over
+    `gold_evolution.embedding` (HNSW-indexed, `vector_cosine_ops`) fused, via Reciprocal Rank
+    Fusion, with a lexical `ts_rank` search over `gold_evolution.search_vector` (a generated
+    `tsvector`, GIN-indexed — see `.tmp/advanced_techniques.md` §1 and migration
+    `188c1b98dd96`). The lexical half catches an exact component name, acronym, or ODCS field
+    name that the embedding alone can blur. A real LLM then writes an answer from the fused
+    rows.
 
 All of this retrieval code (`find_entity_by_name_in_text`, `is_evolution_question`,
 `entity_history`, `answer_evolution_question`, `embed_question`, `top_k_gold_evolution`,
@@ -62,7 +66,9 @@ async def _answer(session, question: str, k: int, max_distance: float | None, te
             return await answer_evolution_question(question, matched_alias, rows)
 
     vector = await embed_question(question)
-    rows = await top_k_gold_evolution(session, vector, k, max_distance=max_distance, tenant=tenant)
+    rows = await top_k_gold_evolution(
+        session, vector, k, max_distance=max_distance, tenant=tenant, mode="hybrid", question_text=question
+    )
     latest = await latest_versions(session, rows)
     return await answer_question(question, rows, latest)
 
