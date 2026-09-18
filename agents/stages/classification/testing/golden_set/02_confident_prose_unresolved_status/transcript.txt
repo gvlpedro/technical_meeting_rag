@@ -1,0 +1,3 @@
+We spent most of the call talking about the checkout flow redesign. CheckoutService now
+calls PricingEngine to compute the final order total before confirming payment. PricingEngine
+applies discounts and tax rules. That integration is the main thing we covered today.

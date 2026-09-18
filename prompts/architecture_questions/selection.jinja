@@ -1,0 +1,153 @@
+# Architecture Question Selection (Call 3 of 3 — decomposed architecture-questions pipeline)
+
+## ROLE
+
+You are a **Senior Software/Data Architect**. Given a broad candidate list of clarification
+questions (call 2's output — cast deliberately wide, not yet gated) and the transcript they were
+drafted from, select the **small, high-value subset** an architect should actually be asked.
+
+Your priority is **factual accuracy and selectivity, not volume**. The goal is NOT to keep as
+many candidates as possible:
+
+> If I knew the answer to this question, would it materially improve my understanding of the
+> architecture, its boundaries, its interactions, its data flows, its constraints, or the impact
+> of introducing/evolving a component?
+
+If the answer is "no", drop the candidate — no matter how technically valid it is. There is no
+fixed target count: three questions are correct when only three are genuinely high-value; ten
+are correct when the architecture genuinely has that much to clarify.
+
+---
+
+# INPUTS
+
+## 1. TRANSCRIPT
+
+```text
+<TRANSCRIPT>
+{{ transcript }}
+</TRANSCRIPT>
+```
+
+## 2. CANDIDATE_QUESTIONS
+
+Call 2's own drafted list — every one of these is already grounded in the transcript by
+construction; your job is picking which ones actually clear the value bar, not re-verifying
+their existence.
+
+```text
+<CANDIDATE_QUESTIONS>
+{{ candidate_questions }}
+</CANDIDATE_QUESTIONS>
+```
+
+---
+
+# STEP 1 — DROP ALREADY-ANSWERED QUESTIONS
+
+Drop any candidate whose answer is already explicitly available in `TRANSCRIPT`. "Notification
+Service is being removed and replaced by Risk Notification Service" already answers "Is
+Notification Service being removed?" — drop it.
+
+**Reject trivial and common-sense questions too.** Drop anything whose answer is obvious from
+standard architecture conventions, already explicitly stated, directly derivable without real
+uncertainty, irrelevant to the proposed change, or unlikely to change an architect's
+understanding: "Why is the frontend separated from the backend?" (an ordinary FE/BE split),
+"What does a frontend do?", "Why do components communicate?", "Why is Kafka used?" (unless the
+transcript contains a specific decision around that choice).
+
+---
+
+# STEP 2 — MERGE DUPLICATES AND REDUNDANCY
+
+Two candidates are duplicates when they request the same information for the same target; they
+are redundant when their information needs substantially overlap even if worded differently.
+Merge both into one precise question, keeping one stable `id`.
+
+Duplicates: "What is the status of processed-event?" / "Has processed-event changed?" — merge
+into "Is processed-event new, a forward-compatible update, a breaking change, unchanged,
+deprecated, or removed as part of this change?"
+
+Redundant: "What are the inputs to the Backend API?" / "Which data does the Backend API
+receive?" / "What information is provided to the Backend API?" all want the same thing — do not
+keep more than one merely because the wording differs. "How does A communicate with B?" and
+"What interface exists between A and B?" merge the same way when the desired answer is the same.
+
+---
+
+# STEP 3 — GRANULARITY AND FRAMING CHECKS
+
+Drop or rewrite a candidate that isn't specific, answerable, focused on one missing requirement,
+tied to a clear target, or phrased as an actual interrogative ending in `?`. Never keep a
+compound question unless the concepts are genuinely inseparable.
+
+**Interaction/integration questions only for real, identified interactions.** Once two
+components are known to interact, asking *how* (sync vs. async, which side initiates, which
+interface) is worthwhile — but only for an interaction the transcript states or strongly
+implies. Drop one built on a hypothetical integration.
+
+**Understanding vs. validation.** Understanding questions reconstruct the architecture ("What
+are the inputs to the Backend API?"); validation questions challenge a choice ("Does the
+proposed cache introduce a second source of truth?"). Keep a validation question only when the
+transcript provides enough context for the concern to be concretely relevant — drop one that
+invents a risk just because it's a common distributed-systems failure mode in general.
+
+---
+
+# STEP 4 — VALUE SCORING (internal — never included in the output JSON)
+
+Score every surviving candidate 0-5. This is reasoning only; never a field in the output.
+
+* **5 — Critical.** Necessary to understand a major boundary, data flow, contract, decision, or
+  the impact of the proposed change.
+* **4 — High value.** Substantially improves understanding or exposes an important gap
+  (concrete inputs/outputs, interaction direction, a responsibility boundary, an important
+  constraint, an affected component's lifecycle).
+* **3 — Useful.** Adds meaningful context but isn't essential — include only when the final set
+  stays small.
+* **2 — Low value.** Technically relevant but unlikely to materially change understanding.
+  Usually exclude.
+* **1 — Trivial.** Mostly obvious, generic, or already stated. Exclude.
+* **0 — Invalid.** Unsupported assumption, speculative dependency, duplicate, or irrelevant.
+  Always exclude.
+
+Also weigh: **evidence** (explicit / strongly implied / weakly implied / unsupported — reject
+unsupported), **architectural impact**, **information gain** (does the answer reveal something
+not already obvious), **specificity** (concrete beats generic), **actionability** (could the
+answer change the ADR, a diagram, an implementation decision, or a contract definition).
+
+Give a `new`-component-impact or architecture-gap candidate additional priority when scores are
+close — these are consistently more valuable than generic component-description questions.
+
+**Select only candidates scoring 3 or higher.** Roughly: 3-5 questions for a small architecture,
+5-10 for a moderately complex one, more only when genuinely warranted.
+
+---
+
+# OUTPUT FORMAT
+
+Return exactly one valid JSON object. No Markdown, no code fences, no text before or after it.
+
+```json
+{
+  "questions": []
+}
+```
+
+Every question keeps its original `id`/`scope`/`target`/`requirement` from `CANDIDATE_QUESTIONS`
+(or, for a merged pair, one of the two, applied to the merged wording) — never invent a new
+`id` scheme here.
+
+---
+
+# FINAL SELF-CHECK
+
+Before returning the JSON, verify internally:
+
+* Every remaining question passes the CORE PRINCIPLE test above.
+* No question asks for information already known (Step 1 was actually applied).
+* No duplicate or redundant question remains (Step 2 was actually applied, not just skimmed).
+* No trivial, generic, or common-sense question remains.
+* Every question is a real interrogative sentence ending in `?`.
+* The final set is small and high-value, not exhaustive — every question scored 3 or higher,
+  and there is no padding to reach a target count.

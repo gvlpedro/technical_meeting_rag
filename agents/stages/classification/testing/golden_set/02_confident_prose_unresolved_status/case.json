@@ -1,0 +1,28 @@
+{
+  "description": "The trap this suite exists for: confident, fluent prose describing an interaction is NOT the same as stating a component's lifecycle status. Nothing here says PricingEngine is new or pre-existing — a lenient classifier fills that silence with a guess.",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "component",
+      "target": "PricingEngine",
+      "requirement": "status",
+      "question": "Is PricingEngine a new, modified, removed, or unchanged component?"
+    },
+    {
+      "id": "q2",
+      "scope": "data_contract",
+      "target": "CheckoutService-PricingEngine",
+      "requirement": "fields",
+      "question": "What fields does CheckoutService send to PricingEngine when requesting the order total?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["needs_clarification", "unknown"],
+      "forbidden_answer_substrings": ["new", "unchanged", "modified", "removed"]
+    },
+    "q2": {
+      "acceptable_statuses": ["needs_clarification", "unknown"]
+    }
+  }
+}

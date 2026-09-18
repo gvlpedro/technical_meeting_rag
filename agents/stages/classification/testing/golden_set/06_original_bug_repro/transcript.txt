@@ -1,0 +1,8 @@
+The system is built from scratch with a frontend application that provides the user interface
+and a backend API that contains the business logic and exposes endpoints for the frontend to
+consume. The backend connects to a database to persist application data, while the frontend
+communicates with the backend through HTTP/REST APIs.
+
+As the system evolves, the architecture can introduce an API Gateway between the frontend and
+backend to provide centralized routing, authentication, rate limiting, and security, while
+allowing the backend to evolve into multiple services if required.

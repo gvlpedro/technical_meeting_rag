@@ -29,18 +29,21 @@ class IngestResult:
 
 
 async def ingest_bronze(ingestion_date: str, db: AsyncSession, *, tenant: str = "default") -> IngestResult:
-    """Ingest every transcript uploaded on `ingestion_date` (compact `YYYYMMDD`, e.g.
-    `20260906`), looked up at `input/transcriptions/ingestion_date=20260906/`.
+    """Ingest every transcript uploaded on `ingestion_date`. Use the compact `YYYYMMDD`
+    format, for example `20260906`. This looks up files at
+    `input/transcriptions/ingestion_date=20260906/`.
 
-    Shared by `app/routers/ingestion.py` (`POST /v1/ingest`) and `scripts/ingest.py`
-    (`make ingestion`) — one implementation, two entry points. Raises `ValueError` for
-    a malformed date, `NoTranscriptsFoundError` when nothing to ingest exists yet.
+    Both `app/routers/ingestion.py` (`POST /v1/ingest`) and `scripts/ingest.py`
+    (`make ingestion`) share this one function as their implementation. So there is one
+    implementation and two entry points. This raises `ValueError` for a malformed date. It
+    raises `NoTranscriptsFoundError` when there is nothing to ingest yet.
 
-    `tenant` tags every row written here (defaults to `"default"` — this disk-based path
-    predates the frontend and has no real per-tenant folder layout; the frontend's own upload
-    flow goes through `ingest_uploaded_files` below instead, which always has a real tenant).
+    `tenant` tags every row written here. It defaults to `"default"`. This disk-based path
+    predates the frontend and has no real per-tenant folder layout. The frontend's own
+    upload flow goes through `ingest_uploaded_files` below instead. That flow always has a
+    real tenant.
     """
-    parsed_date = parse_ingestion_date(ingestion_date)  # raises ValueError if malformed
+    parsed_date = parse_ingestion_date(ingestion_date)  # raises ValueError if the date is not well formed
 
     partition = f"ingestion_date={ingestion_date}"
     transcripts_dir = Path(settings.input_dir) / "transcriptions" / partition
@@ -85,17 +88,19 @@ async def ingest_bronze(ingestion_date: str, db: AsyncSession, *, tenant: str = 
 async def ingest_uploaded_files(
     files: list[tuple[str, bytes]], ingestion_date: str, tenant: str, db: AsyncSession, *, uploaded_by: str = ""
 ) -> IngestResult:
-    """Ingest files uploaded straight from the frontend's "Input transcription" tab — no disk
-    partition involved, unlike `ingest_bronze` above. `files` is `[(filename, raw_bytes), ...]`;
-    `.vtt` goes through `parse_vtt_text`, `.pdf` through `extract_pdf_text`, `.txt`/`.md` are
-    decoded as plain text directly (no cue-timing/metadata stripping needed), anything else is
-    rejected with `ValueError` naming the file.
+    """Ingest files uploaded straight from the frontend's "Input transcription" tab. Unlike
+    `ingest_bronze` above, this does not use any disk partition. `files` is
+    `[(filename, raw_bytes), ...]`. A `.vtt` file goes through `parse_vtt_text`. A `.pdf`
+    file goes through `extract_pdf_text`. A `.txt` or `.md` file is decoded as plain text
+    directly, since it needs no cue-timing or metadata stripping. Any other file type is
+    rejected with a `ValueError` that names the file.
 
-    `uploaded_by` is the logged-in username that submitted this batch — stamped on every
-    `BronzeDocument` row written here (see that column's own docstring in `db/models.py`).
+    `uploaded_by` is the logged-in username that submitted this batch. It is stamped on
+    every `BronzeDocument` row written here. See that column's own docstring in
+    `db/models.py`.
 
-    Raises `ValueError` for a malformed `ingestion_date` or an unsupported file extension,
-    `NoTranscriptsFoundError` if `files` is empty."""
+    Raises `ValueError` for a malformed `ingestion_date` or an unsupported file extension.
+    Raises `NoTranscriptsFoundError` if `files` is empty."""
     parsed_date = parse_ingestion_date(ingestion_date)
     if not files:
         raise NoTranscriptsFoundError("No files were uploaded")
@@ -110,7 +115,7 @@ async def ingest_uploaded_files(
         elif suffix == ".pdf":
             text = extract_pdf_text(content)
         elif suffix in (".txt", ".md"):
-            # Already plain text — no cue-timing/metadata stripping needed, unlike .vtt.
+            # This is already plain text. Unlike .vtt, it needs no cue-timing or metadata stripping.
             text = content.decode("utf-8")
         else:
             raise ValueError(

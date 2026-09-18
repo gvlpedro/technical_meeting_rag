@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Ingest one ingestion_date's transcripts into `bronze_documents` — `make ingestion`.
+"""This script ingests one ingestion_date's transcripts into `bronze_documents`. It is the
+`make ingestion` entry point.
 
 Usage:
     uv run python3 scripts/ingest.py --ingestion-date 20260906
 
-Same logic `POST /v1/ingest` runs (`ingestion/service.py`), called directly against the
-database instead of through the FastAPI app — no server needs to be running.
+It runs the same logic as `POST /v1/ingest`, from `ingestion/service.py`. It calls that logic
+directly against the database, instead of going through the FastAPI app. So no server needs
+to be running.
 """
 
 import argparse

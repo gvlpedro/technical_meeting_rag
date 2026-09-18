@@ -1,5 +1,8 @@
-"""gold_evolution, gold_aliases — Gold layer (.tmp/gold_process.md v4, cut to two tables and
-flattened per .tmp/optmizaciones.md §1 and .tmp/refactor_silver_and_gold_process_v6.md)
+"""gold_evolution, gold_aliases — Gold layer
+
+This follows the Gold layer design in .tmp/gold_process.md v4. That design is cut down to two
+tables and flattened, as described in .tmp/optmizaciones.md §1 and
+.tmp/refactor_silver_and_gold_process_v6.md.
 
 Revision ID: 22126087c3f7
 Revises: eab9a1077fa9
@@ -23,10 +26,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """No FK to silver_documents on either table — flat (source_component,
-    source_adr_version) columns instead, same no-FK convention bronze/silver already use
-    (v6 §1). pg_trgm is enabled here for the first time in this schema (only gold_aliases
-    needs fuzzy matching); `vector` was already enabled by the initial migration.
+    """Neither table has a foreign key to silver_documents. Instead, each has flat
+    (source_component, source_adr_version) columns. This follows the same no-FK convention
+    that bronze and silver already use (see v6 §1).
+
+    This migration enables pg_trgm for the first time in this schema, because only
+    gold_aliases needs fuzzy matching. The `vector` extension was already enabled by the
+    initial migration.
     """
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 

@@ -1,0 +1,68 @@
+# ADR Critic
+
+## ROLE
+
+Review the drafted document against its source transcript and clarifications. For every
+substantive claim (a lifecycle tag, a data-contract field, an overview statement), decide
+whether it is actually supported.
+
+Quote `claim` as a verbatim, exact substring from the document — never paraphrased.
+
+Mark `severity: "material"` only when a claim actively contradicts the transcript or
+clarifications, not merely for lacking evidence (an honest `evidenced: false` is expected, not
+a defect — mark those `"low"` if flagged at all). Only flag claims that are actually wrong or
+unsupported; do not flag every sentence.
+
+Never flag a claim starting with the literal prefix `LLM SUGGESTION:` — the generator only
+writes that prefix when the reviewer explicitly authorized a suggestion for that gap
+(`prompts/adr_generation/generator.jinja`'s CLARIFICATION ANSWER MARKERS), and it already discloses that
+status more precisely than a generic flag would.
+
+Never flag a claim naming or describing something the document's own "## 2. Previous
+Architecture" establishes (a pre-existing component, its prior role, its diagram) — that
+section snapshots the already-confirmed, previously-published architecture (from Gold, the
+reconciled cross-source record — see `agents.graph.synthesize_document`), fed in as trusted
+input, not something this source's own transcript needs to independently support. "The
+existing architecture already includes X" is correct and expected even when this transcript
+never mentions X, because X predates it.
+
+---
+
+# COMPLETENESS SCORING
+
+Judge how complete this document is as a production-ready ADR: every named component and data
+contract should have every required field fully resolved — a confirmed lifecycle status, a real
+ODCS `version`/`status`/`schema.properties` — not a placeholder standing in for what nobody has
+confirmed. `version: not-specified`, `status: not-specified`, an empty `schema.properties: {}`
+next to an included contract: unresolved information dressed as a finished field, not a
+genuinely empty section.
+
+`completeness_score` (0-100): 100 means every included item has every required field resolved,
+no placeholder-like value anywhere. Deduct roughly in proportion to how much required structure
+is placeholder/unresolved rather than confirmed fact — one contract with an unresolved
+version/status/schema out of an otherwise complete document should cost noticeably more than a
+few points.
+
+`unresolved_points` — one entry per specific unresolved field/fact, e.g. `"notification-created
+contract: version not specified"`, `"Email Worker: dependency list not confirmed"`. Empty only
+when `completeness_score` is 100.
+
+A correct omission is not an unresolved point and doesn't reduce the score: a component/contract
+the transcript only mentions in passing, with no confirmed role, is expected to be absent from
+the affected-components/contracts sections. Only a field that IS present on an item the document
+DOES include, but holds a placeholder value, counts.
+
+Return JSON matching the requested schema, nothing else.
+
+---
+
+# INPUT
+
+Document:
+{{ document }}
+
+Clarifications:
+{{ clarifications }}
+
+Transcript for this source only:
+{{ source_content }}

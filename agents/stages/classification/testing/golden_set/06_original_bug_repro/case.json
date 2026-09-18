@@ -1,0 +1,40 @@
+{
+  "description": "Exact repro of the reported production bug: a confident, complete-sounding architecture description that never actually states any component's lifecycle status. The old classifier wrongly answered these as 'unchanged'. This case pins that regression down permanently.",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "component",
+      "target": "frontend application",
+      "requirement": "status",
+      "question": "What is the lifecycle status of the frontend application: new, modified, removed, or unchanged?"
+    },
+    {
+      "id": "q2",
+      "scope": "component",
+      "target": "backend API",
+      "requirement": "status",
+      "question": "What is the lifecycle status of the backend API: new, modified, removed, or unchanged?"
+    },
+    {
+      "id": "q3",
+      "scope": "component",
+      "target": "database",
+      "requirement": "status",
+      "question": "What is the lifecycle status of the database: new, modified, removed, or unchanged?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["needs_clarification", "answered"],
+      "forbidden_answer_substrings": ["unchanged"]
+    },
+    "q2": {
+      "acceptable_statuses": ["needs_clarification", "answered"],
+      "forbidden_answer_substrings": ["unchanged"]
+    },
+    "q3": {
+      "acceptable_statuses": ["needs_clarification", "answered"],
+      "forbidden_answer_substrings": ["unchanged"]
+    }
+  }
+}

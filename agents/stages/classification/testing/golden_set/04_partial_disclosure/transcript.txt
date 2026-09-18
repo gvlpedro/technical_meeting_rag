@@ -1,0 +1,3 @@
+OrderService publishes an OrderCreated event to a Kafka topic. The event includes an order_id
+field. We didn't get into what type order_id is or whether it's always present — we ran out of
+time.

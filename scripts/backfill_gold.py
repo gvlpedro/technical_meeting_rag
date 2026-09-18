@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Replay Gold extraction/reconciliation over existing `silver_documents` rows, independent of
-Silver's own graph run — `.tmp/gold_process_v5.md` §4's "fully rebuildable" promise. The three
-Gold nodes in `agents/graph.py` (`extract_gold_facts`/`resolve_gold_identity`/
-`persist_gold_evolution`) and this script both end up calling `agents.gold_service.
-extract_and_persist_gold_facts` — one shared implementation, not two copies of the same
-persist-orchestration shape. Use this after changing the extraction prompt/model and wanting
-to reprocess history, or to backfill Gold for `silver_documents` rows that predate Gold's
-existence.
+"""This script replays Gold extraction and reconciliation over existing `silver_documents`
+rows. It does this on its own, without running Silver's own graph. This is the "fully
+rebuildable" promise from `.tmp/gold_process_v5.md` §4.
+
+The three Gold nodes in `agents/graph.py` (`extract_gold_facts`, `resolve_gold_identity`, and
+`persist_gold_evolution`) call the same function this script calls:
+`agents.stages.gold.service.extract_and_persist_gold_facts`. So there is one shared
+implementation of this persist step, not two separate copies.
+
+Use this script after you change the extraction prompt or model and want to reprocess history.
+You can also use it to backfill Gold for `silver_documents` rows that existed before Gold did.
 
 Usage:
     uv run python3 scripts/backfill_gold.py                          # every silver_documents row
@@ -23,7 +26,7 @@ import asyncio
 
 from sqlalchemy import select
 
-from agents import gold_service
+from agents.stages import gold
 from db.models import SilverDocument
 from db.session import async_session_factory
 
@@ -37,7 +40,7 @@ async def main(source_component: str | None, force: bool) -> None:
 
         processed = 0
         for doc in docs:
-            extracted = await gold_service.extract_and_persist_gold_facts(
+            extracted = await gold.extract_and_persist_gold_facts(
                 session,
                 doc.content,
                 doc.source_component,

@@ -6,11 +6,12 @@ ClarificationStatus = Literal["answered", "unknown", "needs_clarification", "hum
 
 
 class GeneratedQuestion(TypedDict):
-    """One question as drafted by `generate_architecture_questions` or
-    `generate_data_contract_questions` — see `agents.schemas.QuestionItem`. `id` is what
-    `classify_questions` matches a classification back to, not question text. Both
-    generation stages append into the same `generated_questions` list — `classify_questions`
-    classifies their union in one pass."""
+    """One question drafted by `generate_architecture_questions` or
+    `generate_data_contract_questions`. See `agents.shared.QuestionItem`.
+    `classify_questions` uses `id` to match a classification back to this question.
+    It does not match on the question text.
+    Both generation stages add their questions to the same `generated_questions` list.
+    `classify_questions` then classifies the combined list in one pass."""
 
     id: str
     scope: str
@@ -20,17 +21,19 @@ class GeneratedQuestion(TypedDict):
 
 
 class MentionedComponentItem(TypedDict):
-    """See `agents.schemas.MentionedComponent` — the Actor's own lifecycle read for a
-    component the transcript names, drafted by `generate_architecture_questions`."""
+    """See `agents.stages.architecture_questions.schemas.MentionedComponent`. This is the Actor's own read of the
+    lifecycle status for a component the transcript names.
+    `generate_architecture_questions` drafts it."""
 
     name: str
     status: str
 
 
 class MentionedDataContractItem(TypedDict):
-    """See `agents.schemas.MentionedDataContract` — a data contract
-    `generate_architecture_questions` identified (name/producer/consumer/action only), fed
-    into `generate_data_contract_questions` as its fixed `IDENTIFIED_DATA_CONTRACTS` input."""
+    """See `agents.stages.architecture_questions.schemas.MentionedDataContract`. This is a data contract that
+    `generate_architecture_questions` identified. It only has the name, producer,
+    consumer, and action. `generate_data_contract_questions` uses this as its fixed
+    `IDENTIFIED_DATA_CONTRACTS` input."""
 
     name: str
     producer: str
@@ -61,50 +64,54 @@ class CritiqueItem(TypedDict):
 
 
 class SilverState(TypedDict):
-    """See `doc/silver_process.md` §3 for the full rationale behind each field.
+    """See `doc/silver_process.md` §3 for the full reasoning behind each field.
 
-    Deviates from that document's illustrative state sketch in one way: there is no
-    `human_answers` field. `ask_human`'s resume payload arrives directly as the
-    return value of `interrupt()` at the call site (LangGraph's own mechanism), so
-    there is nothing to stage in state ahead of time — storing it separately would
-    just be a second, redundant place for the same value to live.
+    This differs from that document's example state in one way. There is no
+    `human_answers` field here. `ask_human`'s resume payload comes directly from the
+    return value of `interrupt()` at the call site. That is LangGraph's own mechanism.
+    So there is nothing to stage in state ahead of time. Storing it separately would
+    just create a second, redundant place for the same value to live.
     """
 
-    tenant: str  # which frontend tenant this run belongs to — threaded into every DB write/query
-    # The logged-in username driving this run, if any — `write_document` stamps it onto every
-    # synthesized ADR as a `**Authors:**` line (`agents.service.insert_authors_line`), then
-    # `_persist_document_version` reads it straight back out of that same content into
-    # `SilverDocument.authored_by`. `""` for a CLI/script/test run with no real user — see
-    # `insert_authors_line`'s own docstring for why that's a safe no-op, not a placeholder.
+    tenant: str  # The frontend tenant this run belongs to. We pass it into every DB write and query.
+    # The logged-in username driving this run, if there is one. `write_document` stamps it
+    # onto every synthesized ADR as a `**Authors:**` line (`agents.shared.insert_authors_line`).
+    # Then `_persist_document_version` reads it back out of that same content into
+    # `SilverDocument.authored_by`. This is `""` for a CLI, script, or test run with no real
+    # user. See `insert_authors_line`'s own docstring for why that is a safe no-op, not a
+    # placeholder.
     username: str
-    # Whether `write_document` may persist this run's own `SilverDocument`/on-disk audit file,
-    # and whether the graph continues on into Gold at all (`route_after_write_document`) — `True`
-    # everywhere except the frontend's initial upload (`app/routers/frontend.py::
-    # upload_transcription` passes `False`). The clarification loop's own draft (and any
-    # "Regenerate ADR"/"Ask me more" refinement of it) is temporary until a human explicitly
-    # clicks "Publish" (`finalize_document`); nothing before that click may create a Silver
-    # version or a Gold fact. `SilverClarification` (the Q&A audit trail) is the one exception —
-    # `write_document` always logs it regardless of `persist`, since `regenerate_document`/
-    # `ask_more_questions` read it back to keep grounding a still-unpublished draft.
+    # Whether `write_document` may save this run's own `SilverDocument` and on-disk audit file.
+    # It also controls whether the graph continues on into Gold at all
+    # (`route_after_write_document`). This is `True` everywhere except the frontend's initial
+    # upload (`app/routers/frontend.py::upload_transcription` passes `False`).
+    # The clarification loop's own draft, and any "Regenerate ADR" or "Ask me more" refinement
+    # of it, stays temporary until a human clicks "Publish" (`finalize_document`).
+    # Nothing before that click may create a Silver version or a Gold fact.
+    # `SilverClarification` (the Q&A audit trail) is the one exception. `write_document`
+    # always logs it, no matter what `persist` is, because `regenerate_document` and
+    # `ask_more_questions` read it back to keep grounding a draft that is not published yet.
     persist: bool
-    # Per-run override of settings.max_architecture_pending_questions/
-    # max_data_contract_pending_questions (see _top_questions) — the frontend's "Input
-    # transcription" tab lets a user set one shared number for both per upload; a run started
-    # any other way (a script, a test) falls back to the settings default (see initial_state).
+    # Per-run override of settings.max_architecture_pending_questions and
+    # settings.max_data_contract_pending_questions. See _top_questions.
+    # The frontend's "Input transcription" tab lets a user set one shared number for both,
+    # per upload. A run started any other way, such as a script or a test, falls back to the
+    # settings default. See initial_state.
     max_architecture_pending_questions: int
     max_data_contract_pending_questions: int
-    # Restricts this run's Bronze batch to exactly these source_components, instead of every
-    # bronze_documents row that happens to share (tenant, ingestion_date) — see
-    # `agents.service.load_bronze_rows`'s own docstring for why this matters: two unrelated
-    # frontend uploads picking the same calendar date would otherwise get pooled into one
-    # batch, cross-contaminating each other's questions/ADR. `None` (a script, a test, `make
-    # clarify`) keeps the original "everything for this date" pooling — that one is
-    # intentional, a real batch of same-day transcripts meant to be processed together.
+    # Restricts this run's Bronze batch to exactly these source_components. Without this,
+    # the batch would include every bronze_documents row that shares the same (tenant,
+    # ingestion_date). See `agents.shared.load_bronze_rows`'s own docstring for why this
+    # matters. Without the restriction, two unrelated frontend uploads that pick the same
+    # calendar date would get pooled into one batch. That would cross-contaminate each
+    # other's questions and ADR. `None` (used by a script, a test, or `make clarify`) keeps
+    # the original "everything for this date" pooling. That pooling is intentional there: it
+    # is a real batch of same-day transcripts meant to be processed together.
     source_components: list[str] | None
     ingestion_date: str
     bronze_documents: list[BronzeRow]
     transcript_text: str
-    generated_questions: list[GeneratedQuestion]  # union of both generation stages, this batch
+    generated_questions: list[GeneratedQuestion]  # combined list from both generation stages, this batch
     mentioned_components: list[MentionedComponentItem]  # drafted by generate_architecture_questions
     mentioned_data_contracts: list[MentionedDataContractItem]  # same stage; feeds the next one
     clarifications: list[ClarificationItem]
@@ -119,11 +126,11 @@ class SilverState(TypedDict):
     active_sources: list[str]  # source_components synthesize/critic/boss are working on this pass
     redraft_only: list[str] | None  # set by boss_decide: redraft just these sources, not the batch
     interrupt_origin: Literal["classify", "boss"]  # how ask_human should interpret its resume payload
-    # Gold (.tmp/gold_process_v5.md §1-2) — three more nodes appended after chunk_and_embed,
-    # sharing this same graph run instead of a separately triggered pass. Neither field needs
-    # to survive an `interrupt()`/resume cycle (Gold nodes never interrupt), but both live in
-    # state rather than as node-local variables so a redraft's second pass through this graph
-    # doesn't lose an earlier source's already-computed extraction.
+    # Gold (.tmp/gold_process_v5.md §1-2). Three more nodes run after chunk_and_embed, in the
+    # same graph run, instead of a separately triggered pass. Neither field needs to survive
+    # an `interrupt()` and resume cycle, because Gold nodes never interrupt. Both fields still
+    # live in state, not as node-local variables, so a redraft's second pass through this graph
+    # does not lose a source's extraction that was already computed.
     gold_extractions: dict[str, dict]  # source_component -> extract_gold_facts' GoldExtractionResult
     gold_entity_ids: dict[str, dict[str, str]]  # source_component -> {raw name -> resolved entity_id}
 

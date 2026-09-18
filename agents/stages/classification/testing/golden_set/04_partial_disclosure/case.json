@@ -1,0 +1,38 @@
+{
+  "description": "Partial disclosure — the field's existence and name ARE stated (answered), but its type/requiredness are explicitly flagged as not covered (needs_clarification). Tests that the classifier splits a partially-known fact correctly instead of treating the whole thing as one blob.",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "data_contract",
+      "target": "OrderCreated",
+      "requirement": "schema.order_id.exists",
+      "question": "Does the OrderCreated event include an order_id field?"
+    },
+    {
+      "id": "q2",
+      "scope": "data_contract",
+      "target": "OrderCreated",
+      "requirement": "schema.order_id.type",
+      "question": "What is the data type of order_id in the OrderCreated event?"
+    },
+    {
+      "id": "q3",
+      "scope": "data_contract",
+      "target": "OrderCreated",
+      "requirement": "schema.order_id.required",
+      "question": "Is order_id required in every OrderCreated event?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["answered"],
+      "required_answer_substrings_any_of": ["yes", "order_id"]
+    },
+    "q2": {
+      "acceptable_statuses": ["needs_clarification", "unknown"]
+    },
+    "q3": {
+      "acceptable_statuses": ["needs_clarification", "unknown"]
+    }
+  }
+}

@@ -6,12 +6,14 @@ from types import SimpleNamespace
 
 import litellm
 import pytest
+from fastapi import HTTPException
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import delete, select
 
-from agents.graph import build_graph, checkpointer_dsn
+from agents.graph import _drop_new_contract_version_questions, _ensure_schema_questions, build_graph, checkpointer_dsn
 from agents.state import initial_state
 from app.config import settings
+from app.routers.frontend import _resume_graph
 from db.models import BronzeDocument, GoldAlias, GoldEvolution, SilverChunk, SilverClarification, SilverDocument
 from db.session import async_session_factory
 
@@ -37,9 +39,10 @@ _DEFAULT_QUESTION = {
     "question": "placeholder question?",
 }
 
-# The harmless default for extract_gold_facts's one LLM call: nothing extracted, architecture
-# unchanged. Shared by _make_fake_acompletion's own default and any test below faking its own
-# acompletion but not exercising Gold extraction specifically.
+# This is the harmless default for extract_gold_facts's one LLM call. Nothing is extracted.
+# The architecture is unchanged. _make_fake_acompletion uses this as its own default. Any
+# test below that fakes its own acompletion, but does not test Gold extraction, shares it
+# too.
 _DEFAULT_GOLD_EXTRACTION = {
     "components": [],
     "contracts": [],
@@ -61,31 +64,32 @@ def _make_fake_acompletion(
     completeness_score: int = 100,
     unresolved_points: list[str] | None = None,
 ):
-    """Dispatches on which prompt was sent (architecture questions / data-contract
-    questions / classify / synthesize / critic). Each question-generation stage and
-    `classify_questions` send their whole prompt as a single `user` message (loaded
-    verbatim from `prompts/architecture_questions.jinja`/
-    `data_contract_questions.jinja` for the first two), synthesize/critic still use a
-    `system` + `user` pair — check `messages[0]["content"]` either way. `synthesis_queue`
-    and `critique_queue` are consumed in call order — one entry per
-    synthesize_document/critic_document invocation, in the order the graph actually makes
-    them (first pass, then one more per redraft).
+    """This function dispatches based on which prompt was sent: architecture questions,
+    data-contract questions, classify, synthesize, or critic. Each question-generation stage
+    and `classify_questions` send their whole prompt as a single `user` message. For the
+    first two, that message is loaded verbatim from `prompts/architecture_questions/
+    combined.jinja` or `data_contract_questions.jinja`. synthesize and critic still use a
+    `system` plus `user` pair. Either way, check `messages[0]["content"]`. `synthesis_queue`
+    and `critique_queue` are consumed in call order. Each entry matches one
+    synthesize_document or critic_document call, in the order the graph actually makes them:
+    first pass, then one more per redraft.
 
-    `classification`'s entries are matched back to `generated_questions` by `id` (see
-    `agents.graph.classify_questions`), so a test overriding one must override the
-    other consistently — the default single placeholder question/classification pair
-    is enough for tests that don't care about specific question text or ids. Leaving
-    `mentioned_data_contracts` at its default (empty) means the data-contract stage skips
-    its LLM call entirely (`generate_data_contract_questions_for_batch`'s own short
-    circuit) — most tests below never need to fake that prompt at all.
+    `classification`'s entries are matched back to `generated_questions` by `id`. See
+    `agents.graph.classify_questions`. So a test that overrides one must override the other
+    consistently. The default single placeholder question/classification pair is enough for
+    tests that don't care about specific question text or ids. Leaving
+    `mentioned_data_contracts` at its default (empty) means the data-contract stage skips its
+    LLM call entirely. This is `generate_data_contract_questions_for_batch`'s own short
+    circuit. So most tests below never need to fake that prompt at all.
 
-    `gold_extraction` fakes `extract_gold_facts`'s one LLM call per source (`agents/graph.py`),
-    which now runs unconditionally for every source that reaches `boss_verdicts[source] ==
-    "ok"` — every pre-existing test below therefore also exercises this node, just with the
-    harmless default (nothing extracted, architecture unchanged) unless a test overrides it,
-    the same way `mentioned_data_contracts` defaulting to empty means most tests never bother
-    faking the data-contract stage either. See `test_gold_extraction_persists_and_skips_
-    unknown_status` for the one test that overrides it to exercise real extraction/persistence."""
+    `gold_extraction` fakes `extract_gold_facts`'s one LLM call per source, in
+    `agents/graph.py`. This call now runs unconditionally for every source that reaches
+    `boss_verdicts[source] == "ok"`. So every pre-existing test below also exercises this
+    node. Each test uses the harmless default, nothing extracted and architecture unchanged,
+    unless it overrides it. This works the same way `mentioned_data_contracts` defaulting to
+    empty means most tests never bother faking the data-contract stage either. See
+    `test_gold_extraction_persists_and_skips_unknown_status` for the one test that overrides
+    it to exercise real extraction and persistence."""
     questions = generated_questions if generated_questions is not None else [_DEFAULT_QUESTION]
     components = mentioned_components if mentioned_components is not None else []
     contracts = mentioned_data_contracts if mentioned_data_contracts is not None else []
@@ -100,13 +104,13 @@ def _make_fake_acompletion(
             )
         elif "Senior Data Governance Requirements Analyst" in content_in:
             content = json.dumps({"questions": contract_questions})
-        elif "You classify each question" in content_in:
+        elif "Classify each question" in content_in:
             content = json.dumps(classification)
         elif "extracting structured, versionable facts" in content_in:
             content = json.dumps(gold_result)
         elif "Architecture Decision Record" in content_in:
             content = synthesis_queue.pop(0)
-        elif "You review a drafted architecture document" in content_in:
+        elif "Review the drafted document" in content_in:
             content = json.dumps(
                 {
                     "claims": critique_queue.pop(0),
@@ -136,13 +140,14 @@ async def _insert_bronze(ingestion_date: date, source_component: str, contents: 
 
 
 async def _cleanup_date(ingestion_date: date) -> None:
-    """Also cleans up any `gold_evolution`/`gold_aliases` rows this run wrote — `extract_gold_
-    facts` now runs unconditionally for every clean-passing source (see `_make_fake_
-    acompletion`'s `gold_result` default), so every test in this file writes at least an
-    `architecture:<source>` row unless it explicitly skips Gold. `gold_aliases` has no
-    `ingestion_date` column of its own (it's not versioned — `gold_process.md` §3), so its
-    rows are found via the `(entity_type, entity_id)` pairs `gold_evolution` just gave us,
-    deleted before the `gold_evolution` rows themselves so nothing is left to look up."""
+    """This also cleans up any `gold_evolution` and `gold_aliases` rows this run wrote.
+    `extract_gold_facts` now runs unconditionally for every clean-passing source. See
+    `_make_fake_acompletion`'s `gold_result` default. So every test in this file writes at
+    least an `architecture:<source>` row, unless it explicitly skips Gold. `gold_aliases`
+    has no `ingestion_date` column of its own. It is not versioned. See `gold_process.md`
+    §3. So we find its rows through the `(entity_type, entity_id)` pairs `gold_evolution`
+    just gave us. We delete those rows before the `gold_evolution` rows themselves, so
+    nothing is left to look up."""
     async with async_session_factory() as session:
         gold_entities = (
             await session.execute(
@@ -172,10 +177,10 @@ async def _cleanup_date(ingestion_date: date) -> None:
 
 
 async def _run(thread_id: str, payload) -> dict:
-    """Opens a brand-new `AsyncPostgresSaver` connection and compiles a fresh graph
-    for every call — every multi-call test below therefore already proves the
-    checkpoint survives across separate connections/processes, not just in-memory
-    state within one Python object."""
+    """This opens a brand-new `AsyncPostgresSaver` connection and compiles a fresh graph
+    for every call. So every multi-call test below already proves the checkpoint survives
+    across separate connections and processes. It is not just in-memory state within one
+    Python object."""
     async with AsyncPostgresSaver.from_conn_string(checkpointer_dsn()) as saver:
         await saver.setup()
         graph = build_graph(saver)
@@ -197,12 +202,16 @@ DATE_GOLD_DISCOVERS_NEW_COMPONENT = date(2026, 6, 11)
 DATE_DUPLICATE_MATERIAL_CLAIMS = date(2026, 6, 12)
 DATE_CRITIC_SCORE = date(2026, 6, 13)
 DATE_IRRELEVANT_MARKER = date(2026, 6, 14)
+DATE_CLASSIFY_SEMANTIC_DUPLICATE = date(2026, 6, 15)
+DATE_NEW_CONTRACT_VERSION = date(2026, 6, 16)
+DATE_GOLD_CONTRACT_PRODUCER_CONSUMER_IDS = date(2026, 6, 17)
+DATE_RESUME_TENANT_GUARDRAIL = date(2026, 6, 18)
 
 
 async def test_data_contract_stage_questions_are_appended_to_architecture_stage_ones(monkeypatch):
-    """The two question-generation stages both feed `generated_questions` —
+    """The two question-generation stages both feed `generated_questions`.
     `generate_data_contract_questions` must append onto what `generate_architecture_questions`
-    already drafted, not replace it, so `classify_questions` sees the union of both."""
+    already drafted. It must not replace it. So `classify_questions` sees the union of both."""
     await _insert_bronze(
         DATE_DATA_CONTRACT_QUESTIONS, "meeting_g.en.vtt", ["Checkout publishes checkout-completed."]
     )
@@ -241,7 +250,7 @@ async def test_data_contract_stage_questions_are_appended_to_architecture_stage_
         )
 
         async def tracking_fake(*, model, api_key, messages, **kwargs):
-            if "You classify each question" in messages[0]["content"]:
+            if "Classify each question" in messages[0]["content"]:
                 seen_ids.extend(
                     line.split("id: ", 1)[1]
                     for line in messages[0]["content"].splitlines()
@@ -259,9 +268,72 @@ async def test_data_contract_stage_questions_are_appended_to_architecture_stage_
         await _cleanup_date(DATE_DATA_CONTRACT_QUESTIONS)
 
 
+async def test_new_contract_version_question_is_dropped_before_classification(monkeypatch):
+    """Regression test for `agents.graph._drop_new_contract_version_questions`. A `new`
+    contract's version is always `1.0.0` by convention — see `prompts/adr_generation/
+    generator.jinja`'s own rule, which `prompts/data_contract_questions/questions.jinja`'s
+    PHASE 3 now states too. A human must never be asked for it, even when the
+    data-contract-question stage drafts that question anyway despite the prompt's own
+    instruction. This question must never even reach `classify_questions`."""
+    await _insert_bronze(
+        DATE_NEW_CONTRACT_VERSION, "meeting_e.en.vtt", ["We're launching a new OrderCreated contract."]
+    )
+    try:
+        version_question = {
+            "id": "contract.ordercreated.version",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "version",
+            "question": "What is the initial semantic version of the OrderCreated contract?",
+        }
+        schema_question = {
+            "id": "contract.ordercreated.schema",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "schema",
+            "question": "What fields does OrderCreated carry?",
+        }
+        seen_ids: list[str] = []
+
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=["# ADR — Orders\n\nOrderCreated introduced."],
+            critique_queue=[[]],
+            mentioned_components=[{"name": "OrderService", "status": "new"}],
+            mentioned_data_contracts=[
+                {
+                    "name": "OrderCreated",
+                    "producer": "OrderService",
+                    "consumer": "FulfillmentService",
+                    "action": "new",
+                }
+            ],
+            data_contract_questions=[version_question, schema_question],
+        )
+
+        async def tracking_fake(*, model, api_key, messages, **kwargs):
+            if "Classify each question" in messages[0]["content"]:
+                seen_ids.extend(
+                    line.split("id: ", 1)[1]
+                    for line in messages[0]["content"].splitlines()
+                    if line.strip().startswith("- id:")
+                )
+            return await fake(model=model, api_key=api_key, messages=messages, **kwargs)
+
+        monkeypatch.setattr(litellm, "acompletion", tracking_fake)
+
+        result = await _run("new-contract-version-1", initial_state("20260616"))
+        assert "__interrupt__" not in result
+
+        assert "contract.ordercreated.version" not in seen_ids
+        assert "contract.ordercreated.schema" in seen_ids
+    finally:
+        await _cleanup_date(DATE_NEW_CONTRACT_VERSION)
+
+
 async def test_generate_questions_output_is_what_classify_questions_actually_sees(monkeypatch):
     """generate_architecture_questions drafts per-component questions from the transcript
-    (prompts/architecture_questions.jinja); classify_questions must
+    (prompts/architecture_questions/combined.jinja); classify_questions must
     receive exactly that list, not some other/fixed one."""
     await _insert_bronze(
         DATE_GENERATED_QUESTIONS, "meeting_f.en.vtt", ["The checkout service was discussed."]
@@ -300,12 +372,12 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
                         }
                     )
                 )
-            if "You classify each question" in content_in:
+            if "Classify each question" in content_in:
                 seen_questions_blocks.append(messages[0]["content"])
                 return _fake_response(json.dumps({"classifications": []}))
             if "Architecture Decision Record" in content_in:
                 return _fake_response("# ADR — Checkout Service\n\nCheckout: unchanged.")
-            if "You review a drafted architecture document" in content_in:
+            if "Review the drafted document" in content_in:
                 return _fake_response(
                     json.dumps({"claims": [], "completeness_score": 100, "unresolved_points": []})
                 )
@@ -322,8 +394,8 @@ async def test_generate_questions_output_is_what_classify_questions_actually_see
         for item in per_component_questions:
             assert item["question"] in seen_questions_blocks[0]
 
-        # output/ingestion_date=20260606/questions/meeting_f.json — mirrors
-        # input/transcriptions/ingestion_date=20260606/meeting_f.en.vtt's own name.
+        # This file is output/ingestion_date=20260606/questions/meeting_f.json. Its name
+        # mirrors input/transcriptions/ingestion_date=20260606/meeting_f.en.vtt's own name.
         questions_file = (
             Path(settings.output_dir) / "ingestion_date=20260606" / "questions" / "meeting_f.json"
         )
@@ -370,7 +442,7 @@ async def test_clean_transcript_completes_with_no_interrupt_and_persists(monkeyp
         assert len(chunks) > 0
         assert all(c.embedding is not None for c in chunks)
 
-        # Re-run for the same ingestion_date: upserts in place, no duplicates.
+        # This re-runs for the same ingestion_date. It upserts in place. No duplicates are created.
         monkeypatch.setattr(
             litellm,
             "acompletion",
@@ -390,11 +462,13 @@ async def test_clean_transcript_completes_with_no_interrupt_and_persists(monkeyp
 
 
 async def test_critic_completeness_score_reaches_the_final_state(monkeypatch):
-    """`critic_document` (agents/graph.py) must surface the Critic's own `completeness_score`/
-    `unresolved_points` (prompts/adr_critic.jinja's COMPLETENESS SCORING section) in
-    `state["adr_scores"]`/`state["adr_unresolved_points"]`, keyed by source — this is what
-    `app/routers/frontend.py::_to_response` reads to show the reviewer a completeness
-    percentage and the specific unresolved fields, instead of a silently-placeholder ADR."""
+    """`critic_document`, in `agents/graph.py`, must show the Critic's own
+    `completeness_score` and `unresolved_points`. These come from
+    prompts/adr_critic/critic.jinja's COMPLETENESS SCORING section. It must put them in
+    `state["adr_scores"]` and `state["adr_unresolved_points"]`, keyed by source.
+    `app/routers/frontend.py::_to_response` reads these values. It uses them to show the
+    reviewer a completeness percentage and the specific unresolved fields, instead of a
+    silently-placeholder ADR."""
     await _insert_bronze(DATE_CRITIC_SCORE, "meeting_score.en.vtt", ["The reporting pipeline was discussed."])
     try:
         monkeypatch.setattr(
@@ -420,11 +494,12 @@ async def test_critic_completeness_score_reaches_the_final_state(monkeypatch):
 
 
 async def test_write_document_grounds_batch_mentions_per_source(monkeypatch):
-    """`generate_architecture_questions` drafts `mentioned_components`/`mentioned_data_contracts`
-    once over the whole batch's pooled transcript (see that function's docstring) — `write_
-    document` must ground each mention against its OWN source's content
-    (`agents.service.mentions_grounded_in_source`) before persisting it on that source's
-    `SilverDocument` row, not duplicate the whole batch's list onto every row in the batch."""
+    """`generate_architecture_questions` drafts `mentioned_components` and
+    `mentioned_data_contracts` once, over the whole batch's pooled transcript. See that
+    function's docstring. `write_document` must ground each mention against its own
+    source's content, using `agents.shared.mentions_grounded_in_source`, before persisting
+    it on that source's `SilverDocument` row. It must not duplicate the whole batch's list
+    onto every row in the batch."""
     await _insert_bronze(
         DATE_MENTIONED_NAMES, "meeting_checkout.en.vtt", ["We are introducing the checkout service."]
     )
@@ -529,11 +604,158 @@ async def test_classify_stage_interrupt_and_resume_persists_across_new_connectio
                 .one()
             )
         assert "Owner: Alex." in audit_row.content
-        # Silver stores nothing on disk — the audit trail lives in silver_clarifications.
+        # Silver stores nothing on disk. The audit trail lives in silver_clarifications.
         assert clarification_row.question == "who owns this?"
         assert clarification_row.answer == "Alex"
     finally:
         await _cleanup_date(DATE_CLASSIFY_INTERRUPT)
+
+
+async def test_resume_transcription_guardrail_rejects_a_thread_from_a_different_tenant(monkeypatch):
+    """Guardrail test for `app.routers.frontend._resume_graph`. `thread_id` is a plain string a
+    client can type, log, or guess (`f"frontend-{tenant}-{ingestion_date}-{uuid}"`, see
+    `upload_transcription`) — nothing about it proves the caller actually belongs to the tenant
+    it was minted for. Without `_resume_graph`'s own tenant check, a request that knew or
+    guessed another tenant's thread_id could resume THAT tenant's paused clarification session
+    and read its draft ADR content back in the response. This drives a real graph run to a
+    genuine paused state for one tenant, then tries to resume it as a different one."""
+    tenant_a, tenant_b = "guardrail-tenant-a", "guardrail-tenant-b"
+    async with async_session_factory() as session:
+        session.add(
+            BronzeDocument(
+                ingestion_date=DATE_RESUME_TENANT_GUARDRAIL,
+                source_component="meeting_resume_guardrail.en.vtt",
+                content="Someone mentioned a new service.",
+                embedding=[0.0] * settings.embedding_dim,
+                tenant=tenant_a,
+            )
+        )
+        await session.commit()
+    try:
+        fake = _make_fake_acompletion(
+            classification={
+                "classifications": [
+                    {"id": "component.new_service.owner", "answer": None, "status": "needs_clarification"}
+                ]
+            },
+            synthesis_queue=["# ADR — placeholder"],
+            critique_queue=[[]],
+            generated_questions=[
+                {
+                    "id": "component.new_service.owner",
+                    "scope": "component",
+                    "target": "new service",
+                    "requirement": "owner",
+                    "question": "who owns this?",
+                }
+            ],
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        thread_id = "resume-tenant-guardrail-1"
+        first = await _run(
+            thread_id,
+            initial_state(
+                DATE_RESUME_TENANT_GUARDRAIL.strftime("%Y%m%d"), tenant=tenant_a, persist=False
+            ),
+        )
+        assert "__interrupt__" in first
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _resume_graph(thread_id, {"who owns this?": "Alex"}, expected_tenant=tenant_b)
+        assert exc_info.value.status_code == 404
+
+        # The real owning tenant can still resume it normally — the guardrail only blocks a
+        # mismatched tenant, it does not break the legitimate one.
+        second = await _resume_graph(thread_id, {"who owns this?": "Alex"}, expected_tenant=tenant_a)
+        assert "__interrupt__" not in second
+    finally:
+        await _cleanup_date(DATE_RESUME_TENANT_GUARDRAIL)
+
+
+async def test_classify_stage_folds_semantic_duplicate_questions_into_one_pending_question(monkeypatch):
+    """Regression test for the classify stage's DUPLICATE QUESTIONS handling
+    (`agents.graph._canonical_classification`). Two drafted questions can ask for the same
+    information in different words — for example, a kebab-case identifier and a
+    human-readable name for the same data contract. The classifier marks the redundant one
+    with `duplicate_of`. This must collapse both into ONE pending question (the one people
+    would naturally answer first), and answering it once must fill in the answer for both
+    original questions, not just the one actually shown."""
+    await _insert_bronze(
+        DATE_CLASSIFY_SEMANTIC_DUPLICATE,
+        "meeting_d.en.vtt",
+        ["We're introducing a new contract between the backend and the website."],
+    )
+    try:
+        name_question = {
+            "id": "contract.backend_to_website.name",
+            "scope": "data_contract",
+            "target": "backend-to-website (frontend)",
+            "requirement": "name",
+            "question": "What human-readable name should be assigned to the backend-to-website (frontend) contract?",
+        }
+        id_question = {
+            "id": "contract.backend_to_website.id",
+            "scope": "data_contract",
+            "target": "backend-to-website (frontend)",
+            "requirement": "id",
+            "question": (
+                "What stable kebab-case identifier should be assigned to the "
+                "backend-to-website (frontend) contract?"
+            ),
+        }
+        fake = _make_fake_acompletion(
+            classification={
+                "classifications": [
+                    {"id": name_question["id"], "answer": None, "status": "needs_clarification"},
+                    {
+                        "id": id_question["id"],
+                        "answer": None,
+                        "status": "needs_clarification",
+                        "duplicate_of": name_question["id"],
+                    },
+                ]
+            },
+            synthesis_queue=["# Architecture Description / Evolution\n\nContract named checkout-events."],
+            critique_queue=[[]],
+            generated_questions=[name_question, id_question],
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        first = await _run("classify-semantic-duplicate-1", initial_state("20260615"))
+        assert "__interrupt__" in first
+        payload = first["__interrupt__"][0].value
+        # Only the name question reaches the human. The id question, marked as its duplicate,
+        # never becomes a second pending question.
+        assert payload["pending_questions"] == [name_question["question"]]
+
+        from langgraph.types import Command
+
+        second = await _run(
+            "classify-semantic-duplicate-1",
+            Command(resume={name_question["question"]: "checkout-events"}),
+        )
+        assert "__interrupt__" not in second
+
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(SilverClarification).where(
+                            SilverClarification.ingestion_date == DATE_CLASSIFY_SEMANTIC_DUPLICATE
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        # Both original questions — the surfaced one and its folded-in duplicate — end up
+        # answered the same way, even though only one was ever shown to a human.
+        assert len(rows) == 2
+        assert {row.question for row in rows} == {name_question["question"]}
+        assert {row.answer for row in rows} == {"checkout-events"}
+    finally:
+        await _cleanup_date(DATE_CLASSIFY_SEMANTIC_DUPLICATE)
 
 
 async def test_contradiction_escalates_once_and_passes_after_human_informed_redraft(monkeypatch):
@@ -590,14 +812,16 @@ async def test_contradiction_escalates_once_and_passes_after_human_informed_redr
 
 
 async def test_duplicate_material_claims_produce_one_pending_question_not_two(monkeypatch):
-    """Regression test for a real bug: the Critic can flag two distinct claim entries with the
-    exact same `claim` text (e.g. the same sentence quoted twice, once per severity read) —
-    `boss_decide` used to turn each into its own pending-question string, so two IDENTICAL
-    question strings could reach `ask_human`. The frontend renders one text_input per pending
-    question, keyed off the question itself at the time — Streamlit crashed outright
-    (`StreamlitDuplicateElementKey`) on two widgets sharing a key. `_top_questions`
-    (`agents/graph.py`) now de-dupes by exact text before returning; this drives that same
-    duplicate-claim shape through the real graph and asserts exactly one question survives."""
+    """This is a regression test for a real bug. The Critic can flag two distinct claim
+    entries with the exact same `claim` text. For example, the same sentence gets quoted
+    twice, once per severity read. `boss_decide` used to turn each one into its own
+    pending-question string. So two identical question strings could reach `ask_human`. The
+    frontend renders one text_input per pending question. At the time, it keyed each one off
+    the question text itself. Streamlit crashed outright, with a
+    `StreamlitDuplicateElementKey` error, when two widgets shared a key. `_top_questions`, in
+    `agents/graph.py`, now removes exact-text duplicates before returning. This test drives
+    that same duplicate-claim shape through the real graph. It asserts that exactly one
+    question survives."""
     await _insert_bronze(DATE_DUPLICATE_MATERIAL_CLAIMS, "meeting_g.en.vtt", ["The billing service was discussed."])
     try:
         duplicate_claim = "Billing Service now charges customers automatically."
@@ -608,10 +832,10 @@ async def test_duplicate_material_claims_produce_one_pending_question_not_two(mo
                 "# Architecture Description / Evolution\n\nBilling Service now charges customers automatically."
             ],
             critique_queue=[
-                # Two claim entries, byte-identical claim AND rationale — this is what makes
-                # boss_decide's own formatted question strings collide exactly, the real shape
-                # of the bug: different rationale per entry would already produce two distinct
-                # strings, no de-dupe needed at all.
+                # These two claim entries have byte-identical claim text and rationale. This
+                # is what makes boss_decide's own formatted question strings collide exactly.
+                # It is the real shape of the bug. A different rationale per entry would
+                # already produce two distinct strings, and no de-dupe would be needed at all.
                 [
                     {
                         "claim": duplicate_claim,
@@ -680,13 +904,14 @@ async def test_low_severity_claim_is_downgraded_without_any_interrupt(monkeypatc
 
 
 async def test_downgrading_a_claim_never_corrupts_a_mermaid_diagram(monkeypatch):
-    """Regression test for a real bug: the Critic's claim text is a verbatim quote from
-    anywhere in the document (`prompts/adr_critic.jinja`), diagram node labels included. Boss
-    downgrading such a claim used to splice `**[unknown — flagged by review]**` straight into
-    the ```mermaid fence, breaking the diagram's syntax (Mermaid has no `**` token) — this
-    reproduces exactly that: "integration layer" appears ONLY inside the target-architecture
-    diagram, nowhere in prose. `_downgrade_claim` (agents/graph.py) must leave the diagram
-    byte-for-byte untouched, even though it still downgrades a claim quoted from prose."""
+    """This is a regression test for a real bug. The Critic's claim text is a verbatim quote
+    from anywhere in the document. See `prompts/adr_critic/critic.jinja`. This includes
+    diagram node labels. When Boss downgraded such a claim, it used to splice
+    `**[unknown — flagged by review]**` straight into the ```mermaid fence. That broke the
+    diagram's syntax, because Mermaid has no `**` token. This test reproduces exactly that
+    case. "integration layer" appears only inside the target-architecture diagram, nowhere in
+    prose. `_downgrade_claim`, in `agents/graph.py`, must leave the diagram byte-for-byte
+    untouched. It must still downgrade a claim quoted from prose."""
     await _insert_bronze(DATE_MERMAID_DOWNGRADE, "meeting_f.en.vtt", ["The reporting pipeline was discussed."])
     try:
         mermaid_diagram = '    A["integration layer"] --> B["Reporting Service"]'
@@ -736,7 +961,7 @@ async def test_downgrading_a_claim_never_corrupts_a_mermaid_diagram(monkeypatch)
 
         # The prose claim is downgraded normally...
         assert "migrated to streaming ingestion **[unknown — flagged by review]**" in doc.content
-        # ...but the diagram — the only place "integration layer" appears — is untouched.
+        # But the diagram is untouched. It is the only place "integration layer" appears.
         assert mermaid_diagram in doc.content
         mermaid_block = doc.content.split("```mermaid")[1].split("```")[0]
         assert "**" not in mermaid_block
@@ -781,7 +1006,8 @@ async def test_claim_still_material_after_one_retry_proceeds_without_a_third_ask
         from langgraph.types import Command
 
         second = await _run("bounded-retry-1", Command(resume={question: "no sé"}))
-        # Still flagged after the one allowed retry — proceeds anyway, never asks again.
+        # The claim is still flagged after the one allowed retry. The graph proceeds anyway.
+        # It never asks again.
         assert "__interrupt__" not in second
 
         async with async_session_factory() as session:
@@ -800,11 +1026,12 @@ async def test_claim_still_material_after_one_retry_proceeds_without_a_third_ask
 
 
 async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
-    """End-to-end: `extract_gold_facts` -> `resolve_gold_identity` -> `persist_gold_evolution`
-    (`agents/graph.py`, `.tmp/gold_process_v5.md` §2), running inside this same graph run right
-    after `chunk_and_embed`. A confirmed component gets a `gold_evolution` row and a
-    `gold_aliases` entry; a component the extraction leaves `"unknown"` gets neither — see
-    `agents.graph.persist_gold_evolution`'s skip (v6 §3: `"unknown"` should never reach Gold)."""
+    """This is an end-to-end test of `extract_gold_facts`, then `resolve_gold_identity`,
+    then `persist_gold_evolution`. See `agents/graph.py` and `.tmp/gold_process_v5.md` §2.
+    These run inside this same graph run, right after `chunk_and_embed`. A confirmed
+    component gets a `gold_evolution` row and a `gold_aliases` entry. A component the
+    extraction leaves as `"unknown"` gets neither. See `agents.graph.persist_gold_evolution`'s
+    skip logic. Per v6 §3, `"unknown"` should never reach Gold."""
     source = "meeting_gold.en.vtt"
     await _insert_bronze(DATE_GOLD_EXTRACTION, source, ["The checkout service was introduced today."])
     try:
@@ -830,11 +1057,11 @@ async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
             "architecture_narrative": "Checkout Service was added to the architecture.",
             "mermaid_diagram": "",
         }
-        # Two entries each: the second `_run` below is a brand-new thread_id, so the graph
-        # replays synthesize_document/critic_document from scratch too, not just the Gold
-        # nodes — same text both times so write_document's hash-compare keeps `version == 1`
-        # on the second run, which is what makes `already_extracted` actually skip Gold's LLM
-        # call rather than just happening to not need it.
+        # There are two entries each. The second `_run` below uses a brand-new thread_id.
+        # So the graph replays synthesize_document and critic_document from scratch too, not
+        # just the Gold nodes. Both runs use the same text, so write_document's hash-compare
+        # keeps `version == 1` on the second run. This is what makes `already_extracted`
+        # actually skip Gold's LLM call, rather than just happening to not need it.
         fake = _make_fake_acompletion(
             classification={"classifications": []},
             synthesis_queue=[
@@ -871,9 +1098,9 @@ async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
         architecture = by_type[("architecture", source)]
         assert architecture.operation == "changed"
 
-        # "Mystery Service" (status "unknown") must NOT appear anywhere in gold_evolution.
+        # "Mystery Service" has status "unknown". It must not appear anywhere in gold_evolution.
         assert ("component", "Mystery Service") not in by_type
-        assert len(rows) == 2  # exactly checkout + architecture, nothing for Mystery Service
+        assert len(rows) == 2  # This is exactly checkout plus architecture. Nothing exists for Mystery Service.
 
         async with async_session_factory() as session:
             aliases = (
@@ -887,8 +1114,8 @@ async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
             )
         assert [a.alias for a in aliases] == ["Checkout Service"]
 
-        # Re-running the same graph for the same source/version must not re-call the LLM for
-        # extraction at all — already_extracted short-circuits it (agents/graph.py).
+        # Re-running the same graph for the same source and version must not re-call the LLM
+        # for extraction at all. already_extracted short-circuits it. See agents/graph.py.
         def _explode(*, model, api_key, messages, **kwargs):
             raise AssertionError("extract_gold_facts must not re-call the LLM for an already-processed version")
 
@@ -904,18 +1131,107 @@ async def test_gold_extraction_persists_and_skips_unknown_status(monkeypatch):
         await _cleanup_date(DATE_GOLD_EXTRACTION)
 
 
+async def test_gold_data_contract_resolves_producer_and_consumer_to_component_entity_ids(monkeypatch):
+    """Regression/feature test for `DataContractPayload.producer_id`/`consumer_id`. A data
+    contract's `producer`/`consumer` are themselves components. Before this, Gold stored only
+    their raw names on the contract's own payload — never resolved through `gold_aliases` the
+    way `ComponentPayload.dependency_ids`/`contract_ids` already are. This meant there was no
+    reliable way to ask "which components does this data contract touch" by a stable id;
+    only by matching a name string that a rename could break. `resolve_gold_identity` now
+    resolves a contract's producer and consumer as components too (see its own docstring), and
+    `_persist_contracts` writes their resolved ids onto the contract's payload."""
+    source = "meeting_gold_contract_ids.en.vtt"
+    await _insert_bronze(
+        DATE_GOLD_CONTRACT_PRODUCER_CONSUMER_IDS,
+        source,
+        ["Checkout Service now publishes checkout-completed to Loyalty Service."],
+    )
+    try:
+        gold_extraction = {
+            "components": [
+                {
+                    "name": "Checkout Service",
+                    "status": "unchanged",
+                    "narrative": "Checkout Service handles checkout and now publishes an event.",
+                    "dependency_names": [],
+                    "contract_names": ["checkout-completed"],
+                },
+                {
+                    "name": "Loyalty Service",
+                    "status": "new",
+                    "narrative": "Loyalty Service is a new component that awards loyalty points.",
+                    "dependency_names": [],
+                    "contract_names": [],
+                },
+            ],
+            "contracts": [
+                {
+                    "name": "checkout-completed",
+                    "action": "new",
+                    "narrative": "checkout-completed is a new event from Checkout Service to Loyalty Service.",
+                    "producer": "Checkout Service",
+                    "consumer": "Loyalty Service",
+                    "odcs_spec": "{}",
+                }
+            ],
+            "architecture_change": "changed",
+            "architecture_narrative": "Loyalty Service was added, connected to Checkout Service.",
+            "mermaid_diagram": "",
+        }
+        fake = _make_fake_acompletion(
+            classification={"classifications": []},
+            synthesis_queue=["# ADR — Loyalty\n\nLoyalty Service added."],
+            critique_queue=[[]],
+            mentioned_components=[
+                {"name": "checkout service", "status": "unchanged"},
+                {"name": "loyalty service", "status": "new"},
+            ],
+            gold_extraction=gold_extraction,
+        )
+        monkeypatch.setattr(litellm, "acompletion", fake)
+
+        result = await _run("gold-contract-producer-consumer-ids-1", initial_state("20260617"))
+        assert "__interrupt__" not in result
+
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(GoldEvolution).where(
+                            GoldEvolution.ingestion_date == DATE_GOLD_CONTRACT_PRODUCER_CONSUMER_IDS
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        by_type = {(r.entity_type, r.canonical_name): r for r in rows}
+
+        checkout = by_type[("component", "Checkout Service")]
+        loyalty = by_type[("component", "Loyalty Service")]
+        contract = by_type[("data_contract", "checkout-completed")]
+
+        assert contract.payload["producer_id"] == checkout.entity_id
+        assert contract.payload["consumer_id"] == loyalty.entity_id
+        # Both ids are real, live component entities, not made-up strings.
+        assert contract.payload["producer_id"] in {r.entity_id for r in rows if r.entity_type == "component"}
+    finally:
+        await _cleanup_date(DATE_GOLD_CONTRACT_PRODUCER_CONSUMER_IDS)
+
+
 async def test_gold_discovers_a_component_never_in_the_pre_clarification_mentioned_list(monkeypatch):
-    """Regression test for a real bug: a component introduced only through a clarification
-    answer (never named in `generate_architecture_questions`'s own pre-clarification
-    `mentioned_components`) used to be permanently invisible to Gold, because
-    `extract_gold_facts` was grounded against that earlier list and could never extract
-    anything outside it (`prompts/gold_extraction.jinja`'s old "fixed list, never extract
-    beyond it" rule). Gold now discovers components straight from the final, clarified ADR
-    (see `build_gold_extraction_prompt`'s own docstring) — this fakes exactly that shape:
-    `mentioned_components` only ever names "Checkout Service", but the (faked) extraction
-    result — standing in for what a real LLM reading the final ADR would find — also reports
-    a brand-new "Notification Bus" the ADR's own clarification answers introduced. Both must
-    reach `gold_evolution`; the node must not filter the extraction against the earlier list."""
+    """This is a regression test for a real bug. A component introduced only through a
+    clarification answer, never named in `generate_architecture_questions`'s own
+    pre-clarification `mentioned_components`, used to be permanently invisible to Gold. This
+    happened because `extract_gold_facts` was grounded against that earlier list. It could
+    never extract anything outside it. This was `prompts/gold/extraction.jinja`'s old "fixed
+    list, never extract beyond it" rule. Gold now discovers components straight from the
+    final, clarified ADR. See `build_gold_extraction_prompt`'s own docstring. This test fakes
+    exactly that shape. `mentioned_components` only ever names "Checkout Service". But the
+    faked extraction result, standing in for what a real LLM reading the final ADR would
+    find, also reports a brand-new "Notification Bus" that the ADR's own clarification
+    answers introduced. Both must reach `gold_evolution`. The node must not filter the
+    extraction against the earlier list."""
     source = "meeting_new_component.en.vtt"
     await _insert_bronze(
         DATE_GOLD_DISCOVERS_NEW_COMPONENT, source, ["Checkout Service handles order checkout flows."]
@@ -948,8 +1264,8 @@ async def test_gold_discovers_a_component_never_in_the_pre_clarification_mention
             classification={"classifications": []},
             synthesis_queue=["# ADR — Checkout\n\nA Notification Bus was introduced via clarification."],
             critique_queue=[[]],
-            # Only "Checkout Service" was ever identified before clarification happened —
-            # "Notification Bus" is not, and must never need to be, in this list.
+            # Only "Checkout Service" was ever identified before clarification happened.
+            # "Notification Bus" is not in this list, and must never need to be.
             mentioned_components=[{"name": "checkout service", "status": "unchanged"}],
             gold_extraction=gold_extraction,
         )
@@ -983,10 +1299,11 @@ async def test_gold_discovers_a_component_never_in_the_pre_clarification_mention
 
 
 async def test_irrelevant_marker_from_the_ui_is_treated_as_a_decline(monkeypatch):
-    """The frontend's "Irrelevant" question-action button (`frontend/app.py::
-    _render_question_row`) sends the literal string "[IRRELEVANT]" as the answer instead of
-    typed text — `ask_human` must fold it into `_DECLINE_PHRASES` (case-insensitively, same as
-    "unknown"/"n/a") so it ends up recorded as no answer at all, not as literal answer text."""
+    """The frontend's "Irrelevant" question-action button, in
+    `frontend/app.py::_render_question_row`, sends the literal string "[IRRELEVANT]" as the
+    answer, instead of typed text. `ask_human` must fold it into `_DECLINE_PHRASES`,
+    case-insensitively, the same way it handles "unknown" and "n/a". So it ends up recorded
+    as no answer at all, not as literal answer text."""
     await _insert_bronze(DATE_IRRELEVANT_MARKER, "meeting_irrelevant.en.vtt", ["Someone mentioned a detail."])
     try:
         fake = _make_fake_acompletion(
@@ -1035,3 +1352,93 @@ async def test_irrelevant_marker_from_the_ui_is_treated_as_a_decline(monkeypatch
         )
     finally:
         await _cleanup_date(DATE_IRRELEVANT_MARKER)
+
+
+def test_ensure_schema_questions_injects_a_fallback_for_a_contract_with_none_drafted():
+    contracts = [{"name": "OrderCreated", "producer": "OrderService", "consumer": "FulfillmentService", "action": "new"}]
+    questions = [
+        {
+            "id": "contract.ordercreated.version",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "version",
+            "question": "What version is OrderCreated?",
+        }
+    ]
+
+    result = _ensure_schema_questions(questions, contracts)
+
+    schema_questions = [q for q in result if "schema" in q["id"]]
+    assert len(schema_questions) == 1
+    assert schema_questions[0]["target"] == "OrderCreated"
+    assert schema_questions[0]["scope"] == "data_contract"
+    assert len(result) == len(questions) + 1
+
+
+def test_ensure_schema_questions_does_not_duplicate_an_existing_schema_question():
+    contracts = [{"name": "OrderCreated", "producer": "OrderService", "consumer": "FulfillmentService", "action": "new"}]
+    questions = [
+        {
+            "id": "contract.ordercreated.schema.order_id.type",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "schema.order_id.type",
+            "question": "What is the data type of order_id in OrderCreated?",
+        }
+    ]
+
+    result = _ensure_schema_questions(questions, contracts)
+
+    assert result == questions  # Nothing is added, because a schema question already exists.
+
+
+def test_drop_new_contract_version_questions_removes_version_question_for_new_contract():
+    contracts = [
+        {"name": "OrderCreated", "producer": "OrderService", "consumer": "FulfillmentService", "action": "new"}
+    ]
+    questions = [
+        {
+            "id": "contract.ordercreated.version",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "version",
+            "question": "What version is OrderCreated?",
+        },
+        {
+            "id": "contract.ordercreated.schema",
+            "scope": "data_contract",
+            "target": "OrderCreated",
+            "requirement": "schema",
+            "question": "What fields does OrderCreated carry?",
+        },
+    ]
+
+    result = _drop_new_contract_version_questions(questions, contracts)
+
+    assert [q["id"] for q in result] == ["contract.ordercreated.schema"]
+
+
+def test_drop_new_contract_version_questions_keeps_version_question_for_forward_update_contract():
+    """Versioning IS a real, askable question for a contract that already existed before this
+    change — only a brand-new contract's version is a fixed convention."""
+    contracts = [
+        {
+            "name": "ProcessedEvent",
+            "producer": "EventProcessor",
+            "consumer": "AnalyticsService",
+            "action": "forward-update",
+        }
+    ]
+    questions = [
+        {
+            "id": "contract.processedevent.version",
+            "scope": "data_contract",
+            "target": "ProcessedEvent",
+            "requirement": "version",
+            "question": "What was the previous version and what is the new version of ProcessedEvent?",
+        }
+    ]
+
+    result = _drop_new_contract_version_questions(questions, contracts)
+
+    assert result == questions

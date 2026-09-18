@@ -1,0 +1,4 @@
+Team sync. We built a small new service called ConfigVault. It's a brand new component —
+nothing like it existed before. Its only job is to store application configuration key-value
+pairs so other services can read their settings at startup. That's basically it, nothing else
+to report this week.

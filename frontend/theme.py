@@ -1,13 +1,17 @@
-"""Compact, developer-oriented theme for the Streamlit frontend — one CSS string injected
-once per page load, plus a couple of small HTML-rendering helpers for the one element (the
-completeness score bar) worth more control than a native Streamlit widget gives.
+"""This is a compact theme for the Streamlit frontend, built for developers. It injects one
+CSS string once per page load. It also has a few small HTML helpers. One of them draws the
+completeness score bar. We use a helper here because `st.progress` does not give us enough
+control over that one element.
 
-Two zones, deliberately different: the left sidebar (the vertical nav + who's logged in)
-stays dark, so it reads as a distinct rail; the main content area is light (white background,
-near-black text) for maximum reading contrast on the actual work — uploaded transcripts,
-generated ADRs, chat answers. Targets Streamlit's own stable `data-testid`/`data-baseweb`
-attributes rather than its internal (hashed, version-fragile) class names — the same
-technique Streamlit's own docs recommend for custom CSS.
+The page has two zones, and we made them look different on purpose. The left sidebar holds
+the vertical nav and shows who is logged in. It stays dark, so it reads as its own separate
+rail. The main content area is light, with a white background and near-black text. This gives
+the best reading contrast for the real work: uploaded transcripts, generated ADRs, and chat
+answers.
+
+The CSS targets Streamlit's own stable `data-testid` and `data-baseweb` attributes. It does
+not target Streamlit's internal class names, because those are hashed and change between
+versions. Streamlit's own docs recommend this same approach for custom CSS.
 """
 
 import base64
@@ -15,13 +19,18 @@ from pathlib import Path
 
 import streamlit as st
 
-# Read once per process (module-level, not per rerun) — Streamlit reruns this whole script on
-# every interaction, but re-importing an already-imported module is a no-op, so this only ever
-# reads+encodes the file once. Relative to the CWD (repo root, both locally via
-# `uv run streamlit run frontend/app.py` and in Docker via the image's WORKDIR) — the same
-# convention the rest of the app already uses for on-disk paths. Base64-embedded as a data URI
-# because a plain `<img src="app/img/logo.png">` inside `unsafe_allow_html` HTML can't resolve a
-# server-side filesystem path — the browser has no access to it.
+# We read this file once per process, at module level, not on every rerun. Streamlit reruns
+# this whole script on every interaction. But re-importing a module that is already imported
+# does nothing. So this code only reads and encodes the file once.
+#
+# The path is relative to the current working directory. That is the repo root, both when you
+# run it locally with `uv run streamlit run frontend/app.py` and when you run it in Docker
+# from the image's WORKDIR. The rest of the app already uses this same convention for
+# on-disk paths.
+#
+# We embed the image as a base64 data URI. A plain `<img src="app/img/logo.png">` inside
+# `unsafe_allow_html` HTML cannot resolve a server-side file path, because the browser has no
+# access to the server's file system.
 _LOGO_PATH = Path("app/img/logo.png")
 _LOGO_DATA_URI = (
     f"data:image/png;base64,{base64.b64encode(_LOGO_PATH.read_bytes()).decode('ascii')}"
@@ -29,9 +38,10 @@ _LOGO_DATA_URI = (
     else ""
 )
 
-# Height of the fixed full-width header bar `render_header` draws — every other fixed/absolute
-# Streamlit layout piece (`stHeader`, `stSidebar`, `stAppViewContainer`) gets pushed down by
-# exactly this much (see the CSS's "HEADER BAR" section) so nothing renders underneath it.
+# This is the height of the fixed, full-width header bar drawn by `render_header`. Every
+# other fixed or absolute Streamlit layout piece (`stHeader`, `stSidebar`,
+# `stAppViewContainer`) gets pushed down by exactly this much. See the CSS's "HEADER BAR"
+# section. This makes sure nothing renders underneath the header bar.
 HEADER_HEIGHT_PX = 64
 
 CSS = f"""
@@ -52,7 +62,7 @@ CSS = f"""
     width: 100%;
     height: {HEADER_HEIGHT_PX}px;
     z-index: 1000000;
-    background: var(--background);
+    background: var(--surface);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -117,6 +127,10 @@ CSS += """
        main background (links) — the bright fill values are too light to pass contrast there. */
     --purple: #8b5cf6;
     --purple-text: #6d28d9;
+    /* Between --text-muted gray and --purple — the disabled `type="primary"` button's fill
+       (see `.stButton button[kind="primary"]:disabled` below): dark enough that the white label
+       text stays readable without a hover, unlike plain --surface (near white). */
+    --purple-muted: #a99bd1;
     --cyan: #22d3ee;
     --cyan-text: #0e7490;
     --green: #34d399;
@@ -203,6 +217,17 @@ h1, h2, h3, h4, .stApp strong {
 [data-testid="stAppViewContainer"] .stButton button[kind="primary"]:hover {
     background: var(--purple-text);
     border-color: var(--purple-text);
+}
+/* Disabled `type="primary"` buttons (e.g. "Process and clarify" before any input is given) —
+   the generic `:disabled` rule below sets a near-white `--surface` fill, which combined with
+   the white text forced on every primary-button descendant above (needed so the label reads on
+   the purple fill) left the disabled label unreadable until hovered (hover isn't blocked on a
+   disabled button, so its own `:hover` rule masked the bug in a quick look). More specific than
+   the plain `:disabled` rule below, so it wins without needing `!important`. */
+[data-testid="stAppViewContainer"] .stButton button[kind="primary"]:disabled,
+[data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"]:disabled {
+    background: var(--purple-muted);
+    border-color: var(--purple-muted);
 }
 [data-testid="stAppViewContainer"] .stButton button:disabled {
     background: var(--surface);
@@ -375,12 +400,14 @@ section[data-testid="stSidebar"] .stButton button[kind="primary"]:hover {
 
 
 def inject() -> None:
-    """Injects the theme's `<style>` block AND the full-width page header (logo + bold title,
-    see the CSS's "FULL-WIDTH PAGE HEADER" section) — call this once, early in `main()`, on
-    every script run (cheap; Streamlit re-runs the whole script on every interaction anyway).
-    Called unconditionally before `main()`'s login check, so the header is the very first thing
-    on every page — the login screen included — not something each page has to remember to
-    render for itself."""
+    """This injects the theme's `<style>` block. It also injects the full-width page header,
+    which shows the logo and the bold title. See the CSS's "FULL-WIDTH PAGE HEADER" section for
+    the styling. Call this once, early in `main()`, on every script run. This is cheap, because
+    Streamlit re-runs the whole script on every interaction anyway.
+
+    `main()` calls this before its login check, with no condition. So the header is the very
+    first thing on every page, including the login screen. No page has to remember to render the
+    header itself."""
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
     st.markdown(
         f"""<div class="app-header-bar">
@@ -392,9 +419,10 @@ def inject() -> None:
 
 
 def score_bar_html(score: int) -> str:
-    """A small HTML completeness bar, colored by band (green/yellow/red) — more control over
-    the "is this actually production-ready" signal than `st.progress`'s single fixed color
-    gives. `score` is 0-100."""
+    """This builds a small HTML completeness bar. Its color depends on the score band: green,
+    yellow, or red. This gives more control over the "is this actually production-ready" signal
+    than `st.progress` gives, since `st.progress` only has one fixed color. `score` is a number
+    from 0 to 100."""
     if score >= 80:
         color = "var(--green)"
     elif score >= 50:

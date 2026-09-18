@@ -3,7 +3,7 @@
 > **Historical**: measured against the single-pass question-generation prompt
 > (`agents.service.generate_questions_for_batch`, `testing_questions_acb/`) before it was split
 > into `generate_architecture_questions_for_batch` + `generate_data_contract_questions_for_batch`
-> (`testing_arch_questions_acb/` + `testing_data_contract_questions_acb/`). The model comparison
+> (`agents/stages/architecture_questions/testing/` + `agents/stages/data_contract_questions/testing/`). The model comparison
 > and recommendation below are still the current production config — only the question-generation
 > prompt/test-project structure they were measured against has since changed.
 

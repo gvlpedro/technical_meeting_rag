@@ -1,0 +1,28 @@
+{
+  "description": "A future, empirical metric nobody in a design meeting could state even if asked directly — tests the 'unknown' branch specifically, distinct from 'needs_clarification' (which implies someone in the room could answer if asked).",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "component",
+      "target": "NotificationService",
+      "requirement": "status",
+      "question": "Is NotificationService a new, modified, removed, or unchanged component?"
+    },
+    {
+      "id": "q2",
+      "scope": "metadata",
+      "target": "NotificationService",
+      "requirement": "future_metric",
+      "question": "What will the click-through rate be for push notifications sent via NotificationService once it launches?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["answered"],
+      "required_answer_substrings_any_of": ["new"]
+    },
+    "q2": {
+      "acceptable_statuses": ["unknown"]
+    }
+  }
+}

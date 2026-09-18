@@ -1,10 +1,11 @@
 """drop adr_reviews
 
-The "Pull request" tab (accept/reject one ADR before Chat could use it) is gone — replaced by
-"Architecture history", a read-only view. Publishing an ADR now means one thing: persisted to
-Gold, immediately retrievable, no separate approval gate. `adr_reviews` had exactly one reader
-(the Chat tab's own gate, since removed from `app/routers/frontend.py`), so nothing else in
-Bronze/Silver/Gold depends on this table existing.
+The "Pull request" tab is gone. That tab let you accept or reject one ADR before Chat could
+use it. It is replaced by "Architecture history", a read-only view. Publishing an ADR now
+means one thing: the ADR is persisted to Gold, and immediately retrievable, with no separate
+approval gate. `adr_reviews` had exactly one reader: the Chat tab's own gate, which is now
+removed from `app/routers/frontend.py`. So nothing else in Bronze, Silver, or Gold depends on
+this table existing.
 
 Revision ID: c071da0da7f2
 Revises: b36b45fb39c2

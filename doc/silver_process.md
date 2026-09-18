@@ -2,7 +2,7 @@
 
 Bronze holds raw, unreviewed transcript chunks. Silver's job is to turn one ingestion batch
 (`bronze_documents` for a given `ingestion_date`) into **one clarified ADR per source
-transcript**, shaped as `prompts/adr_generator.jinja` produces it — filled in as
+transcript**, shaped as `prompts/adr_generation/generator.jinja` produces it — filled in as
 far as the clarification loop's answers allow, **not necessarily complete** — a document with
 several sections collapsed to their "not covered" notes is the expected, correct output when a
 transcript doesn't establish a decision, not a defect. Written as **structured Markdown** in
@@ -42,7 +42,7 @@ silver_documents                       -- one row per (source transcript, versio
                                                    -- (write_document decides this, never the LLM)
   content_hash       varchar(64), not null        -- sha256 hex of `content` — the deterministic
                                                    -- "is this the same version" check
-  content            text, not null              -- prompts/adr_generator.jinja's
+  content            text, not null              -- prompts/adr_generation/generator.jinja's
                                                  -- structure, filled in as far as the
                                                  -- clarification loop's answers allow (§3 node
                                                  -- 7); uncovered sections collapse to their
@@ -230,7 +230,7 @@ itself is imported. No LangSmith account, exporter, or API key involved — just
   exactly what the clarifications support and collapses everything else to the ADR prompt's own
   "not covered" notes — and both question-generation prompts are scoped to never draft a
   question about the sections nobody narrates in a meeting
-  (`prompts/architecture_questions.jinja`/`data_contract_questions.jinja`, **Out
+  (`prompts/architecture_questions/combined.jinja`/`data_contract_questions.jinja`, **Out
   of scope** / **Important distinction**).
 
 

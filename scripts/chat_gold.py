@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
-"""Interactive REPL over Gold's evolution history — top-k cosine-similarity retrieval over
-`gold_evolution.embedding` (HNSW-indexed, `vector_cosine_ops`) followed by a real LLM answer
-drafted only from the retrieved rows. `make chat` entrypoint.
+"""This is an interactive REPL over Gold's evolution history. This is the `make chat` entry
+point. It picks between two different retrieval strategies per question, not just one:
 
-The retrieval mechanism itself (`embed_question`/`top_k_gold_evolution`/`latest_versions`/
-`answer_question`) lives in `agents/gold_service.py`, shared with `testing_gold_arch_evolution/`'s
-own test suite (which asserts against it via `testing_gold_arch_evolution/retrieval.py`, a thin
-re-export) — one definition of "how we search Gold by similarity," not a copy per caller.
+  - **Full-history retrieval.** When the question both names a known component or data
+    contract (`find_entity_by_name_in_text`) AND reads as asking for its history
+    (`is_evolution_question`, e.g. "how has X evolved over time?" / "qué evolución ha tenido
+    X"), this fetches EVERY version of that one entity, in order (`entity_history`), and a
+    real LLM narrates it chronologically (`answer_evolution_question`) — who introduced it,
+    when, why, and what changed at each later step. This never uses embedding similarity: the
+    entity is already known, so there is nothing to rank, and top-k could otherwise drop an
+    early version whose narrative just does not word-match the question.
+  - **Top-k similarity retrieval**, for everything else. This does cosine-similarity search
+    over `gold_evolution.embedding` (HNSW-indexed, using `vector_cosine_ops`), then a real LLM
+    writes an answer from the retrieved rows.
 
-Two refinements on top of plain top-k, both from `agents/gold_service.py`: `max_distance` drops
-rows too far from the question instead of always answering from the k closest regardless of
-relevance (`--max-distance`, defaults to `DEFAULT_MAX_DISTANCE` — untuned against real usage
-yet, see its docstring), and `latest_versions` tags each retrieved row as current vs. superseded
-so a question about today's state doesn't get answered from an old version that happened to rank
-close by embedding similarity.
+All of this retrieval code (`find_entity_by_name_in_text`, `is_evolution_question`,
+`entity_history`, `answer_evolution_question`, `embed_question`, `top_k_gold_evolution`,
+`latest_versions`, `answer_question`) lives in `agents/stages/gold/service.py`. The
+`agents/stages/gold/testing/` test suite uses the same top-k code, through a thin re-export in
+`agents/stages/gold/testing/retrieval.py`. So there is one definition of each retrieval
+strategy, not a separate copy for each caller.
+
+`agents/stages/gold/service.py` adds two refinements on top of plain top-k retrieval. First,
+`max_distance` drops rows that are too far from the question, instead of always answering
+from the k closest rows regardless of how relevant they are (`--max-distance`, which defaults
+to `DEFAULT_MAX_DISTANCE`; this default is not yet tuned against real usage, see its
+docstring). Second, `latest_versions` tags each retrieved row as current or superseded. This
+way, a question about today's state does not get answered from an old version that happens to
+rank close by embedding similarity.
 
 Usage:
     uv run python3 scripts/chat_gold.py
@@ -23,16 +37,34 @@ Usage:
 import argparse
 import asyncio
 
-from agents.gold_service import (
+from agents.stages.gold.service import (
     DEFAULT_MAX_DISTANCE,
+    answer_evolution_question,
     answer_question,
     embed_question,
+    entity_history,
+    find_entity_by_name_in_text,
+    is_evolution_question,
     latest_versions,
     top_k_gold_evolution,
 )
 from db.session import async_session_factory
 
 DEFAULT_K = 8
+
+
+async def _answer(session, question: str, k: int, max_distance: float | None, tenant: str) -> str:
+    if is_evolution_question(question):
+        match = await find_entity_by_name_in_text(session, question, tenant=tenant)
+        if match is not None:
+            entity_type, entity_id, matched_alias = match
+            rows = await entity_history(session, entity_type, entity_id, tenant=tenant)
+            return await answer_evolution_question(question, matched_alias, rows)
+
+    vector = await embed_question(question)
+    rows = await top_k_gold_evolution(session, vector, k, max_distance=max_distance, tenant=tenant)
+    latest = await latest_versions(session, rows)
+    return await answer_question(question, rows, latest)
 
 
 async def _chat(k: int, max_distance: float | None, tenant: str) -> None:
@@ -46,10 +78,7 @@ async def _chat(k: int, max_distance: float | None, tenant: str) -> None:
                 return
             if not question or question.lower() in {"exit", "quit"}:
                 return
-            vector = await embed_question(question)
-            rows = await top_k_gold_evolution(session, vector, k, max_distance=max_distance, tenant=tenant)
-            latest = await latest_versions(session, rows)
-            answer = await answer_question(question, rows, latest)
+            answer = await _answer(session, question, k, max_distance, tenant)
             print(f"\n{answer}\n")
 
 

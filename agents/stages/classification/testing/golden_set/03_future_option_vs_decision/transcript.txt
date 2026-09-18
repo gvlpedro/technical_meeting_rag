@@ -1,0 +1,3 @@
+The frontend talks directly to the backend today over HTTP/REST. As the system evolves, we
+could introduce an API Gateway between them to centralize routing, authentication, and rate
+limiting. Nothing about that is decided yet — just something we might do later.

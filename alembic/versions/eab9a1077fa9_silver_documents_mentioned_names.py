@@ -20,11 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Persists what `generate_architecture_questions` already computes per ingestion_date
-    batch (mentioned components/data contracts, grounded per source via
-    `agents.service.mentions_grounded_in_source`) instead of discarding it once the graph
-    run ends. Backfilled to `'[]'` for existing rows — this data was never computed for
-    past runs, not a value that can be reconstructed from `content` alone.
+    """This persists what `generate_architecture_questions` already computes for each
+    ingestion_date batch: mentioned components and data contracts, grounded per source through
+    `agents.shared.mentions_grounded_in_source`. Before this migration, that data was
+    discarded once the graph run ended.
+
+    Existing rows are backfilled to `'[]'`. This data was never computed for past runs, and it
+    is not a value we can reconstruct from `content` alone.
     """
     op.add_column(
         "silver_documents",

@@ -10,20 +10,18 @@ from alembic import context
 from app.config import settings
 from db.models import Base
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# This is the Alembic Config object. It gives access to the values in the .ini file in use.
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# Read the config file for Python logging.
+# This line sets up the loggers.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
+# You can also read other values from the config, as env.py needs them:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
@@ -31,14 +29,10 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
+    This sets up the context with just a URL, not an Engine. An Engine would also work here,
+    but we skip creating one. So we do not even need a DBAPI to be available.
 
-    Calls to context.execute() here emit the given string to the
-    script output.
-
+    Each call to context.execute() here writes the given string to the script output.
     """
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
@@ -60,10 +54,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
+    """Here we need to create an Engine, and connect it to the context."""
 
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),

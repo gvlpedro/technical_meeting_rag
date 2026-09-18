@@ -1,47 +1,44 @@
 #!/usr/bin/env python3
-"""Descarga la transcripción de un vídeo de YouTube con yt-dlp.
+"""This script downloads the transcript of a YouTube video, using yt-dlp.
 
-Uso:
+Usage:
     python3 scripts/download_transcript.py <url_youtube> [--lang es,en]
     python3 scripts/download_transcript.py [--ingestion-date 20260906]
     python3 scripts/download_transcript.py --clean [--ingestion-date 20260906]
 
-La fecha de ingesta de cada vídeo se deriva siempre de su propio metadato de
-YouTube `upload_date` (formato YYYYMMDD) — no se elige a mano. Un vídeo
-subido el 2026-09-06 se guarda en
-`input/transcriptions/ingestion_date=20260906/`; dos vídeos descargados en el
-mismo lote pero subidos en fechas distintas terminan en particiones
-distintas. `--ingestion-date` no se acepta junto a una URL por esa razón: no
-hay nada que decidir.
+Each video's ingestion date always comes from its own YouTube metadata field, `upload_date`
+(format YYYYMMDD). You never pick this date by hand. A video uploaded on 2026-09-06 is saved
+under `input/transcriptions/ingestion_date=20260906/`. Two videos downloaded in the same batch,
+but uploaded on different dates, end up in different partitions. This is why `--ingestion-date`
+is not accepted together with a URL: there is nothing to decide in that case.
 
-`config.json` y `links.json` viven en `input/` (globales, no por fecha).
-Sin URL, el script busca `input/links.json` y (re)descarga la transcripción
-de cada enlace que ya contiene — útil para refrescar todas las
-transcripciones de golpe (p.ej. tras cambiar el idioma en config.json). En
-este modo (y en `--clean`), `--ingestion-date <YYYYMMDD>` filtra la operación
-a solo los vídeos cuyo `upload_date` coincida; omitido, actúa sobre todos. Un
-fallo en un vídeo (borrado, sin subtítulos en ese idioma...) no aborta el
-resto del lote.
+`config.json` and `links.json` live under `input/`. They are global, not split by date. When
+you run the script with no URL, it looks for `input/links.json` and re-downloads the
+transcript for every link already in it. This is useful for refreshing all transcripts at
+once, for example after you change the language in `config.json`. In this mode, and in
+`--clean`, the flag `--ingestion-date <YYYYMMDD>` limits the operation to only the videos
+whose `upload_date` matches. If you omit the flag, the script acts on all of them. A failure
+on one video, such as a deleted video or missing subtitles in that language, does not stop the
+rest of the batch.
 
-El idioma a descargar se resuelve en este orden de prioridad: 1) --lang si se
-pasa explícitamente, 2) el campo "lang" de input/config.json si existe (p.ej.
-{"lang": "en"}), 3) "es,en" por defecto. Prueba los idiomas resultantes en
-orden y se queda con el primero disponible (subtítulos manuales antes que
-automáticos). Acumula {link, title, transcript_path, upload_date,
-description, channel_url} en input/links.json, añadiendo o actualizando la
-entrada de cada vídeo.
+The script picks which language to download in this order of priority: 1) `--lang`, if you
+pass it explicitly; 2) the `"lang"` field in `input/config.json`, if it exists (for example
+`{"lang": "en"}`); 3) `"es,en"` as the default. It tries the resulting languages in order, and
+keeps the first one available, preferring manual subtitles over automatic ones. It stores
+`{link, title, transcript_path, upload_date, description, channel_url}` in `input/links.json`,
+adding a new entry or updating the existing one for each video.
 
-Cada descarga genera su propio fichero, marcado con el timestamp (UTC) del
-momento de la descarga (`<slug>.<lang>.<timestamp>.vtt`) — volver a ejecutarlo
-con la misma URL nunca sobrescribe ni borra un fichero anterior, siempre crea
-uno nuevo; esto evita también que dos vídeos distintos cuyo título produzca
-el mismo slug colisionen en el mismo nombre. `links.json` sí sigue teniendo
-una única entrada por URL, actualizada a la última descarga (título, idioma,
-`transcript_path` de la descarga más reciente) — el histórico de ficheros
-.vtt vive solo en disco, no en `links.json`.
+Each download creates its own file, marked with the UTC timestamp of the moment of the
+download (`<slug>.<lang>.<timestamp>.vtt`). Running the script again with the same URL never
+overwrites or deletes a previous file. It always creates a new one. This also stops two
+different videos whose titles produce the same slug from colliding under the same file name.
+`links.json` still keeps only one entry per URL, though, updated to the latest download: the
+title, language, and `transcript_path` of the most recent download. The history of `.vtt`
+files lives only on disk, not in `links.json`.
 
---clean borra las transcripciones descargadas y sus entradas de links.json;
-sin --ingestion-date, todo; con --ingestion-date=<YYYYMMDD>, solo esa fecha.
+`--clean` deletes the downloaded transcripts and their entries in `links.json`. Without
+`--ingestion-date`, it deletes everything. With `--ingestion-date=<YYYYMMDD>`, it deletes only
+that date.
 """
 
 from __future__ import annotations
@@ -93,14 +90,14 @@ def _load_config() -> dict:
 
 
 def _matching_keys(source: dict, lang: str) -> list[str]:
-    """Language match (ex. 'es' matchs 'es-419', 'es-ES')."""
+    """Matches a language. For example, 'es' matches 'es-419' and 'es-ES'."""
     exact = [lang] if lang in source else []
     variants = sorted(k for k in source if k != lang and k.split("-")[0] == lang)
     return exact + variants
 
 
 def _pick_subtitle(info: dict, langs: list[str]) -> tuple[str, dict] | None:
-    """Return subtitle lang and format"""
+    """Returns the subtitle language and format."""
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
     for lang in langs:
@@ -113,21 +110,21 @@ def _pick_subtitle(info: dict, langs: list[str]) -> tuple[str, dict] | None:
 
 
 def _slugify(title: str) -> str:
-    """title slug"""
+    """Turns a title into a slug."""
     ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_title).strip("_").lower()
     return slug or "untitled"
 
 
 def _download_timestamp() -> str:
-    """UTC timestamp of *now*, microsecond precision — used to give every downloaded
-    transcript its own filename, so re-downloading the same URL never overwrites a previous
-    snapshot and two different videos that happen to slugify the same way never collide."""
+    """Returns the current UTC timestamp, with microsecond precision. This gives every
+    downloaded transcript its own file name. So re-downloading the same URL never overwrites
+    a previous snapshot, and two different videos that slugify the same way never collide."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + "Z"
 
 
 def _timestamped_transcript_path(slug: str, lang: str, transcriptions_dir: str) -> str:
-    """Path `<transcriptions_dir>/<slug>.<lang>.<download_timestamp>.vtt`"""
+    """Returns the path `<transcriptions_dir>/<slug>.<lang>.<download_timestamp>.vtt`."""
     return os.path.join(transcriptions_dir, f"{slug}.{lang}.{_download_timestamp()}.vtt")
 
 
@@ -150,7 +147,7 @@ def _upsert_link(records: list[dict], record: dict) -> list[dict]:
 
 def _save_links(path: str, records: list[dict]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    # Temporary path
+    # Temporary path.
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
@@ -158,7 +155,7 @@ def _save_links(path: str, records: list[dict]) -> None:
 
 
 def _clean_transcriptions(dir_path: str) -> int:
-    """Remove every .vtt file under `dir_path`. Returns how many were removed."""
+    """Removes every .vtt file under `dir_path`. Returns how many files it removed."""
     if not os.path.isdir(dir_path):
         return 0
     removed = 0
@@ -170,7 +167,7 @@ def _clean_transcriptions(dir_path: str) -> int:
 
 
 def _clean(ingestion_date: str | None) -> tuple[int, int]:
-    """Remove transcripts and their links.json entries. Returns (files_removed, records_removed)."""
+    """Removes transcripts and their links.json entries. Returns (files_removed, records_removed)."""
     links_file = _links_file()
     records = _load_links(links_file)
 
@@ -193,7 +190,7 @@ def _clean(ingestion_date: str | None) -> tuple[int, int]:
 
 
 def _is_stale_script_process(pid: int) -> bool:
-    """check active 'pid'"""
+    """Checks whether 'pid' is still an active process."""
     try:
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
@@ -283,8 +280,8 @@ def download_transcript(url: str, langs: list[str]) -> dict:
             )
         lang, fmt = pick
 
-        # Every download gets its own timestamped file — re-downloading the same URL never
-        # overwrites or removes a previous snapshot, it just adds a new one.
+        # Every download gets its own file, marked with a timestamp. Re-downloading the same
+        # URL never overwrites or removes a previous snapshot. It just adds a new one.
         slug = _slugify(title)
         transcript_path = _timestamped_transcript_path(slug, lang, transcriptions_dir)
         _download_url(fmt["url"], transcript_path, ydl)
@@ -306,9 +303,10 @@ def download_transcript(url: str, langs: list[str]) -> dict:
 
 
 def download_all(langs: list[str], ingestion_date: str | None = None) -> list[dict]:
-    """(Re)download links tracked in input/links.json, optionally filtered by `upload_date`.
+    """Downloads or re-downloads links tracked in input/links.json. You can filter this by
+    `upload_date`.
 
-    A failure on one video is reported and skipped, not fatal to the batch.
+    A failure on one video is reported and skipped. It does not stop the whole batch.
     Returns one summary dict per link: {"link", "ok", "result" | "error"}.
     """
     records = _load_links(_links_file())
@@ -323,7 +321,7 @@ def download_all(langs: list[str], ingestion_date: str | None = None) -> list[di
         try:
             result = download_transcript(url, langs)
             outcomes.append({"link": url, "ok": True, "result": result})
-        except Exception as exc:  # keep going, one bad video shouldn't kill the batch
+        except Exception as exc:  # Keep going. One bad video should not kill the whole batch.
             outcomes.append({"link": url, "ok": False, "error": str(exc)})
     return outcomes
 
@@ -392,7 +390,8 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
 
-    # No URL: bulk mode — refresh links already tracked, optionally filtered by ingestion date.
+    # No URL: this is bulk mode. It refreshes links already tracked, optionally filtered by
+    # ingestion date.
     links_file = _links_file()
     if not os.path.exists(links_file):
         sys.exit(f"{links_file} no existe. Descarga al menos un vídeo con <url_youtube> primero.")

@@ -5,10 +5,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class FrontendUser(BaseModel):
-    """One login the Streamlit frontend accepts — no user table, no signup, no password
-    hashing: this is a fixed, hardcoded roster for a project this size (see `frontend/`'s own
-    login page). `tenant` is what actually isolates data between logins — every row this user
-    uploads or asks about is tagged with it, and every query the frontend makes filters by it."""
+    """One login the Streamlit frontend accepts. There is no user table, no signup, and no
+    password hashing. This is a fixed, hardcoded list of logins. It is enough for a project
+    of this size. See the login page in `frontend/` for how it is used.
+
+    `tenant` is what actually keeps data separate between logins. Every row this user
+    uploads or asks about is tagged with its tenant. Every query the frontend makes also
+    filters by tenant."""
 
     username: str
     password: str
@@ -19,8 +22,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
-    # No token -> logfire.configure(send_to_logfire="if-token-present") stays local-only
-    # (console output, no network calls) — safe default for dev and CI.
+    # If there is no token, logfire.configure(send_to_logfire="if-token-present") stays
+    # local-only. It only prints to the console and makes no network calls. This is a safe
+    # default for dev and CI.
     logfire_token: str | None = None
 
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/technical_meeting_rag"
@@ -47,9 +51,17 @@ class Settings(BaseSettings):
     max_architecture_pending_questions: int = 10
     max_data_contract_pending_questions: int = 10
 
-    # Hardcoded example logins for the Streamlit frontend — see GETTING_STARTED.md's
-    # "Frontend usage" section. Each maps to its own tenant, which is the actual isolation
-    # mechanism (see FrontendUser's own docstring); there is no user table behind this.
+    # Caps how much any single uploaded file can weigh, checked in
+    # `app.routers.frontend.upload_transcription` before its bytes are ever handed to
+    # ingestion. Without this, nothing stopped a single upload from being 500 MB and paying
+    # for tokenizing, chunking, and embedding all of it, or a script that uploads in a loop
+    # from running the process out of memory one file at a time.
+    max_upload_file_bytes: int = 50 * 1024 * 1024  # 50 MB
+
+    # These are hardcoded example logins for the Streamlit frontend. See the "Frontend
+    # usage" section in GETTING_STARTED.md. Each login maps to its own tenant. The tenant
+    # is what actually keeps data separate, see FrontendUser's docstring. There is no user
+    # table behind this.
     frontend_users: list[FrontendUser] = [
         FrontendUser(username="pepe", password="1234", tenant="lidr"),
         FrontendUser(username="peter", password="123", tenant="lotus"),

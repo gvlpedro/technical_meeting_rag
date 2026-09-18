@@ -32,11 +32,12 @@ async def test_ingest_creates_expected_chunk_count_with_embeddings():
         parse_vtt(vtt_path), settings.chunk_size_tokens, settings.chunk_overlap_tokens
     )
 
-    # INGESTION_DATE is a real sample date, also handy for manual `make ingestion` /
-    # `make clarify` runs — bronze_documents has no unique constraint, so a plain
+    # INGESTION_DATE is a real sample date. It is also handy for manual `make ingestion`
+    # and `make clarify` runs. bronze_documents has no unique constraint. So a plain
     # "delete this date, ingest, assert, delete this date again" fixture would erase
-    # whatever a manual run had already ingested there. Watermark by id instead: only
-    # count/clean up the rows *this* call creates, leaving any pre-existing ones alone.
+    # whatever a manual run had already ingested there. Instead, we use a watermark by id.
+    # This way we only count and clean up the rows this call creates. Any pre-existing
+    # rows stay untouched.
     async with async_session_factory() as session:
         watermark = await session.scalar(select(func.max(BronzeDocument.id))) or 0
 

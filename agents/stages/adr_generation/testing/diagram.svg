@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 950" role="img" aria-label="Test flow of testing_adr_acb: for each of 3 golden-set cases, draft the final ADR document with a real LLM, run a deterministic placeholder and component-grounding check that gates the test, then, only if that passes, ask a second real LLM to critique the ADR against a case-specific checklist as an informational-only review.">
+  <title>testing_adr_acb — test flow</title>
+  <desc>Step-by-step flow of test_golden_set.py, one pass per golden-set case: Actor drafts the ADR document, a deterministic gate checks it, and an informational-only Critic reviews it against the case's own checklist.</desc>
+  <defs>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #ffffff; }
+      .title { font-size: 22px; font-weight: 700; }
+      .h { font-size: 14px; font-weight: 700; }
+      .b { font-size: 12px; fill: #c3c2b7; }
+      .small { font-size: 11px; fill: #898781; }
+      .edgeLabel { font-size: 11px; fill: #c3c2b7; }
+      .tag { font-size: 10px; font-weight: 700; }
+      .loopLabel { font-size: 12px; font-weight: 700; fill: #c3c2b7; }
+      .surface { fill: #1a1a19; stroke: #383835; stroke-width: 1.5; }
+      .llm { fill: #1a1a19; stroke: #3987e5; stroke-width: 2; }
+      .diamond { fill: #1a1a19; stroke: #383835; stroke-width: 1.5; }
+      .term { fill: #0ca30c; }
+      .loopBox { fill: none; stroke: #383835; stroke-width: 1.5; stroke-dasharray: 5 5; }
+      .edge { stroke: #898781; stroke-width: 1.75; fill: none; }
+      .edgeDashed { stroke: #898781; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; }
+    </style>
+    <marker id="aGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#898781"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1500" height="950" fill="#0d0d0d"/>
+
+  <text x="650" y="26" text-anchor="middle" class="title">testing_adr_acb — test flow</text>
+  <text x="650" y="46" text-anchor="middle" class="b">test_golden_set.py — proves prompts/adr_generation/generator.jinja turns a transcript + answers into a correct ADR</text>
+
+  <!-- Legend -->
+  <rect x="1080" y="130" width="380" height="360" rx="10" class="surface"/>
+  <text x="1104" y="158" class="h">Legend</text>
+
+  <rect x="1104" y="180" width="18" height="18" class="llm"/>
+  <text x="1134" y="194" class="b">Real LLM call inside this step</text>
+
+  <rect x="1104" y="218" width="18" height="18" class="surface"/>
+  <text x="1134" y="232" class="b">Deterministic — no LLM call</text>
+
+  <polygon points="1113,254 1128,266 1113,278 1098,266" class="diamond"/>
+  <text x="1134" y="270" class="b">Deterministic decision point</text>
+
+  <text x="1104" y="300" class="tag" fill="#d95926">GATES</text>
+  <text x="1180" y="300" class="b">fails the test if this check fails</text>
+
+  <text x="1104" y="330" class="tag" fill="#9085e9">INFO</text>
+  <text x="1180" y="330" class="b">recorded for a human, never fails the test</text>
+
+  <circle cx="1113" cy="358" r="10" class="term"/>
+  <text x="1134" y="363" class="b">test start / test end</text>
+
+  <line x1="1096" y1="394" x2="1132" y2="394" class="edge"/>
+  <text x="1140" y="398" class="b">next step in order</text>
+
+  <line x1="1096" y1="428" x2="1132" y2="428" class="edgeDashed"/>
+  <text x="1140" y="432" class="b">loop back to the next case</text>
+
+  <text x="1104" y="462" class="small">_track_llm_cost meters every LLM call</text>
+  <text x="1104" y="478" class="small">above for tokens + a EUR cost estimate.</text>
+
+  <!-- START -->
+  <rect x="550" y="64" width="200" height="44" rx="22" class="term"/>
+  <text x="650" y="91" text-anchor="middle" class="h" fill="#0d0d0d">START</text>
+  <line x1="650" y1="108" x2="650" y2="134" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- loop container -->
+  <rect x="230" y="134" width="840" height="596" rx="12" class="loopBox"/>
+  <text x="254" y="158" class="loopLabel">REPEAT × 3 cases — golden_set/&lt;case&gt;/ (1 real transcript + 2 synthetic)</text>
+
+  <!-- A: load case -->
+  <rect x="270" y="174" width="760" height="56" rx="10" class="surface"/>
+  <text x="294" y="198" class="h">_load_case</text>
+  <text x="294" y="216" class="small">reads transcript.vtt|txt, clarifications.json, metadata.json, this case's own checklist.txt</text>
+  <line x1="650" y1="230" x2="650" y2="256" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- B: Actor -->
+  <rect x="270" y="256" width="760" height="72" rx="10" class="llm"/>
+  <text x="1010" y="274" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="294" y="280" class="h">Actor — build_adr_generation_prompt(...) → router.complete</text>
+  <text x="294" y="298" class="small">writes the raw ADR Markdown straight to disk, no response_format schema</text>
+  <text x="294" y="314" class="small">writes output/&lt;case-name&gt;/adr.md</text>
+  <line x1="650" y1="328" x2="650" y2="354" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- C: deterministic gate -->
+  <rect x="270" y="354" width="760" height="64" rx="10" class="surface"/>
+  <text x="1010" y="372" text-anchor="end" class="tag" fill="#d95926">GATES</text>
+  <text x="294" y="378" class="h">3 deterministic checks, no LLM</text>
+  <text x="294" y="396" class="small">no placeholder markers (TBD/TODO/{{ }}/example names)</text>
+  <text x="294" y="412" class="small">every expected component discussed; no excluded component marked affected</text>
+  <line x1="650" y1="418" x2="650" y2="444" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- diamond -->
+  <polygon points="650,444 800,489 650,534 500,489" class="diamond"/>
+  <text x="650" y="484" text-anchor="middle" class="h">any violations?</text>
+  <text x="650" y="500" text-anchor="middle" class="small">from the gate above</text>
+
+  <!-- yes -> skip critic -->
+  <polyline points="500,489 340,489 340,524" class="edge" marker-end="url(#aGray)" fill="none"/>
+  <text x="345" y="482" class="edgeLabel">yes</text>
+  <rect x="270" y="524" width="380" height="56" rx="10" class="surface"/>
+  <text x="294" y="548" class="h">Skip the Critic</text>
+  <text x="294" y="566" class="small">critic_passes = False, no 2nd LLM call</text>
+
+  <!-- no -> critic -->
+  <line x1="650" y1="534" x2="650" y2="560" class="edge" marker-end="url(#aGray)"/>
+  <text x="665" y="552" class="edgeLabel">no</text>
+  <rect x="590" y="560" width="440" height="76" rx="10" class="llm"/>
+  <text x="1010" y="578" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="1010" y="610" text-anchor="end" class="tag" fill="#9085e9">INFO</text>
+  <text x="614" y="584" class="h">Critic — _critique</text>
+  <text x="614" y="602" class="small">2nd, independent real LLM call</text>
+  <text x="614" y="618" class="small">judges 4 general criteria + every checklist.txt line for this case</text>
+
+  <!-- both branches -> record_result -->
+  <line x1="460" y1="580" x2="460" y2="656" class="edge"/>
+  <line x1="460" y1="656" x2="650" y2="656" class="edge"/>
+  <line x1="810" y1="636" x2="810" y2="656" class="edge"/>
+  <line x1="810" y1="656" x2="650" y2="656" class="edge"/>
+  <line x1="650" y1="656" x2="650" y2="666" class="edge" marker-end="url(#aGray)"/>
+
+  <rect x="270" y="666" width="760" height="56" rx="10" class="surface"/>
+  <text x="294" y="690" class="h">record_result(...)</text>
+  <text x="294" y="708" class="small">passed, critic_passes, critic_reason, input/output tokens, € cost estimate</text>
+
+  <!-- loop-back -->
+  <polyline points="1030,694 1076,694 1076,166 1030,166" class="edgeDashed" marker-end="url(#aGray)" fill="none"/>
+  <text x="1080" y="440" class="edgeLabel" transform="rotate(-90 1080 440)">next case</text>
+
+  <line x1="650" y1="730" x2="650" y2="746" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- session end -->
+  <rect x="300" y="746" width="700" height="64" rx="10" class="surface"/>
+  <text x="324" y="770" class="h">conftest.py :: pytest_sessionfinish / pytest_terminal_summary</text>
+  <text x="324" y="788" class="small">writes output/result.json once, prints the summary table for a human</text>
+  <line x1="650" y1="810" x2="650" y2="836" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- END -->
+  <rect x="550" y="836" width="200" height="44" rx="22" class="term"/>
+  <text x="650" y="863" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+</svg>

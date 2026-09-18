@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draft clarification questions for one ingestion_date's transcripts.
+"""This script drafts clarification questions for one ingestion_date's transcripts.
 
 Usage:
     uv run python3 scripts/questions.py --ingestion-date 20260906                       # both stages
@@ -10,18 +10,22 @@ Usage:
     make questions-arch DATE=20260906                # stage 1 only
     make questions-data-contracts DATE=20260906       # stage 2 only
 
-Runs the same question-generation stages `agents.graph`'s `generate_architecture_questions`/
-`generate_data_contract_questions` nodes use — directly against the database, no server and no
-LangGraph needed: `agents.service.generate_architecture_questions_for_batch` (components, ADR,
-data-contract identification) and/or `agents.service.generate_data_contract_questions_for_batch`
-(full ODCS-completeness questions for whatever contracts stage 1 identified). Each stage writes
-its own audit file under `output/ingestion_date=<date>/` — `questions/` for stage 1,
-`data_contract_questions/` for stage 2 — same as a real `make clarify` run would.
+It runs the same question-generation stages that `agents.graph`'s `generate_architecture_questions`
+and `generate_data_contract_questions` nodes use. It runs them directly against the database, so
+no server and no LangGraph are needed. These stages are
+`agents.stages.architecture_questions.service.generate_architecture_questions_for_batch`
+(components, ADR, and data-contract identification) and
+`agents.stages.data_contract_questions.service.generate_data_contract_questions_for_batch`
+(full ODCS-completeness questions for whatever contracts stage 1 identified). Each stage
+writes its own audit file
+under `output/ingestion_date=<date>/`: `questions/` for stage 1, and
+`data_contract_questions/` for stage 2. This matches what a real `make clarify` run would
+write.
 
-`--stage data-contract` alone doesn't re-run stage 1 (and doesn't re-pay for its LLM call) — it
-reads stage 1's own `mentioned_data_contracts` back from its audit file
-(`output/ingestion_date=<date>/questions/<transcription>.json`), so `--stage architecture` must
-have been run for this `ingestion_date` at least once before.
+Running `--stage data-contract` alone does not re-run stage 1, so it does not pay for stage
+1's LLM call again. Instead, it reads stage 1's own `mentioned_data_contracts` back from its
+audit file (`output/ingestion_date=<date>/questions/<transcription>.json`). So
+`--stage architecture` must have been run for this `ingestion_date` at least once before.
 """
 
 import argparse
@@ -30,22 +34,18 @@ import json
 import sys
 from pathlib import Path
 
-from agents.service import (
-    NoBronzeDocumentsError,
-    distinct_sources,
-    generate_architecture_questions_for_batch,
-    generate_data_contract_questions_for_batch,
-    load_bronze_rows,
-    transcription_base_name,
-)
+from agents.shared import NoBronzeDocumentsError, distinct_sources, load_bronze_rows, transcription_base_name
+from agents.stages.architecture_questions.service import generate_architecture_questions_for_batch
+from agents.stages.data_contract_questions.service import generate_data_contract_questions_for_batch
 from app.config import settings
 from db.session import async_session_factory
 
 
 def _load_previously_identified_contracts(ingestion_date: str, bronze_documents: list[dict]) -> list[dict]:
-    """Reads `mentioned_data_contracts` back from stage 1's own audit file — pooled across the
-    whole batch (`doc/silver_process.md` §2), so any one distinct source's file carries the
-    same list. Lets `--stage data-contract` run standalone without re-running stage 1."""
+    """Reads `mentioned_data_contracts` back from stage 1's own audit file. This value is
+    pooled across the whole batch (see `doc/silver_process.md` §2), so any one distinct
+    source's file carries the same list. This lets `--stage data-contract` run on its own,
+    without re-running stage 1."""
     sources = distinct_sources(bronze_documents)
     name = transcription_base_name(sources[0]) if sources else ""
     audit_path = Path(settings.output_dir) / f"ingestion_date={ingestion_date}" / "questions" / f"{name}.json"
@@ -58,9 +58,10 @@ def _load_previously_identified_contracts(ingestion_date: str, bronze_documents:
         sys.exit(1)
     data = json.loads(audit_path.read_text(encoding="utf-8"))
     if "mentioned_data_contracts" not in data:
-        # A file at this exact path from before the architecture/data-contract split (or any
-        # other stale writer) has `mentioned_components`/`questions` but not this key — a raw
-        # KeyError here just points at line 59 of this file, not at what's actually wrong.
+        # A file at this exact path, written before the architecture/data-contract split (or
+        # by any other stale writer), has `mentioned_components` and `questions`, but not this
+        # key. A raw KeyError here would just point at line 59 of this file. It would not
+        # explain what is actually wrong.
         print(
             f"{audit_path} exists but is missing `mentioned_data_contracts` — it looks like it "
             f"was written by an older version of the architecture stage, before it identified "

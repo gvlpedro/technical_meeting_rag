@@ -60,10 +60,11 @@ async def test_insert_silver_document_and_matching_chunk():
 
 async def test_same_source_component_and_version_violates_unique_constraint():
     """Two `SilverDocument` rows for the same `source_component` both default to
-    `version=1` unless told otherwise — the exact "identical re-run" case
-    `write_document`'s hash comparison is meant to catch before it ever reaches the
-    database. The (`source_component`, `version`) unique constraint is the last line
-    of defense against that, not `source_component` alone anymore."""
+    `version=1`, unless told otherwise. This is the exact "identical re-run" case.
+    `write_document`'s hash comparison should catch this case before it ever reaches
+    the database. The (`source_component`, `version`) unique constraint is the last
+    line of defense against that. `source_component` alone is no longer the unique
+    constraint."""
     async with async_session_factory() as session:
         session.add(
             SilverDocument(
@@ -89,11 +90,11 @@ async def test_same_source_component_and_version_violates_unique_constraint():
 
 
 async def test_mentioned_names_default_to_empty_list_and_round_trip():
-    """`mentioned_component_names`/`mentioned_data_contract_names` are NOT NULL with a
-    Python-side default — a row built without passing them (as every pre-existing call site
-    still does) must not fail, and defaults to `[]`, not `None`. A row that does pass real
-    `MentionedComponent`/`MentionedDataContract`-shaped dicts must round-trip them verbatim
-    through Postgres' `jsonb` column."""
+    """`mentioned_component_names` and `mentioned_data_contract_names` are NOT NULL columns
+    with a Python-side default. A row built without passing them must not fail. Every
+    pre-existing call site builds rows this way. Such a row must default to `[]`, not
+    `None`. A row that does pass real `MentionedComponent`/`MentionedDataContract`-shaped
+    dicts must round-trip them exactly through Postgres' `jsonb` column."""
     async with async_session_factory() as session:
         bare = SilverDocument(
             ingestion_date=INGESTION_DATE,
@@ -138,10 +139,10 @@ async def test_mentioned_names_default_to_empty_list_and_round_trip():
 
 
 async def test_a_second_document_version_for_the_same_source_component_is_allowed():
-    """The whole point of moving off a plain `source_component`-unique constraint:
-    two genuinely different ADRs for the same transcript, at different `version`
-    numbers, must both persist — this is `write_document`'s "new version" branch,
-    exercised here directly against the schema rather than through the graph."""
+    """This is the whole point of moving off a plain `source_component`-unique constraint.
+    Two genuinely different ADRs for the same transcript, at different `version`
+    numbers, must both persist. This is `write_document`'s "new version" branch. This
+    test exercises that branch directly against the schema, not through the graph."""
     async with async_session_factory() as session:
         session.add(
             SilverDocument(
@@ -161,4 +162,4 @@ async def test_a_second_document_version_for_the_same_source_component_is_allowe
                 content_hash=_hash("v2 content, genuinely different from v1"),
             )
         )
-        await session.commit()  # no IntegrityError — different version, same source_component
+        await session.commit()  # No IntegrityError here. Different version, same source_component.

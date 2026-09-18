@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run the Silver clarification loop for one ingestion_date — `make clarify`.
+"""This runs the Silver clarification loop for one ingestion_date. It is the `make clarify`
+entry point.
 
 Usage:
     uv run python3 scripts/clarify.py --ingestion-date 20260906
@@ -10,20 +11,24 @@ Usage:
                                                   # the Makefile already appends --term
                                                   # for you; don't also pass it by hand.
 
-Runs `agents.graph`'s clarification loop directly against the database — no server
-needs to be running (Task 8's HTTP surface doesn't exist yet). Streams the graph node
-by node (`graph.astream(..., stream_mode="updates")`), printing `→ <node_name>` as
-each one runs, so the flow is visible in the terminal instead of silent until the end.
-Without `--term`, an interrupt just prints the (already capped, see
-`agents.graph.MAX_PENDING_QUESTIONS`) pending questions and exits — nothing to answer
-them with yet. With `--term`, each pending question is asked right here with
-`input()`, and the graph resumes with the answers; this can happen more than once (a
-classify-stage gap, then later a Boss escalation over a contradiction — see
-`doc/silver_process.md` §3). On completion — whether or not any question was asked,
-since a well-covered transcript can clear classify and critic with zero interrupts —
-prints every resulting ADR's full content to the terminal. `agents.graph.write_document`
-also writes each one to `output/ingestion_date=<date>/adr/<transcription>.md` for
-manual inspection, independent of this script.
+This runs `agents.graph`'s clarification loop directly against the database. No server needs
+to be running, because Task 8's HTTP surface does not exist yet. It streams the graph node by
+node, using `graph.astream(..., stream_mode="updates")`, and prints `→ <node_name>` as each
+node runs. This makes the flow visible in the terminal, instead of staying silent until the
+end.
+
+Without `--term`, an interrupt just prints the pending questions and exits. These questions
+are already capped, see `agents.graph.MAX_PENDING_QUESTIONS`. There is nothing here yet to
+answer them with. With `--term`, this script asks each pending question right here with
+`input()`, and the graph resumes with the answers. This can happen more than once: for
+example, a gap found in the classify stage, and then later a Boss escalation over a
+contradiction. See `doc/silver_process.md` §3 for that flow.
+
+When the run completes, this script prints every resulting ADR's full content to the
+terminal. It does this whether or not any question was asked, since a well-covered transcript
+can clear classify and critic with zero interrupts. `agents.graph.write_document` also writes
+each ADR to `output/ingestion_date=<date>/adr/<transcription>.md` for manual inspection. That
+write happens on its own, independent of this script.
 """
 
 import argparse
@@ -36,19 +41,21 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 
 from agents.graph import build_graph, checkpointer_dsn
-from agents.service import NoBronzeDocumentsError, transcription_base_name
+from agents.shared import NoBronzeDocumentsError, transcription_base_name
 from agents.state import initial_state
 from app.config import settings
 
-# agents.graph's own logfire.configure() (above) prints one console line per node —
-# genuinely useful under `pytest -s`, but here it's an OpenTelemetry span exporter
-# running on its own async schedule, not synchronized with this script's print()/
-# input() calls: those span lines can flush interleaved with (or right on top of) the
-# "> " prompt, making a script that's correctly waiting for an answer look frozen or
-# broken. Reconfigure with the console off for this entry point specifically — tracing
-# itself (if LOGFIRE_TOKEN is set) is unaffected, only the local stdout printer is. The
-# node-by-node progress this script prints instead (see `_stream_and_print`) comes from
-# `graph.astream`, not from logfire, so it stays correctly ordered around `input()`.
+# `agents.graph`'s own `logfire.configure()` call prints one console line per node. This is
+# genuinely useful under `pytest -s`. But here it is an OpenTelemetry span exporter that runs
+# on its own async schedule. It is not synchronized with this script's `print()` and `input()`
+# calls. So those span lines can print interleaved with the "> " prompt, or even on top of it.
+# This can make a script that is correctly waiting for an answer look frozen or broken.
+#
+# So we reconfigure logfire here, for this entry point only, with the console output turned
+# off. Tracing itself still works if `LOGFIRE_TOKEN` is set. Only the local stdout printer is
+# turned off. This script prints its own node-by-node progress instead (see
+# `_stream_and_print`). That progress comes from `graph.astream`, not from logfire, so it
+# always stays in the correct order around `input()`.
 logfire.configure(
     token=settings.logfire_token,
     send_to_logfire="if-token-present",
@@ -58,16 +65,18 @@ logfire.configure(
 
 
 async def _stream_and_print(graph: CompiledStateGraph, payload, config: dict) -> None:
-    """Advances the graph one LangGraph step at a time, printing `→ <node_name>` as each
-    one actually runs — this is "the flow" made visible in the terminal, synchronously,
-    so it never races with a later `input()` call. The merged final/paused state itself
-    is read back separately via `graph.aget_state` after this returns, not from what
-    this function yields — `stream_mode="updates"` gives per-node diffs, not the merged
-    state `ainvoke` would have returned."""
+    """This advances the graph one LangGraph step at a time. It prints `→ <node_name>` as
+    each node actually runs. This is what makes "the flow" visible in the terminal. It
+    happens synchronously, so it never races with a later `input()` call.
+
+    The merged final or paused state is not read from what this function yields. It is read
+    back separately, through `graph.aget_state`, after this function returns. That is because
+    `stream_mode="updates"` gives per-node diffs, not the merged state that `ainvoke` would
+    have returned."""
     async for chunk in graph.astream(payload, config=config, stream_mode="updates"):
         for node_name in chunk:
             if node_name == "__interrupt__":
-                continue  # surfaced separately via graph.aget_state below
+                continue  # We handle this separately, below, through graph.aget_state.
             print(f"  → {node_name}")
 
 
@@ -82,10 +91,11 @@ async def run(ingestion_date: str, interactive: bool) -> int:
         await saver.setup()
         graph = build_graph(saver)
 
-        # A previous invocation of this script may have already paused here (each
-        # `make clarify` run is a separate process — the checkpoint is what survives
-        # between them). Resume that instead of silently restarting from scratch,
-        # which would re-run the whole graph (and its LLM calls) from load_bronze.
+        # A previous run of this script may have already paused here. Each `make clarify`
+        # run is a separate process. The checkpoint is what survives between those runs. So
+        # we resume from that checkpoint, instead of silently restarting from scratch. A
+        # silent restart would re-run the whole graph, and all its LLM calls, from
+        # load_bronze.
         snapshot = await graph.aget_state(config)
         if not _pending_interrupts(snapshot):
             print(f"--- Silver clarification loop: ingestion_date={ingestion_date} ---")

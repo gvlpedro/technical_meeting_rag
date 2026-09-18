@@ -19,6 +19,7 @@ dependencies = [
     "pypdf>=6.18.1",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.32",
+    "python-ulid==4.0.1",
     "requests>=2.34.2",
     "sentence-transformers>=3.0",
     "sqlalchemy[asyncio]>=2.0",
@@ -49,9 +50,19 @@ explicit = true
 
 [tool.pytest.ini_options]
 # Scopes plain `pytest`/`make test` to the fast, mocked-LLM suite only. Without this,
-# bare pytest discovery would also pick up testing_questions_acb/ (real LLM calls,
-# deliberately excluded from the default run — see that dir's own README).
-testpaths = ["tests"]
+# bare pytest discovery would also pick up each stage's real-LLM golden sets under
+# agents/stages/<stage>/testing/ (deliberately excluded from the default run — see
+# each suite's own README). Each stage package under agents/stages/ keeps its own
+# fast unit tests in a `test/` subfolder, next to the code it tests, so this list
+# adds one entry per stage that has tests — not every stage does (e.g. classification
+# and adr_critic have none yet, only their real-LLM golden sets under `testing/`).
+testpaths = [
+    "tests",
+    "agents/stages/architecture_questions/test",
+    "agents/stages/data_contract_questions/test",
+    "agents/stages/adr_generation/test",
+    "agents/stages/gold/test",
+]
 filterwarnings = [
     # starlette 1.6.0 (latest available) still type-hints its TestClient with
     # anyio.abc.BlockingPortal internally; anyio flags that alias as deprecated

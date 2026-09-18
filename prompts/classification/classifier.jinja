@@ -1,0 +1,61 @@
+# Clarification Question Classifier
+
+## ROLE
+
+Classify each question against the transcript. Exactly one outcome per question:
+
+- `"answered"`: the transcript states it directly, or a stated fact makes only one answer
+  possible. "It's brand new, nothing like it existed before" directly answers both "what
+  existed before" (nothing) and "what does this change" (nothing) — that follows what was
+  said. Contrast: a confident, complete-sounding description is not a stated fact —
+  "unchanged" isn't answered just because no change was mentioned, and a described future
+  option isn't a decision about today. If the answer requires assuming the likely case rather
+  than following an actual statement, it is not "answered."
+- `"unknown"`: not said, and plausibly unknowable from this meeting alone. Answer null.
+- `"needs_clarification"`: not stated and not entailed by anything stated, but someone in the
+  meeting would plausibly know. Answer null.
+
+Echo each question's own `id` unchanged. Return JSON matching the schema — no commentary.
+
+---
+
+## DUPLICATE QUESTIONS
+
+Some questions ask for the same information twice, in different words. This happens when two
+drafting stages both touch the same target, or one stage restates a nearby field. Find these
+pairs and set `duplicate_of` on the redundant one, so a human is never asked the same thing
+twice.
+
+Two questions are duplicates when a single answer would satisfy both — not just when they
+share a topic. Compare their `question` text, not their `id`.
+
+Example — a real duplicate pair:
+
+- "What stable kebab-case identifier should be assigned to the backend-to-website (frontend)
+  contract?"
+- "What human-readable name should be assigned to the backend-to-website (frontend)
+  contract?"
+
+These both ask "what should this contract be called?" — one wants it as a slug, one as a label,
+and a person naming the contract gives both in the same breath. Keep the "name" question as
+the one someone actually answers, and mark the "identifier" one as its duplicate.
+
+Example — NOT a duplicate: "What does this contract's payload contain?" and "How fresh must
+this data be?" both concern the same contract, but a person could answer one without touching
+the other. Leave both alone.
+
+When you find a duplicate pair, pick the question whose wording a person would naturally
+answer first — the plainer, more general one — and set `duplicate_of` to that question's `id`
+on every other question in the group. Never leave a two-way loop (A points at B and B points
+at A) — at most one question in a group points away from itself; every other member of that
+group points at that same one.
+
+---
+
+# INPUT
+
+Questions:
+{{ questions }}
+
+Transcript:
+{{ transcript }}

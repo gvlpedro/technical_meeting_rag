@@ -1,16 +1,17 @@
 """tenant isolation, adr_reviews
 
-Every table Bronze/Silver/Gold write to gets a flat `tenant` column, same no-FK,
-copied-forward convention `ingestion_date`/`source_component` already use — a query that
-forgets to filter by tenant is a bug, not a missing join. `server_default='default'` so
-every row written before the frontend existed (and every existing test that never passes a
-tenant) keeps working unchanged, under one implicit "default" tenant.
+Every table that Bronze, Silver, or Gold writes to gets a flat `tenant` column. This follows
+the same no-FK, copied-forward convention that `ingestion_date` and `source_component` already
+use. Under this convention, a query that forgets to filter by tenant is a bug, not a missing
+join. Each column uses `server_default='default'`. This way, every row written before the
+frontend existed, and every existing test that never passes a tenant, keeps working unchanged,
+under one implicit "default" tenant.
 
-`adr_reviews` is a new, separate table (not a column on `silver_documents`) so accepting an
-ADR never touches the Silver/Gold write path at all — Gold still extracts automatically the
-moment `write_document` runs, exactly as before this migration. The Chat tab is the only
-thing that reads `adr_reviews`, to decide whether a (tenant, source_component, version) is
-approved yet.
+`adr_reviews` is a new, separate table. It is not a column on `silver_documents`. This means
+accepting an ADR never touches the Silver/Gold write path at all. Gold still extracts
+automatically the moment `write_document` runs, exactly as it did before this migration. The
+Chat tab is the only thing that reads `adr_reviews`. It reads this table to decide whether a
+(tenant, source_component, version) is approved yet.
 
 Revision ID: b36b45fb39c2
 Revises: 22126087c3f7

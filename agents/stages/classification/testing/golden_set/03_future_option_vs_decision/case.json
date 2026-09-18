@@ -1,0 +1,29 @@
+{
+  "description": "A described future option, explicitly flagged as undecided, IS an explicit statement about decision status — this must be read as answered ('not decided'), not left open just because the underlying architecture change itself is uncertain.",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "architecture",
+      "target": "API Gateway",
+      "requirement": "decided",
+      "question": "Has introducing the API Gateway been decided, or is it only a possible future option?"
+    },
+    {
+      "id": "q2",
+      "scope": "component",
+      "target": "API Gateway",
+      "requirement": "status",
+      "question": "Is the API Gateway a new, modified, removed, or unchanged component in this change?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["answered"],
+      "required_answer_substrings_any_of": ["not decided", "undecided", "no decision", "not yet decided", "hasn't been decided", "has not been decided", "only a possible", "only a future option", "future option"]
+    },
+    "q2": {
+      "acceptable_statuses": ["needs_clarification", "unknown", "answered"],
+      "forbidden_answer_substrings": ["unchanged"]
+    }
+  }
+}

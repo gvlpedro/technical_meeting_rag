@@ -1,4 +1,0 @@
-{
-  "passes": false,
-  "reason": "The summary captures the broad progression—Order Service introduced alongside the legacy monolith, subsequent Payment/Inventory/Notification services, and eventual retirement of both the monolith and Order Events. However, it adds unsupported specifics: Kafka is not stated, Payment Confirmed is not stated, and Inventory publishing Stock Updated events for Notification is not stated. It also omits important compatibility/evolution details: Payment was added with a backward-compatible optional field on Order Events; Inventory coincided with a breaking buyer_id change; and Notification was added when Order Events were deprecated. Finally, saying the final architecture consists “exclusively” of the four services may be too strong unless the described system explicitly rules out other infrastructure/components."
-}

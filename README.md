@@ -168,12 +168,16 @@ pipeline, it is the last three nodes of the same graph run that wrote Silver.
 | --- | --- | --- | --- |
 | Bronze | Raw ingestion, no interpretation | `bronze_documents` | `ingestion/service.py` |
 | Silver | Actor–Critic–Boss clarification loop, versioned ADR per source | `silver_documents`, `silver_clarifications`, `silver_chunks` | `agents/graph.py` |
-| Gold | Cross-meeting entity identity & evolution ledger | `gold_evolution`, `gold_aliases` | `agents/gold_service.py` |
+| Gold | Cross-meeting entity identity & evolution ledger | `gold_evolution`, `gold_aliases` | `agents/stages/gold/service.py` |
 
 ### Key technical decisions
 
 Engineering decisions made for this project itself — not to be confused with the ADRs the
 pipeline produces *about the meetings it ingests*.
+
+**Coding standard:** every comment and docstring in this repo's Python code follows
+**SE100 — Simple English** (short, clear sentences and common words, no idioms or jargon). See
+`doc/coding_standards.md` for the full rule and examples.
 
 * **RAG, not CAG.** The corpus grows unbounded as new meetings are ingested over time, and access
   to a component's description must be restricted per profile/permission boundary (see
@@ -197,9 +201,9 @@ pipeline produces *about the meetings it ingests*.
 
 * **Question generation is two sequential LLM stages, not one.** The first call reads the
   transcript and asks one question per component actually named, while only *identifying* (never
-  fully specifying) every data contract in play (`prompts/architecture_questions.jinja`). The
+  fully specifying) every data contract in play (`prompts/architecture_questions/combined.jinja`). The
   second takes exactly those identified contracts and drafts the full ODCS-completeness question
-  set for each one (`prompts/data_contract_questions.jinja`). Splitting them fixed an observed
+  set for each one (`prompts/data_contract_questions/questions.jinja`). Splitting them fixed an observed
   failure mode where a single combined pass regularly under-covered data contracts — see
   `doc/cost_analysis.md`.
 

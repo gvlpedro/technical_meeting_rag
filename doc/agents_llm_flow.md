@@ -46,10 +46,10 @@ flowchart TD
     M2 -. calls both generate_*_questions_for_batch directly .-> N2
     M3 --> N1
 
-    N2 -. prompt .-> P1["prompts/architecture_questions.jinja<br/>+ prompts/architecture_template.md<br/>(embedded as ARCHITECTURE_CHANGES)<br/>temperature=0, reasoning_effort=none<br/>retries at temp=0.7 on shallow/ungrounded result"]
-    N2b -. prompt .-> P1b["prompts/data_contract_questions.jinja<br/>+ prompts/data_contract_template.md<br/>(embedded as DATA_CONTRACT_REQUIREMENTS)<br/>fed node 2's mentioned_data_contracts as IDENTIFIED_DATA_CONTRACTS<br/>same temperature/retry discipline as node 2"]
+    N2 -. prompt .-> P1["prompts/architecture_questions/combined.jinja<br/>+ prompts/architecture_questions/template.md<br/>(embedded as ARCHITECTURE_CHANGES)<br/>temperature=0, reasoning_effort=none<br/>retries at temp=0.7 on shallow/ungrounded result"]
+    N2b -. prompt .-> P1b["prompts/data_contract_questions/questions.jinja<br/>+ prompts/data_contract_questions/template.md<br/>(embedded as DATA_CONTRACT_REQUIREMENTS)<br/>fed node 2's mentioned_data_contracts as IDENTIFIED_DATA_CONTRACTS<br/>same temperature/retry discipline as node 2"]
     N3 -. prompt .-> P2["agents/prompts.py :: build_classification_prompt<br/>(inline system+user strings, no .jinja file)"]
-    N5 -. prompt .-> P3["prompts/adr_generator.jinja"]
+    N5 -. prompt .-> P3["prompts/adr_generation/generator.jinja"]
     N6 -. prompt .-> P4["agents/prompts.py :: build_critic_prompt<br/>(inline system+user strings, no .jinja file)"]
 
     subgraph UNUSED["prompts/ — not called by any code path today"]

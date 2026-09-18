@@ -20,8 +20,9 @@ class IngestResponse(BaseModel):
 async def ingest(
     ingestion_date: str, db: AsyncSession = Depends(get_session)
 ) -> IngestResponse:
-    """Ingest every transcript uploaded on `ingestion_date` (compact `YYYYMMDD`, e.g.
-    `?ingestion_date=20260906`), looked up at `input/transcriptions/ingestion_date=20260906/`."""
+    """Ingest every transcript uploaded on `ingestion_date`. Use the compact `YYYYMMDD`
+    format, for example `?ingestion_date=20260906`. This looks up files at
+    `input/transcriptions/ingestion_date=20260906/`."""
     try:
         result = await ingest_bronze(ingestion_date, db)
     except ValueError:

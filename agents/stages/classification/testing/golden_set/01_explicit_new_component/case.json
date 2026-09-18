@@ -1,0 +1,30 @@
+{
+  "description": "Positive control — an explicit, unambiguous 'brand new' statement must be read as answered, not left open just because the classifier was tuned to be more conservative.",
+  "questions": [
+    {
+      "id": "q1",
+      "scope": "component",
+      "target": "ConfigVault",
+      "requirement": "status",
+      "question": "Is ConfigVault a new, modified, removed, or unchanged component?"
+    },
+    {
+      "id": "q2",
+      "scope": "component",
+      "target": "ConfigVault",
+      "requirement": "responsibility",
+      "question": "What is ConfigVault's responsibility?"
+    }
+  ],
+  "expected": {
+    "q1": {
+      "acceptable_statuses": ["answered"],
+      "required_answer_substrings_any_of": ["new"],
+      "forbidden_answer_substrings": ["unchanged", "modified", "removed"]
+    },
+    "q2": {
+      "acceptable_statuses": ["answered"],
+      "required_answer_substrings_any_of": ["configuration"]
+    }
+  }
+}

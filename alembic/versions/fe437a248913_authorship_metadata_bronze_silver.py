@@ -1,11 +1,12 @@
 """authorship metadata bronze silver
 
-`bronze_documents.uploaded_by` — who uploaded this chunk (the frontend's logged-in username);
-`silver_documents.authored_by` — who authored this published version, extracted from the ADR
-content's own `**Authors:**` line at persist time, never a second independent value that could
-drift from what the document itself says. Both `server_default=''` so every row written before
-this migration (and every disk-based `ingest_bronze` row, which has no user to attribute) stays
-valid.
+`bronze_documents.uploaded_by` stores who uploaded this chunk: the frontend's logged-in
+username. `silver_documents.authored_by` stores who authored this published version. This
+value is extracted from the ADR content's own `**Authors:**` line at persist time. It is never
+a second, independent value that could drift from what the document itself says.
+
+Both columns use `server_default=''`. This keeps every row written before this migration
+valid, and also every disk-based `ingest_bronze` row, which has no user to attribute.
 
 Revision ID: fe437a248913
 Revises: c071da0da7f2

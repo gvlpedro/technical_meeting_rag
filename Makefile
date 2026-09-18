@@ -34,17 +34,20 @@ migrate-test: test-db
 test: migrate-test
 	DATABASE_URL=$(TEST_DATABASE_URL) uv run pytest
 
+test-classifier-acb: migrate-test
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/classification/testing/ -v
+
 test-arch-questions-acb: migrate-test
-	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest testing_arch_questions_acb/ -v
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/architecture_questions/testing/ -v
 
 test-data-contract-questions-acb: migrate-test
-	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest testing_data_contract_questions_acb/ -v
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/data_contract_questions/testing/ -v
 
 test-adr-acb: migrate-test
-	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest testing_adr_acb/ -v
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/adr_generation/testing/ -v
 
 test-gold-arch-evolution: migrate-test
-	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest testing_gold_arch_evolution/ -v -s
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/gold/testing/ -v -s
 
 down:
 	docker compose down
