@@ -18,6 +18,7 @@ from agents.stages.gold.schemas import (
     ExtractedDataContract,
 )
 from agents.stages.gold.service import (
+    _dedupe_ids_by_entity,
     _reciprocal_rank_fusion,
     already_extracted,
     current_architecture_diagram,
@@ -785,3 +786,187 @@ async def test_top_k_gold_evolution_hybrid_mode_requires_question_text():
 async def test_top_k_gold_evolution_rejects_an_unknown_mode():
     with pytest.raises(ValueError, match="unknown"):
         await top_k_gold_evolution(None, [0.0], mode="bm25")
+
+
+# =====================================================================================
+# Deduplication by entity in top-k — see `.tmp/advanced_techniques.md` §2
+# =====================================================================================
+
+
+async def test_dedupe_ids_by_entity_keeps_the_first_occurrence_per_entity_and_stops_at_k():
+    """`_dedupe_ids_by_entity` trusts the caller's own `ids` order completely — it never
+    re-ranks, it only groups by `(entity_type, entity_id)` and keeps the first (best-ranked) id
+    it sees for each. Entity A's two versions collapse to just its first (best-ranked) one;
+    entity B, seen once, is kept; the result stops as soon as `k` distinct entities are found,
+    even though more ids remain in the input."""
+    entity_a, entity_b, entity_c = str(uuid4()), str(uuid4()), str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            for version in (1, 2):
+                await persist_entity_version(
+                    session,
+                    entity_type="component",
+                    entity_id=entity_a,
+                    canonical_name="Repeated Entity",
+                    operation="new" if version == 1 else "modified",
+                    narrative=f"version {version}",
+                    payload={"dependency_ids": [], "contract_ids": []},
+                    source_component="meeting.en.vtt",
+                    source_adr_version=version,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=entity_b,
+                canonical_name="Other Entity",
+                operation="new",
+                narrative="b",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+            )
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=entity_c,
+                canonical_name="Third Entity, never reached",
+                operation="new",
+                narrative="c",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.entity_id.in_([entity_a, entity_b, entity_c])
+                    )
+                )
+            ).scalars().all()
+            by_entity_and_version = {(r.entity_id, r.version): r.id for r in rows}
+            a_v1_id = by_entity_and_version[(entity_a, 1)]
+            a_v2_id = by_entity_and_version[(entity_a, 2)]
+            b_id = by_entity_and_version[(entity_b, 1)]
+            c_id = by_entity_and_version[(entity_c, 1)]
+
+            # Deliberately "ranked" order: A's WORSE version first, to prove the function keeps
+            # whichever occurrence comes first in `ids`, not necessarily version 1.
+            ranked_ids = [a_v2_id, a_v1_id, b_id, c_id]
+            deduped = await _dedupe_ids_by_entity(session, ranked_ids, k=2)
+        assert deduped == [a_v2_id, b_id]  # A's first-seen version kept; C never reached (k=2)
+    finally:
+        await _cleanup_entity("component", entity_a)
+        await _cleanup_entity("component", entity_b)
+        await _cleanup_entity("component", entity_c)
+
+
+async def test_dedupe_ids_by_entity_returns_empty_for_no_ids():
+    async with async_session_factory() as session:
+        assert await _dedupe_ids_by_entity(session, [], k=5) == []
+
+
+async def test_top_k_gold_evolution_dedupe_rescues_a_different_entity_from_being_crowded_out():
+    """This is the concrete bug dedup fixes. Three versions of the SAME entity, all persisted
+    with the EXACT query embedding (distance 0 — unambiguously the closest possible match, no
+    tie-breaking luck involved), fill every slot of a plain `k=3` top-k. A different, real
+    entity — a nonzero but still close distance — never gets a chance to appear. With dedup
+    (the default), the same query keeps only the repeated entity's single best-ranked version
+    and still surfaces the other one."""
+    query_vector = await embed_question("Anchor question used only to fix a query vector.")
+    entity_a, entity_b = str(uuid4()), str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            for version in (1, 2, 3):
+                session.add(
+                    GoldEvolution(
+                        tenant="default",
+                        entity_type="component",
+                        entity_id=entity_a,
+                        canonical_name="Repeated Entity",
+                        version=version,
+                        operation="new" if version == 1 else "modified",
+                        narrative=f"Repeated Entity narrative, version {version}.",
+                        payload={},
+                        embedding=query_vector,  # distance 0 to the query, every single version
+                        entity_hash=f"hash-a-{version}",
+                        source_component="meeting.en.vtt",
+                        source_adr_version=version,
+                        ingestion_date=date(2026, 6, 1),
+                    )
+                )
+            session.add(
+                GoldEvolution(
+                    tenant="default",
+                    entity_type="component",
+                    entity_id=entity_b,
+                    canonical_name="Other Entity",
+                    version=1,
+                    operation="new",
+                    narrative="A different, unrelated component.",
+                    payload={},
+                    embedding=await embed_question("Something else entirely, unrelated to the anchor."),
+                    entity_hash="hash-b",
+                    source_component="meeting.en.vtt",
+                    source_adr_version=1,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            without_dedupe = await top_k_gold_evolution(session, query_vector, k=3, dedupe=False)
+            with_dedupe = await top_k_gold_evolution(session, query_vector, k=3, dedupe=True)
+
+        assert {r.entity_id for r in without_dedupe} == {entity_a}  # entity_b crowded out entirely
+        assert {entity_a, entity_b} <= {r.entity_id for r in with_dedupe}  # both rescued
+    finally:
+        await _cleanup_entity("component", entity_a)
+        await _cleanup_entity("component", entity_b)
+
+
+async def test_dedupe_ids_by_entity_resolves_to_the_latest_version_not_the_better_ranked_one():
+    """Regression test for a real bug `agents.stages.gold.testing`'s real-LLM suite caught: an
+    entity's OLDER version can rank ahead of its own current state (its narrative happens to
+    word-match the ranking signal more closely). The first implementation of dedup kept
+    whichever version ranked best, which meant a "what changed in this latest update?"
+    question got answered from a stale, superseded version — missing the very update it asked
+    about. Dedup must always resolve to the entity's actual latest version, regardless of which
+    version's id ranked better in the input list."""
+    entity_a = str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            for version in (1, 2):
+                await persist_entity_version(
+                    session,
+                    entity_type="component",
+                    entity_id=entity_a,
+                    canonical_name="Order Service",
+                    operation="new" if version == 1 else "modified",
+                    narrative=f"version {version} narrative",
+                    payload={"dependency_ids": [], "contract_ids": []},
+                    source_component="meeting.en.vtt",
+                    source_adr_version=version,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(select(GoldEvolution).where(GoldEvolution.entity_id == entity_a))
+            ).scalars().all()
+            by_version = {r.version: r.id for r in rows}
+            v1_id, v2_id = by_version[1], by_version[2]
+
+            # v1, the OLDER version, is the only one in the ranked input — simulating exactly
+            # the observed failure: an older narrative ranked inside the recall pool while the
+            # entity's actual latest version did not (or ranked worse).
+            deduped = await _dedupe_ids_by_entity(session, [v1_id], k=1)
+        assert deduped == [v2_id]
+    finally:
+        await _cleanup_entity("component", entity_a)

@@ -641,14 +641,19 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
 # `agents.stages.gold.testing`'s already real-LLM-verified assertions see.
 DEFAULT_MAX_DISTANCE = 0.6
 
-# `mode="hybrid"` fetches this many candidates from EACH ranking (vector, lexical) before fusing
-# them, not just `k`. RRF needs depth on both sides to do anything useful: a row that ranks,
-# say, 7th by embedding similarity and 2nd by lexical match should still be able to win a fused
-# top-5 over two rows that only rank in the top 5 of one signal and nowhere in the other. Fusing
-# two lists already cut to `k` would never give a moderate-vector/strong-lexical row that
-# chance. This is deliberately NOT the same thing as the "expand-then-dedupe-by-entity" idea in
-# `.tmp/advanced_techniques.md` — no deduplication happens here, only wider recall for fusion.
-HYBRID_RECALL_POOL = 30
+# This many candidates get fetched from a ranking before it is cut down to `k`. Two unrelated
+# things both need this same extra depth, so they share one constant:
+#
+# 1. `mode="hybrid"` fuses TWO rankings (vector, lexical) with RRF. A row that ranks, say, 7th by
+#    embedding similarity and 2nd by lexical match should still be able to win a fused top-5 over
+#    two rows that only rank in the top 5 of one signal and nowhere in the other. Fusing two
+#    lists already cut to `k` would never give a moderate-vector/strong-lexical row that chance.
+# 2. `dedupe=True` (the default, either mode) collapses several VERSIONS of the SAME entity down
+#    to whichever one ranks best, before cutting to `k` — see `_dedupe_ids_by_entity`. Several
+#    near-identical consecutive-version narratives can otherwise occupy most of a plain top-k,
+#    crowding out a genuinely different, relevant entity (`.tmp/advanced_techniques.md` §2, and
+#    the same problem the estimator project's own `dedupe` flag measured and fixed).
+RECALL_POOL_SIZE = 30
 
 # Reciprocal Rank Fusion's own smoothing constant. 60 is the value the original RRF paper (Cormack
 # et al., 2009) tuned against, and it is what most hybrid-search implementations still default
@@ -729,6 +734,75 @@ async def _top_k_ids_by_lexical_rank(
     return list((await session.execute(query)).scalars().all())
 
 
+async def _dedupe_ids_by_entity(session: AsyncSession, ids: list[int], k: int) -> list[int]:
+    """Collapses `ids` — already ranked, best first — down to at most `k` ids, one per distinct
+    `(entity_type, entity_id)`. This runs in two passes, not one, because "keep whichever
+    version ranked best" is the WRONG rule — a real regression this exact rule caused, caught
+    by `agents.stages.gold.testing`'s real-LLM suite: an older version's narrative can rank
+    closer to a question than the entity's own current state does (`top_k_gold_evolution`'s own
+    docstring on `max_distance` already covers this for `latest_versions`' `[superseded]`
+    tag — the same risk applies here). Deduping straight to that better-ranked OLDER version
+    then answers "what changed" from stale state, missing exactly the update the question asked
+    about.
+
+    Pass 1 finds the RANK ORDER of the first `k` distinct entities in `ids` — this decides WHICH
+    entities make the cut, and in what order, exactly as before. Pass 2 then resolves each of
+    those entities to the id of its actual latest version — queried fresh from every version
+    that entity has on record, not limited to whichever versions happened to be in `ids`. A
+    version can be the entity's current state even if it ranked outside `ids` entirely (for
+    example, past `RECALL_POOL_SIZE`), and this must still find it.
+
+    Without deduping at all, several VERSIONS of the SAME entity — whose narratives are often
+    near-identical between consecutive versions — can occupy multiple of the `k` slots a plain
+    top-k would return, crowding out a genuinely different, relevant entity that never gets a
+    chance to surface. See `RECALL_POOL_SIZE`'s own comment and `.tmp/advanced_techniques.md`
+    §2."""
+    if not ids:
+        return []
+    candidate_rows = (
+        await session.execute(
+            select(GoldEvolution.id, GoldEvolution.entity_type, GoldEvolution.entity_id).where(
+                GoldEvolution.id.in_(ids)
+            )
+        )
+    ).all()
+    entity_by_id = {row.id: (row.entity_type, row.entity_id) for row in candidate_rows}
+
+    ordered_entities: list[tuple[str, str]] = []
+    seen_entities: set[tuple[str, str]] = set()
+    for item_id in ids:
+        entity_key = entity_by_id.get(item_id)
+        if entity_key is None or entity_key in seen_entities:
+            continue
+        seen_entities.add(entity_key)
+        ordered_entities.append(entity_key)
+        if len(ordered_entities) == k:
+            break
+    if not ordered_entities:
+        return []
+
+    every_version = (
+        await session.execute(
+            select(GoldEvolution.id, GoldEvolution.entity_type, GoldEvolution.entity_id, GoldEvolution.version).where(
+                or_(
+                    *(
+                        and_(GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id)
+                        for entity_type, entity_id in ordered_entities
+                    )
+                )
+            )
+        )
+    ).all()
+    latest_by_entity: dict[tuple[str, str], tuple[int, int]] = {}  # entity -> (version, id)
+    for row in every_version:
+        entity_key = (row.entity_type, row.entity_id)
+        current_best = latest_by_entity.get(entity_key)
+        if current_best is None or row.version > current_best[0]:
+            latest_by_entity[entity_key] = (row.version, row.id)
+
+    return [latest_by_entity[entity_key][1] for entity_key in ordered_entities]
+
+
 async def top_k_gold_evolution(
     session: AsyncSession,
     vector: list[float],
@@ -739,6 +813,7 @@ async def top_k_gold_evolution(
     tenant: str = "default",
     mode: Literal["vector", "hybrid"] = "vector",
     question_text: str | None = None,
+    dedupe: bool = True,
 ) -> list[GoldEvolution]:
     """This runs top-k search over ALL versions of `gold_evolution`, not just the latest version
     per entity. Getting the latest version per entity is `current_gold_state`'s job instead.
@@ -758,14 +833,21 @@ async def top_k_gold_evolution(
     `.cosine_distance(vector)`, matching `GoldEvolution.embedding`'s HNSW index
     (`vector_cosine_ops`) so it can actually use it. `mode="hybrid"` additionally runs a lexical
     `ts_rank` search over `search_vector` and fuses both rankings with Reciprocal Rank Fusion
-    (`_reciprocal_rank_fusion`) before cutting to `k` — see `.tmp/advanced_techniques.md` §1 for
-    why: an embedding can blur an exact component name, acronym, or ODCS field name that a plain
-    keyword match finds immediately, at close to zero extra cost (the GIN index, versus the
-    embedding API/model call already being paid for `vector`). `mode="hybrid"` requires
-    `question_text` — the original question, not `vector`'s embedding of it, since the lexical
-    branch does its own tokenization, never the embedding."""
+    (`_reciprocal_rank_fusion`) — see `.tmp/advanced_techniques.md` §1 for why: an embedding can
+    blur an exact component name, acronym, or ODCS field name that a plain keyword match finds
+    immediately, at close to zero extra cost (the GIN index, versus the embedding API/model call
+    already being paid for `vector`). `mode="hybrid"` requires `question_text` — the original
+    question, not `vector`'s embedding of it, since the lexical branch does its own tokenization,
+    never the embedding.
+
+    `dedupe=True` (the default) collapses several versions of the SAME entity down to whichever
+    one ranks best, before cutting to `k` — see `RECALL_POOL_SIZE`'s own comment,
+    `_dedupe_ids_by_entity`, and `.tmp/advanced_techniques.md` §2. `dedupe=False` reproduces the
+    exact pre-deduplication behavior (a plain top-`k` cut, no wider recall fetched first) — kept
+    for tests and callers that need to see the raw, undeduplicated ranking."""
+    recall = RECALL_POOL_SIZE if dedupe else k
     if mode == "vector":
-        ids = await _top_k_ids_by_vector(session, vector, k, source_component, max_distance, tenant)
+        ids = await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant)
     elif mode == "hybrid":
         if not question_text:
             raise ValueError("mode='hybrid' requires question_text (the lexical ranking needs the raw question)")
@@ -775,11 +857,13 @@ async def top_k_gold_evolution(
         # app, not just a theoretical concern: two coroutines sharing `session` inside
         # `gather` both took the connection into an "in progress" state at once, and closing
         # the session afterward hit that half-finished state.
-        vector_ids = await _top_k_ids_by_vector(session, vector, HYBRID_RECALL_POOL, source_component, max_distance, tenant)
-        lexical_ids = await _top_k_ids_by_lexical_rank(session, question_text, HYBRID_RECALL_POOL, source_component, tenant)
-        ids = _reciprocal_rank_fusion([vector_ids, lexical_ids])[:k]
+        vector_ids = await _top_k_ids_by_vector(session, vector, RECALL_POOL_SIZE, source_component, max_distance, tenant)
+        lexical_ids = await _top_k_ids_by_lexical_rank(session, question_text, RECALL_POOL_SIZE, source_component, tenant)
+        ids = _reciprocal_rank_fusion([vector_ids, lexical_ids])
     else:
         raise ValueError(f"unknown top_k_gold_evolution mode: {mode!r}")
+
+    ids = await _dedupe_ids_by_entity(session, ids, k) if dedupe else ids[:k]
 
     if not ids:
         return []
@@ -1028,8 +1112,8 @@ __all__ = [
     "DEFAULT_MAX_DISTANCE",
     "DataContractPayload",
     "FUZZY_MATCH_THRESHOLD",
-    "HYBRID_RECALL_POOL",
     "MIN_ALIAS_MATCH_LENGTH",
+    "RECALL_POOL_SIZE",
     "RRF_K_CONSTANT",
     "already_extracted",
     "answer_evolution_question",
