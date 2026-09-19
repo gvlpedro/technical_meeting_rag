@@ -7,16 +7,22 @@ Reciprocal Rank Fusion — see `.tmp/advanced_techniques.md` §1) — the same r
 `scripts/chat_gold.py` and `/v1/frontend/chat` use in production, not a plain-vector snapshot
 from before hybrid search existed.
 
-The suite sends 5 real meeting transcripts through the real graph.
-Each transcript adds one month to the same architecture (2026-01-15 to 2026-05-15).
+The suite sends 10 real meeting transcripts through the real graph.
+Each transcript adds one month to the same architecture (2026-01-15 to 2026-10-15).
 Every call is real: real LLM calls, real embeddings, real Postgres writes.
 No mock replaces the LLM.
 
-The suite walks two full state machines end to end:
-- The "Order Events" data contract moves through every ContractAction value:
-  new, forward-update, break-change, deprecated, removed.
-- The "Legacy Order Monolith" component moves through every ComponentStatus
-  value except "unknown": unchanged, then removed.
+The suite walks four full state machines end to end, as two independent threads:
+- Steps 01-05 (the original suite): the "Order Events" data contract moves through every
+  ContractAction value (new, forward-update, break-change, deprecated, removed), while the
+  "Legacy Order Monolith" component moves through every ComponentStatus value except "unknown"
+  (unchanged, then removed).
+- Steps 06-10 (added to double this suite's case count): the "Refund Issued" data contract
+  walks the exact same full ContractAction lifecycle Order Events already walked, on a
+  completely separate producer/consumer thread (Refund Service, Fraud Check Service). This
+  doubles the real Gold history a retrieval-quality check has to work against, and proves the
+  same lifecycle-tracking correctness holds for a second, independent entity — not just once,
+  by coincidence.
 
 Read golden_set/<step>/transcript.txt for the full story of each step.
 
@@ -25,8 +31,8 @@ Each step runs two kinds of check:
   gold_evolution rows against golden_set/<step>/expected_gold_facts.json.
   Another check compares retrieval and answer results against
   golden_set/<step>/qa.json.
-- A suite-level checklist. This check runs once, after all 5 steps finish.
-  See checklist.txt for the full list of items. Four items are deterministic
+- A suite-level checklist. This check runs once, after all 10 steps finish.
+  See checklist.txt for the full list of items. Five items are deterministic
   and gate the test. One item is a judgment call from a second LLM. That item
   is informational only. It does not gate the test.
 
@@ -67,13 +73,25 @@ SOURCE_COMPONENT = "order_fulfillment_platform.en.vtt"
 GOLDEN_SET_DIR = Path(__file__).parent / "golden_set"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
-# Each step name pairs with its ingestion date
+# Each step name pairs with its ingestion date. Steps 06-10 continue the SAME
+# order_fulfillment_platform.en.vtt history one month at a time (2026-06-15 to 2026-10-15),
+# doubling this suite from 5 to 10 steps. They introduce a second, independent thread — Refund
+# Service / Refund Issued — deliberately walking the exact same full ContractAction lifecycle
+# Order Events already walks in steps 01-05 (new, forward-update, break-change, deprecated,
+# removed; see `_REFUND_ISSUED_LIFECYCLE` below), instead of just repeating steps 01-05's own
+# entities. This gives the suite twice the real Gold history to retrieve against, without
+# touching Order Events or Legacy Order Monolith's already-completed arcs from steps 01-05.
 STEPS: list[tuple[str, date]] = [
     ("01_order_service_launch", date(2026, 1, 15)),
     ("02_payment_service_added", date(2026, 2, 15)),
     ("03_inventory_service_and_breaking_change", date(2026, 3, 15)),
     ("04_notification_service_and_deprecation", date(2026, 4, 15)),
     ("05_legacy_monolith_removed", date(2026, 5, 15)),
+    ("06_refund_service_added", date(2026, 6, 15)),
+    ("07_refund_issued_forward_update", date(2026, 7, 15)),
+    ("08_fraud_check_service_and_breaking_change", date(2026, 8, 15)),
+    ("09_refund_processed_and_deprecation", date(2026, 9, 15)),
+    ("10_refund_issued_removed", date(2026, 10, 15)),
 ]
 
 # This set every valid Gold operation value, except "unknown".
@@ -89,9 +107,15 @@ _KNOWN_COMPONENTS = {
     "Inventory Service",
     "Notification Service",
     "Legacy Order Monolith",
+    "Refund Service",
+    "Fraud Check Service",
 }
 
 _ORDER_EVENTS_LIFECYCLE = ["new", "forward-update", "break-change", "deprecated", "removed"]
+# Refund Issued (steps 06-10) walks the exact same ContractAction lifecycle Order Events walks
+# in steps 01-05 — a second, independent proof that hash-compare-then-bump versioning holds
+# across a real, growing history, not a coincidence specific to one entity.
+_REFUND_ISSUED_LIFECYCLE = ["new", "forward-update", "break-change", "deprecated", "removed"]
 _FALLBACK_ANSWER = "No special case here; proceed with the default."
 _MAX_RESUME_ROUNDS = 5
 
@@ -359,7 +383,12 @@ def _summary_judgment_prompt(summary_answer: str) -> str:
         "unchanged; added Payment Service, with Order Events gaining a backward-compatible "
         "optional field; added Inventory Service alongside a breaking change to Order Events' "
         "buyer_id field; added Notification Service and deprecated Order Events; then retired "
-        "Legacy Order Monolith and removed Order Events entirely"
+        "Legacy Order Monolith and removed Order Events entirely; separately, added a new "
+        "Refund Service publishing a new Refund Issued contract; gave Refund Issued a "
+        "backward-compatible optional 'reason' field; added a new Fraud Check Service alongside "
+        "a breaking change to Refund Issued's amount_refunded field; introduced a consolidated "
+        "Refund Processed contract and deprecated Refund Issued; then removed Refund Issued "
+        "entirely, fully replaced by Refund Processed"
     )
     return (
         f"Judge whether this summary of an architecture's evolution accurately reflects a "
@@ -369,8 +398,12 @@ def _summary_judgment_prompt(summary_answer: str) -> str:
     )
 
 
-async def _check_order_events_lifecycle() -> tuple[list[str], list[str]]:
-    """Checklist item 1: Order Events must walk its full ContractAction lifecycle.
+async def _check_contract_lifecycle(canonical_name: str, expected_lifecycle: list[str]) -> tuple[list[str], list[str]]:
+    """Checklist items 1 and 2: one data contract must walk its full, exact ContractAction
+    lifecycle, in version order. Shared by Order Events (steps 01-05) and Refund Issued (steps
+    06-10) — the same check, run twice, against two independent entities, is a stronger proof
+    that hash-compare-then-bump versioning holds in general than running it against only one
+    entity ever would be.
 
     Return the list of violations, and the actual lifecycle found.
     """
@@ -380,7 +413,7 @@ async def _check_order_events_lifecycle() -> tuple[list[str], list[str]]:
                 select(GoldEvolution)
                 .where(
                     GoldEvolution.entity_type == "data_contract",
-                    GoldEvolution.canonical_name == "Order Events",
+                    GoldEvolution.canonical_name == canonical_name,
                     GoldEvolution.source_component == SOURCE_COMPONENT,
                 )
                 .order_by(GoldEvolution.version)
@@ -388,18 +421,18 @@ async def _check_order_events_lifecycle() -> tuple[list[str], list[str]]:
         ).scalars().all()
 
     actual_lifecycle = [row.operation for row in rows]
-    if actual_lifecycle == _ORDER_EVENTS_LIFECYCLE:
+    if actual_lifecycle == expected_lifecycle:
         return [], actual_lifecycle
-    violation = f"Order Events lifecycle mismatch: expected {_ORDER_EVENTS_LIFECYCLE}, got {actual_lifecycle}"
+    violation = f"{canonical_name} lifecycle mismatch: expected {expected_lifecycle}, got {actual_lifecycle}"
     return [violation], actual_lifecycle
 
 
 async def _check_legacy_monolith_retrieval() -> tuple[list[str], str]:
-    """Checklist item 2: retrieval must surface the monolith's removed row.
+    """Checklist item 3: retrieval must surface the monolith's removed row.
 
     Return the list of violations, and the generated answer text.
     """
-    print("  [checklist 2/5] legacy monolith question", flush=True)
+    print("  [checklist 3/6] legacy monolith question", flush=True)
     question = "What happened to the legacy monolith?"
     async with async_session_factory() as session:
         vector = await embed_question(question)
@@ -428,7 +461,7 @@ async def _check_legacy_monolith_retrieval() -> tuple[list[str], str]:
 
 
 async def _check_closed_vocabulary() -> list[str]:
-    """Checklist item 3: every gold_evolution row must use a closed vocabulary.
+    """Checklist item 4: every gold_evolution row must use a closed vocabulary.
 
     No row may use an entity_type or operation outside the closed sets. In
     particular, no row may use operation == "unknown".
@@ -454,7 +487,7 @@ async def _check_closed_vocabulary() -> list[str]:
 
 
 async def _check_current_gold_state() -> list[str]:
-    """Checklist item 4: current_gold_state must report the right live components.
+    """Checklist item 5: current_gold_state must report the right live components.
 
     Every component except the retired monolith must still be present. The
     monolith's latest state must be "removed".
@@ -463,7 +496,14 @@ async def _check_current_gold_state() -> list[str]:
         current_rows = await gold.current_gold_state(session, entity_type="component")
 
     ours = {row.canonical_name: row for row in current_rows if row.canonical_name in _KNOWN_COMPONENTS}
-    expected_present = {"Order Service", "Payment Service", "Inventory Service", "Notification Service"}
+    expected_present = {
+        "Order Service",
+        "Payment Service",
+        "Inventory Service",
+        "Notification Service",
+        "Refund Service",
+        "Fraud Check Service",
+    }
     present = {name for name, row in ours.items() if row.operation != "removed"}
 
     violations: list[str] = []
@@ -477,17 +517,21 @@ async def _check_current_gold_state() -> list[str]:
 
 
 async def _check_summary_judgment() -> tuple[str, dict]:
-    """Checklist item 5: judge a free-form summary of the whole history.
+    """Checklist item 6: judge a free-form summary of the whole history.
 
     This check is informational only. It never gates the test. Return the
     generated summary answer, and the judgment result.
     """
-    print("  [checklist 5/5] summary question + judgment", flush=True)
+    print("  [checklist 6/6] summary question + judgment", flush=True)
     question = "Summarize how this architecture evolved from start to finish."
     async with async_session_factory() as session:
         vector = await embed_question(question)
+        # k=15, not the original 10: doubling the suite to 10 steps also roughly doubled the
+        # number of distinct entities in this history (~14, across both the Order Events and
+        # Refund Issued threads plus every component and the architecture entity). A narrower
+        # k, even with dedup, would silently drop one of the two threads from this summary.
         rows = await top_k_gold_evolution(
-            session, vector, k=10, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
+            session, vector, k=15, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
         )
 
     answer = await answer_question(question, rows)
@@ -507,21 +551,33 @@ def _write_checklist_outputs(summary_answer: str, judgment: dict) -> None:
 async def _run_checklist_deterministic() -> dict:
     """Run every item in checklist.txt, and collect every violation.
 
-    Items 1 to 4 are deterministic. They gate the test. Item 5 is a judgment
+    Items 1 to 5 are deterministic. They gate the test. Item 6 is a judgment
     call. It is informational only.
     """
-    lifecycle_violations, order_events_lifecycle = await _check_order_events_lifecycle()
+    order_events_violations, order_events_lifecycle = await _check_contract_lifecycle(
+        "Order Events", _ORDER_EVENTS_LIFECYCLE
+    )
+    refund_issued_violations, refund_issued_lifecycle = await _check_contract_lifecycle(
+        "Refund Issued", _REFUND_ISSUED_LIFECYCLE
+    )
     monolith_violations, monolith_answer = await _check_legacy_monolith_retrieval()
     vocabulary_violations = await _check_closed_vocabulary()
     state_violations = await _check_current_gold_state()
     summary_answer, judgment = await _check_summary_judgment()
     _write_checklist_outputs(summary_answer, judgment)
 
-    violations = [*lifecycle_violations, *monolith_violations, *vocabulary_violations, *state_violations]
+    violations = [
+        *order_events_violations,
+        *refund_issued_violations,
+        *monolith_violations,
+        *vocabulary_violations,
+        *state_violations,
+    ]
     return {
         "violations": violations,
         "details": {
             "order_events_lifecycle": order_events_lifecycle,
+            "refund_issued_lifecycle": refund_issued_lifecycle,
             "monolith_answer": monolith_answer,
             "summary_answer": summary_answer,
             "judgment": judgment,

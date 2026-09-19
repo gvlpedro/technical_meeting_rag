@@ -1,0 +1,35 @@
+Architecture sync — Order Fulfillment Platform, July 2026.
+
+Refund Issued changes this month, to support a better customer experience. It gains a new field,
+reason — a new, optional string, required: false — so Refund Service can record why a refund was
+issued (for example, "customer request" or "duplicate charge") without a second lookup. Existing
+behavior isn't affected: nothing already reading Refund Issued needs to change anything, since the
+new field is additive and optional. Refund Issued moves from version 1.0 to version 1.1 because of
+this — a minor, backward-compatible bump.
+
+Refund Service is separately modified in this update: it now populates the new reason field
+whenever a customer or an agent provides one at the time the refund is requested; when no reason
+is given, the field is simply omitted.
+
+We added this field now because the support team has been asking for refund reason data to spot
+patterns behind repeat refunds — waiting for a later cycle would mean another month of refunds
+with no reason recorded at all, which the team wants to avoid. Making reason optional, rather than
+required, was chosen over forcing every refund to carry one, because not every refund path
+currently captures a reason yet — requiring it immediately would block refunds from paths that
+don't have that data available; that stricter alternative was considered and rejected for now.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

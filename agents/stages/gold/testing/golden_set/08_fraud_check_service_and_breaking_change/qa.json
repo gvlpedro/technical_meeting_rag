@@ -1,0 +1,12 @@
+[
+  {
+    "question": "Is Fraud Check Service new, and what does it do?",
+    "expected_entity": {"canonical_name": "Fraud Check Service", "entity_type": "component", "operation": "new"},
+    "expected_answer_keywords": ["new"]
+  },
+  {
+    "question": "In this latest update, what changed about the Refund Issued data contract, and is it a breaking change for existing consumers?",
+    "expected_entity": {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "break-change"},
+    "expected_answer_keywords": ["break"]
+  }
+]

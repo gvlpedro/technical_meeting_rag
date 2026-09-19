@@ -1,0 +1,5 @@
+[
+  {"canonical_name": "Refund Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "forward-update"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 7}
+]

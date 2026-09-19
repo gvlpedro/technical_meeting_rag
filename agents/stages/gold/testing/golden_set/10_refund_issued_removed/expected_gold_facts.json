@@ -1,0 +1,4 @@
+[
+  {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "removed"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 10}
+]

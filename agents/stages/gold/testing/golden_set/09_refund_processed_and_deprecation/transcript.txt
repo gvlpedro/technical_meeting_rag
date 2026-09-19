@@ -1,0 +1,42 @@
+Architecture sync — Order Fulfillment Platform, September 2026.
+
+We're consolidating refund data into a single contract this month. Refund Service is being
+modified in this update — once it issues a refund, it now also publishes a new data contract,
+Refund Processed, in addition to what it already published before. Refund Processed is a
+brand-new contract — it has never existed before today. Refund Service is the producer of Refund
+Processed. Refund Processed carries four required fields: refund_id, a required string identifying
+the refund; payment_id, a required string linking back to the original payment; amount_refunded, a
+required nested object with currency and value, giving the refunded amount; and decision, a
+required string holding the fraud-screening outcome, either "approved" or "flagged".
+
+Fraud Check Service is being modified in this update as well — it now subscribes to Refund
+Processed instead of Refund Issued, reading the refund details it needs directly from the
+consolidated contract instead of the older, narrower one.
+
+Refund Issued is being deprecated as of this update. Refund Service will keep publishing it for
+one more release cycle purely for backward compatibility, but no new consumer should be built
+against Refund Issued from here on — Refund Processed replaces it end-to-end, carrying everything
+Refund Issued and Fraud Screening Result used to carry separately, combined into one place.
+
+We're consolidating into Refund Processed now because Fraud Check Service and any future consumer
+kept needing to join two separate events — Refund Issued and Fraud Screening Result — just to get
+a complete picture of one refund, which was becoming error-prone; keeping the two contracts
+separate forever was considered and rejected for that reason. The consequence is that Fraud Check
+Service's own migration to the new contract had to land in the same release as Refund Processed's
+introduction, so it would never miss an event during the cutover.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

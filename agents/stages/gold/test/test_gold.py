@@ -20,6 +20,7 @@ from agents.stages.gold.schemas import (
 from agents.stages.gold.service import (
     _dedupe_ids_by_entity,
     _reciprocal_rank_fusion,
+    _rerank_ids,
     already_extracted,
     current_architecture_diagram,
     current_gold_state,
@@ -36,6 +37,7 @@ from agents.stages.gold.service import (
 )
 from db.models import GoldAlias, GoldEvolution
 from db.session import async_session_factory
+from ingestion.reranker import score_candidates
 
 pytestmark = pytest.mark.anyio
 
@@ -970,3 +972,141 @@ async def test_dedupe_ids_by_entity_resolves_to_the_latest_version_not_the_bette
         assert deduped == [v2_id]
     finally:
         await _cleanup_entity("component", entity_a)
+
+
+# =====================================================================================
+# Reranking (cross-encoder) — see `.tmp/advanced_techniques.md` §3
+# =====================================================================================
+
+
+def test_score_candidates_ranks_a_relevant_document_above_an_irrelevant_one():
+    """A basic sanity check on the cross-encoder itself, isolated from anything Gold-specific:
+    given one document that actually answers the query and one that has nothing to do with
+    it, the relevant one must score higher."""
+    scores = score_candidates(
+        "What is the capital of France?",
+        ["Paris is the capital of France.", "Bananas are a good source of potassium."],
+    )
+    assert scores[0] > scores[1]
+
+
+async def test_rerank_ids_reorders_by_relevance_not_by_input_order():
+    """`_rerank_ids` must produce a NEW ranking from the actual (question, narrative) pairs —
+    not just echo back whatever order `ids` arrived in. The irrelevant row is listed FIRST in
+    the input `ids`; a correct rerank must still put the relevant one first."""
+    relevant_id, irrelevant_id = str(uuid4()), str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=irrelevant_id,
+                canonical_name="Irrelevant Component",
+                operation="new",
+                narrative="This component has nothing to do with payment processing at all.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+            )
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=relevant_id,
+                canonical_name="Payments Gateway",
+                operation="new",
+                narrative="The Payments Gateway processes card payments and refunds for checkout.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(GoldEvolution).where(GoldEvolution.entity_id.in_([relevant_id, irrelevant_id]))
+                )
+            ).scalars().all()
+            id_by_entity = {r.entity_id: r.id for r in rows}
+            irrelevant_row_id, relevant_row_id = id_by_entity[irrelevant_id], id_by_entity[relevant_id]
+
+            # Deliberately wrong input order: the irrelevant row listed first.
+            reranked = await _rerank_ids(
+                session, "How does this system process card payments?", [irrelevant_row_id, relevant_row_id], k=2
+            )
+        assert reranked == [relevant_row_id, irrelevant_row_id]
+    finally:
+        await _cleanup_entity("component", relevant_id)
+        await _cleanup_entity("component", irrelevant_id)
+
+
+async def test_rerank_ids_returns_empty_for_no_ids():
+    async with async_session_factory() as session:
+        assert await _rerank_ids(session, "any question", [], k=5) == []
+
+
+async def test_top_k_gold_evolution_rerank_true_requires_question_text():
+    with pytest.raises(ValueError, match="question_text"):
+        await top_k_gold_evolution(None, [0.0], rerank=True)
+
+
+async def test_top_k_gold_evolution_rerank_promotes_a_semantically_relevant_row():
+    """End-to-end proof that `rerank=True` changes the final top-k, not just that `_rerank_ids`
+    works in isolation. The query embedding is set to the IRRELEVANT row's own embedding
+    (distance 0 to it, guaranteed rank 1 by plain vector search), while the relevant row gets
+    an unrelated embedding (guaranteed to rank worse). Plain vector search (`rerank=False`)
+    must then return the irrelevant row first; `rerank=True`, given the real question text,
+    must promote the actually-relevant row instead."""
+    relevant_id, irrelevant_id = str(uuid4()), str(uuid4())
+    question = "How does this system process card payments?"
+    irrelevant_embedding = await embed_question("This narrative's own embedding, unrelated to the question.")
+    try:
+        async with async_session_factory() as session:
+            session.add(
+                GoldEvolution(
+                    tenant="default",
+                    entity_type="component",
+                    entity_id=irrelevant_id,
+                    canonical_name="Irrelevant Component",
+                    version=1,
+                    operation="new",
+                    narrative="This component has nothing to do with payment processing at all.",
+                    payload={},
+                    embedding=irrelevant_embedding,  # distance 0 to the query vector below
+                    entity_hash="hash-irrelevant",
+                    source_component="meeting.en.vtt",
+                    source_adr_version=1,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            )
+            session.add(
+                GoldEvolution(
+                    tenant="default",
+                    entity_type="component",
+                    entity_id=relevant_id,
+                    canonical_name="Payments Gateway",
+                    version=1,
+                    operation="new",
+                    narrative="The Payments Gateway processes card payments and refunds for checkout.",
+                    payload={},
+                    embedding=await embed_question("A third, unrelated anchor text."),
+                    entity_hash="hash-relevant",
+                    source_component="meeting.en.vtt",
+                    source_adr_version=1,
+                    ingestion_date=date(2026, 6, 1),
+                )
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            without_rerank = await top_k_gold_evolution(session, irrelevant_embedding, k=1, rerank=False)
+            with_rerank = await top_k_gold_evolution(
+                session, irrelevant_embedding, k=1, rerank=True, question_text=question
+            )
+        assert {r.entity_id for r in without_rerank} == {irrelevant_id}
+        assert {r.entity_id for r in with_rerank} == {relevant_id}
+    finally:
+        await _cleanup_entity("component", relevant_id)
+        await _cleanup_entity("component", irrelevant_id)

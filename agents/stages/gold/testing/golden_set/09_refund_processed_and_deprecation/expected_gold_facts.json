@@ -1,0 +1,7 @@
+[
+  {"canonical_name": "Refund Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Fraud Check Service", "entity_type": "component", "operation": "modified"},
+  {"canonical_name": "Refund Processed", "entity_type": "data_contract", "operation": "new", "version": 1},
+  {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "deprecated"},
+  {"canonical_name": "order_fulfillment_platform.en.vtt", "entity_type": "architecture", "operation": "changed", "version": 9}
+]

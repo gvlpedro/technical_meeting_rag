@@ -25,17 +25,23 @@ All of this retrieval code (`find_entity_by_name_in_text`, `is_evolution_questio
 `agents/stages/gold/testing/retrieval.py`. So there is one definition of each retrieval
 strategy, not a separate copy for each caller.
 
-`agents/stages/gold/service.py` adds two refinements on top of plain top-k retrieval. First,
+`agents/stages/gold/service.py` adds three refinements on top of plain top-k retrieval. First,
 `max_distance` drops rows that are too far from the question, instead of always answering
 from the k closest rows regardless of how relevant they are (`--max-distance`, which defaults
 to `DEFAULT_MAX_DISTANCE`; this default is not yet tuned against real usage, see its
 docstring). Second, `latest_versions` tags each retrieved row as current or superseded. This
 way, a question about today's state does not get answered from an old version that happens to
-rank close by embedding similarity.
+rank close by embedding similarity. Third, `--rerank` (opt-in, off by default) repunctuates
+the deduped candidates with a real local cross-encoder before cutting to `k` — see
+`top_k_gold_evolution`'s own docstring and `.tmp/advanced_techniques.md` §3. This flag is what
+actually makes `rerank` reachable from this CLI at all: `top_k_gold_evolution`'s own
+`rerank` parameter has no effect unless some real caller passes `rerank=True`, and before
+this flag existed, nothing in this codebase ever did.
 
 Usage:
     uv run python3 scripts/chat_gold.py
     uv run python3 scripts/chat_gold.py --k 10 --max-distance 0.7
+    uv run python3 scripts/chat_gold.py --rerank
 """
 
 import argparse
@@ -57,7 +63,9 @@ from db.session import async_session_factory
 DEFAULT_K = 8
 
 
-async def _answer(session, question: str, k: int, max_distance: float | None, tenant: str) -> str:
+async def _answer(
+    session, question: str, k: int, max_distance: float | None, tenant: str, rerank: bool
+) -> str:
     if is_evolution_question(question):
         match = await find_entity_by_name_in_text(session, question, tenant=tenant)
         if match is not None:
@@ -67,14 +75,23 @@ async def _answer(session, question: str, k: int, max_distance: float | None, te
 
     vector = await embed_question(question)
     rows = await top_k_gold_evolution(
-        session, vector, k, max_distance=max_distance, tenant=tenant, mode="hybrid", question_text=question
+        session,
+        vector,
+        k,
+        max_distance=max_distance,
+        tenant=tenant,
+        mode="hybrid",
+        question_text=question,
+        rerank=rerank,
     )
     latest = await latest_versions(session, rows)
     return await answer_question(question, rows, latest)
 
 
-async def _chat(k: int, max_distance: float | None, tenant: str) -> None:
+async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -> None:
     print(f"Gold RAG chat (tenant={tenant!r}) — ask about the architecture's evolution. Ctrl+D or 'exit' to quit.\n")
+    if rerank:
+        print("(reranking enabled — each answer costs one extra local cross-encoder pass)\n")
     async with async_session_factory() as session:
         while True:
             try:
@@ -84,7 +101,7 @@ async def _chat(k: int, max_distance: float | None, tenant: str) -> None:
                 return
             if not question or question.lower() in {"exit", "quit"}:
                 return
-            answer = await _answer(session, question, k, max_distance, tenant)
+            answer = await _answer(session, question, k, max_distance, tenant, rerank)
             print(f"\n{answer}\n")
 
 
@@ -98,5 +115,11 @@ if __name__ == "__main__":
         help="Drop rows past this cosine distance (lower = stricter). Pass a negative value to disable.",
     )
     parser.add_argument("--tenant", default="default", help="Only search this tenant's Gold facts.")
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Repunctuate retrieved rows with a local cross-encoder before answering (off by default; "
+        "adds one extra model pass per question).",
+    )
     args = parser.parse_args()
-    asyncio.run(_chat(args.k, args.max_distance if args.max_distance >= 0 else None, args.tenant))
+    asyncio.run(_chat(args.k, args.max_distance if args.max_distance >= 0 else None, args.tenant, args.rerank))

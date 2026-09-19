@@ -1,0 +1,47 @@
+Architecture sync — Order Fulfillment Platform, August 2026.
+
+We're introducing a new component, Fraud Check Service, this month. Fraud Check Service is
+entirely new — it does not exist in any form yet. Fraud Check Service subscribes to Refund Issued;
+whenever Refund Service issues a refund, Fraud Check Service screens it for fraud patterns before
+the refund is allowed to settle.
+
+As soon as it finishes screening a refund, Fraud Check Service publishes a new data contract,
+Fraud Screening Result. Fraud Screening Result is a brand-new contract — it has never existed
+before today. Fraud Check Service is the producer of Fraud Screening Result. Fraud Screening
+Result carries three required fields: refund_id, a required string identifying the refund being
+screened; decision, a required string holding either "approved" or "flagged"; and screened_at, a
+required string holding an ISO-8601 timestamp of when the screening happened. No component
+consumes Fraud Screening Result yet today — that integration is intentionally deferred to a later
+phase, so as of this launch it has no consumer wired up.
+
+Refund Issued itself has a breaking change this month. Its amount_refunded field is changing
+shape: it used to be a plain required number holding just the refunded amount in cents, and it now
+becomes a required nested object with two fields instead — currency and value. This is a breaking
+change: any existing consumer reading amount_refunded as a plain number will break the moment this
+ships. Refund Issued moves from version 1.1 to version 2.0 because of this breaking change.
+
+Refund Service is separately modified in this update: it now serializes amount_refunded as the new
+nested object instead of a plain number whenever it publishes Refund Issued. Refund Issued has no
+existing consumer yet, so there is no coordinated cutover needed with any other component.
+
+We're changing amount_refunded's shape now because the platform is expanding to support refunds in
+multiple currencies, and a plain number can no longer represent that unambiguously — embedding
+both currency and value directly inside amount_refunded was chosen over publishing a second,
+separate field just for currency, to avoid a mismatch between two fields that must always travel
+together; that alternative was considered and rejected.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if the migration causes data drift or reliability issues it can't reconcile with the
+current approach. Implementation includes updating monitoring dashboards, on-call runbooks, and
+internal documentation for every new or changed component and contract described above; each
+migration stage is considered complete once its target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline. Every new data contract on this platform
+is single-tenant to the Order Fulfillment platform, uses a kebab-case identifier matching its
+event name, starts at semantic version 1.0.0 with lifecycle status active, is delivered over
+Kafka, is retained for 90 days, targets 99.9% availability, and is owned by the Order
+Fulfillment platform team.

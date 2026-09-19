@@ -39,6 +39,7 @@ from agents.stages.gold.schemas import (
 from agents.template import load_json_response
 from db.models import GoldAlias, GoldEvolution
 from ingestion.embedder import embed
+from ingestion.reranker import score_candidates
 from llm import router
 
 # `resolve_entity_id` uses this same value on either side of an ambiguous match. A lower value
@@ -641,18 +642,23 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
 # `agents.stages.gold.testing`'s already real-LLM-verified assertions see.
 DEFAULT_MAX_DISTANCE = 0.6
 
-# This many candidates get fetched from a ranking before it is cut down to `k`. Two unrelated
-# things both need this same extra depth, so they share one constant:
+# This many candidates get fetched from a ranking before it is cut down to `k`. Three unrelated
+# things all need this same extra depth, so they share one constant:
 #
 # 1. `mode="hybrid"` fuses TWO rankings (vector, lexical) with RRF. A row that ranks, say, 7th by
 #    embedding similarity and 2nd by lexical match should still be able to win a fused top-5 over
 #    two rows that only rank in the top 5 of one signal and nowhere in the other. Fusing two
 #    lists already cut to `k` would never give a moderate-vector/strong-lexical row that chance.
 # 2. `dedupe=True` (the default, either mode) collapses several VERSIONS of the SAME entity down
-#    to whichever one ranks best, before cutting to `k` — see `_dedupe_ids_by_entity`. Several
-#    near-identical consecutive-version narratives can otherwise occupy most of a plain top-k,
-#    crowding out a genuinely different, relevant entity (`.tmp/advanced_techniques.md` §2, and
-#    the same problem the estimator project's own `dedupe` flag measured and fixed).
+#    to one — its actual latest version, see `_dedupe_ids_by_entity` — before cutting to `k`.
+#    Several near-identical consecutive-version narratives can otherwise occupy most of a plain
+#    top-k, crowding out a genuinely different, relevant entity (`.tmp/advanced_techniques.md`
+#    §2, and the same problem the estimator project's own `dedupe` flag measured and fixed).
+# 3. `rerank=True` (opt-in, off by default) repunctuates the deduped-but-not-yet-cut candidates
+#    with a real cross-encoder before cutting to `k` — see `_rerank_ids` and
+#    `.tmp/advanced_techniques.md` §3. It needs the same wide pool to have anything worth
+#    repunctuating; reranking a list already cut to `k` could never promote a candidate ranked
+#    just outside it.
 RECALL_POOL_SIZE = 30
 
 # Reciprocal Rank Fusion's own smoothing constant. 60 is the value the original RRF paper (Cormack
@@ -803,6 +809,35 @@ async def _dedupe_ids_by_entity(session: AsyncSession, ids: list[int], k: int) -
     return [latest_by_entity[entity_key][1] for entity_key in ordered_entities]
 
 
+async def _rerank_ids(session: AsyncSession, question_text: str, ids: list[int], k: int) -> list[int]:
+    """Repunctuates `ids` — already ranked and deduped, but not yet cut to `k` — with a real
+    local cross-encoder (`ingestion.reranker.score_candidates`), then keeps the best `k`. Unlike
+    `_reciprocal_rank_fusion`, this does not combine rankings: it produces one new ranking,
+    grounded in `(question_text, narrative)` pairs actually read together, and replaces
+    whatever order `ids` arrived in.
+
+    This queries `narrative` fresh for exactly the ids being reranked, not the full
+    `GoldEvolution` row — a cross-encoder only ever reads the narrative text, and fetching less
+    than the whole row keeps this step cheap relative to the model call itself, which already
+    dominates its cost."""
+    if not ids:
+        return []
+    rows = (
+        await session.execute(select(GoldEvolution.id, GoldEvolution.narrative).where(GoldEvolution.id.in_(ids)))
+    ).all()
+    narrative_by_id = {row.id: row.narrative for row in rows}
+    # An id from `ids` with no matching row here would mean it vanished between two queries in
+    # the same call — should not happen, but skipping it is safer than crashing the whole
+    # rerank over one stale id.
+    present_ids = [item_id for item_id in ids if item_id in narrative_by_id]
+    if not present_ids:
+        return []
+
+    scores = await asyncio.to_thread(score_candidates, question_text, [narrative_by_id[i] for i in present_ids])
+    ranked = sorted(zip(present_ids, scores), key=lambda pair: pair[1], reverse=True)
+    return [item_id for item_id, _ in ranked[:k]]
+
+
 async def top_k_gold_evolution(
     session: AsyncSession,
     vector: list[float],
@@ -814,6 +849,7 @@ async def top_k_gold_evolution(
     mode: Literal["vector", "hybrid"] = "vector",
     question_text: str | None = None,
     dedupe: bool = True,
+    rerank: bool = False,
 ) -> list[GoldEvolution]:
     """This runs top-k search over ALL versions of `gold_evolution`, not just the latest version
     per entity. Getting the latest version per entity is `current_gold_state`'s job instead.
@@ -840,12 +876,24 @@ async def top_k_gold_evolution(
     question, not `vector`'s embedding of it, since the lexical branch does its own tokenization,
     never the embedding.
 
-    `dedupe=True` (the default) collapses several versions of the SAME entity down to whichever
-    one ranks best, before cutting to `k` — see `RECALL_POOL_SIZE`'s own comment,
-    `_dedupe_ids_by_entity`, and `.tmp/advanced_techniques.md` §2. `dedupe=False` reproduces the
-    exact pre-deduplication behavior (a plain top-`k` cut, no wider recall fetched first) — kept
-    for tests and callers that need to see the raw, undeduplicated ranking."""
-    recall = RECALL_POOL_SIZE if dedupe else k
+    `dedupe=True` (the default) collapses several versions of the SAME entity down to one — its
+    actual latest version, see `RECALL_POOL_SIZE`'s own comment, `_dedupe_ids_by_entity`, and
+    `.tmp/advanced_techniques.md` §2. `dedupe=False` reproduces the exact pre-deduplication
+    behavior (a plain top-`k` cut, no wider recall fetched first) — kept for tests and callers
+    that need to see the raw, undeduplicated ranking.
+
+    `rerank=True` (opt-in, off by default) repunctuates the deduped-but-not-yet-cut candidates
+    with a real local cross-encoder (`ingestion.reranker.score_candidates`) before cutting to
+    `k` — see `_rerank_ids` and `.tmp/advanced_techniques.md` §3. A cross-encoder reads
+    `(question, narrative)` jointly, one forward pass per candidate, instead of comparing two
+    separately-computed vectors — this can promote a candidate a plain vector/hybrid ranking
+    left just outside `k`, at the cost of one extra model call per candidate. `rerank=True`
+    requires `question_text`, in every mode, including `mode="vector"` — the cross-encoder
+    always needs the original question text, never `vector`'s embedding of it."""
+    if rerank and not question_text:
+        raise ValueError("rerank=True requires question_text (the cross-encoder needs the raw question)")
+
+    recall = RECALL_POOL_SIZE if (dedupe or rerank) else k
     if mode == "vector":
         ids = await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant)
     elif mode == "hybrid":
@@ -863,7 +911,13 @@ async def top_k_gold_evolution(
     else:
         raise ValueError(f"unknown top_k_gold_evolution mode: {mode!r}")
 
-    ids = await _dedupe_ids_by_entity(session, ids, k) if dedupe else ids[:k]
+    # `rerank=True` needs the deduped pool BEFORE it is cut to `k` — reranking a list already
+    # cut to `k` could never promote a candidate ranked just outside it. So dedup is asked for
+    # up to `RECALL_POOL_SIZE` entities here, not `k`, whenever a rerank pass still follows.
+    dedupe_limit = RECALL_POOL_SIZE if rerank else k
+    ids = await _dedupe_ids_by_entity(session, ids, dedupe_limit) if dedupe else ids[:dedupe_limit]
+
+    ids = await _rerank_ids(session, question_text, ids, k) if rerank else ids[:k]
 
     if not ids:
         return []

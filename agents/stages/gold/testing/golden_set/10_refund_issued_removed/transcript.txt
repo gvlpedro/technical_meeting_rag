@@ -1,0 +1,29 @@
+Architecture sync — Order Fulfillment Platform, October 2026.
+
+Refund Issued is being removed entirely in this update. Refund Service stops publishing it
+starting today — the contract is fully retired, not just deprecated anymore. Refund Processed,
+introduced last month, has fully replaced it: every consumer that ever needed refund data now
+reads Refund Processed instead, and nothing in the system still depends on Refund Issued.
+
+Nothing else changes this month. Refund Service, Fraud Check Service, and every other component on
+this platform continue operating exactly as they did last month.
+
+We're removing Refund Issued now, instead of leaving it running indefinitely alongside Refund
+Processed, because keeping two contracts carrying overlapping refund data increases the chance a
+future change gets applied to only one of them and the two silently drift apart — the alternative
+of keeping Refund Issued around indefinitely as a passive legacy contract was considered and
+rejected for that reason. The consequence is that any external system still reading Refund Issued
+must have already migrated to Refund Processed before this release, which the team confirmed was
+already true for every known consumer.
+
+Standing conventions for this platform, restated every meeting so there's no ambiguity: this
+decision is owned by the Order Fulfillment platform team, its decision-record status is
+Accepted, and it does not supersede or get superseded by any other decision — no prior ADR
+constrains it either. Alternatives were evaluated primarily on operational risk and long-term
+maintainability, weighted equally above short-term delivery speed. The team will revisit this
+decision if removing Refund Issued causes data drift or reliability issues it can't reconcile with
+the current approach. Implementation includes updating monitoring dashboards, on-call runbooks,
+and internal documentation for every changed component and contract described above; this
+migration stage is considered complete once all target components pass the existing test suite
+with no new failures, and overall success is measured by zero data loss and no increase in
+checkout error rate versus the pre-migration baseline.

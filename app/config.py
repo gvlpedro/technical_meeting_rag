@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/technical_meeting_rag"
     embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dim: int = 384
+    # A local cross-encoder for `agents.stages.gold.service.top_k_gold_evolution`'s optional
+    # `rerank=True` step. Local, like `embedding_model` above — no external provider, no extra
+    # API key. `ms-marco-MiniLM-L-6-v2` is the standard small, CPU-friendly cross-encoder for
+    # passage reranking (see `.tmp/advanced_techniques.md` §3).
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_size_tokens: int = 400
     chunk_overlap_tokens: int = 50
     input_dir: str = "input"

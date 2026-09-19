@@ -1,0 +1,12 @@
+[
+  {
+    "question": "What is the current status of the Refund Issued data contract as of this latest update?",
+    "expected_entity": {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "deprecated"},
+    "expected_answer_keywords": ["deprecat"]
+  },
+  {
+    "question": "What fields does the Refund Processed contract carry, and which component produces it?",
+    "expected_entity": {"canonical_name": "Refund Processed", "entity_type": "data_contract", "operation": "new"},
+    "expected_answer_keywords": ["refund service"]
+  }
+]

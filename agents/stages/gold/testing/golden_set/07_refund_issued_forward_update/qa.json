@@ -1,0 +1,12 @@
+[
+  {
+    "question": "How did Refund Service change in this latest update?",
+    "expected_entity": {"canonical_name": "Refund Service", "entity_type": "component", "operation": "modified"},
+    "expected_answer_keywords": ["reason"]
+  },
+  {
+    "question": "Is the latest change to the Refund Issued contract backward compatible for existing consumers?",
+    "expected_entity": {"canonical_name": "Refund Issued", "entity_type": "data_contract", "operation": "forward-update"},
+    "expected_answer_keywords": ["compatible", "optional", "forward"]
+  }
+]
