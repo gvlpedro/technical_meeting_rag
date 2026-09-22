@@ -2,11 +2,21 @@
 
 ## 1. Metadata
 
+**Never draft a clarification question for Date, Participants, or Status — they are excluded
+from this checklist on purpose, not an oversight:**
+
+* **Participants/Authors** is always the logged-in reviewer running this upload, stamped onto
+  the document's `**Authors:**` line automatically after generation — never something the
+  transcript needs to state or a clarification needs to resolve.
+* **Status** has no field anywhere in the actual generated document at all — none of this
+  checklist's other fields (Affected Components, ADR, diagrams) map onto a Status field. It is
+  simply not part of what this pipeline produces, so it can never be a real gap.
+* **Date** only belongs in the output when the transcript or a clarification explicitly states
+  one. Its absence is not a gap to fill — every document already carries its own ingestion date
+  outside this checklist, so there is no missing-metadata reason to ask for it.
+
 | Field                              | Description                                                                |
 | ---------------------------------- | -------------------------------------------------------------------------- |
-| **Date**                           | Date of the architecture description or evolution                          |
-| **Participants**                   | People involved in defining or reviewing the architecture                  |
-| **Status**                         | `Proposed` / `Accepted` / `Implemented` / `Superseded`                     |
 | **Scope**                          | `Global` / `Subsystem` / `Component`                                       |
 | **Type**                           | `Current Architecture` / `Architecture Evolution`                          |
 | **Affected Components**            | Components that are added, modified, removed, or whose dependencies change |

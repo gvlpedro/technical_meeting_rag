@@ -1,10 +1,9 @@
 # Data Contract Specification (per contract)
 
-This is the completeness spec `data_contract_questions.jinja` reads as its `ARCHITECTURE_CHANGES`
--equivalent input — what a single data contract needs in order to have a complete
-[Open Data Contract Standard (ODCS) v3.0.0](https://bitol-io.github.io/open-data-contract-standard/)
-document. Applied once per contract in `IDENTIFIED_DATA_CONTRACTS` (drafted by the architecture
-stage — `prompts/architecture_questions/combined.jinja` — not rediscovered here).
+This is the completeness specification for what a single data contract needs in order to have a
+complete [Open Data Contract Standard (ODCS) v3.0.0](https://bitol-io.github.io/open-data-contract-standard/)
+document. Applied once per contract in `IDENTIFIED_DATA_CONTRACTS` (already identified by the
+architecture stage — not rediscovered here).
 
 ---
 
@@ -13,11 +12,21 @@ stage — `prompts/architecture_questions/combined.jinja` — not rediscovered h
 | Field         | Description                                                          |
 | ------------- | ---------------------------------------------------------------------|
 | **id**        | Stable kebab-case identifier for the contract                        |
-| **name**      | Human-readable contract name                                         |
+| **name**      | Human-readable contract name — names the DATA, not the connection    |
 | **version**   | Current version (semver)                                             |
 | **status**    | `draft` / `active` / `deprecated` / `retired`                        |
 | **tenant**    | Owning organizational unit, if the system has more than one          |
 | **domain**    | `<producer component>` -> `<consumer component>`                     |
+
+<!-- A contract's NAME identifies the data it carries (`user-authentication`,
+`order-created`, `payment-confirmation`) — a noun phrase for what is exchanged, grounded in
+its purpose from Description below. It is never `<component>-to-<component>`: that pattern
+describes the CONNECTION, and `domain` above already captures it. Two different contracts
+between the same two components need two different, data-specific names for exactly this
+reason — `domain` already says which components are involved; `name` is what tells one
+contract apart from another when a producer and consumer exchange more than one kind of data.
+A `<component>-to-<component>` name is a sign the real name was never actually established —
+ask for the actual data name instead of defaulting to this shape. -->
 
 ---
 

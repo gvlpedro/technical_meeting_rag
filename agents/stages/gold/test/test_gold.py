@@ -5,6 +5,7 @@ See `gold_process.md` §3 and §5. `tests/test_clarification_loop.py`'s Gold-ext
 covers the graph-level, faked-LLM path end to end.
 """
 
+import asyncio
 from datetime import date
 from uuid import uuid4
 
@@ -15,7 +16,9 @@ from agents.stages.gold.schemas import (
     ArchitecturePayload,
     ComponentPayload,
     DataContractPayload,
+    ExtractedComponent,
     ExtractedDataContract,
+    GoldExtractionResult,
 )
 from agents.stages.gold.service import (
     _dedupe_ids_by_entity,
@@ -27,6 +30,7 @@ from agents.stages.gold.service import (
     embed_question,
     ensure_alias,
     entity_history,
+    extract_and_persist_gold_facts,
     find_entity_by_name_in_text,
     is_evolution_question,
     parse_odcs_spec,
@@ -357,6 +361,72 @@ async def test_already_extracted_true_after_a_write_false_before():
         assert after is True
     finally:
         await _cleanup_entity(entity_type, entity_id)
+
+
+async def test_extract_and_persist_gold_facts_serializes_concurrent_calls_for_the_same_adr_version(
+    monkeypatch,
+):
+    """Regression test for a real production bug: the frontend's "Publish" button used to run
+    `finalize_document` inline, with no in-progress guard — unlike every other action button in
+    `frontend/app.py`. A genuine double-click could fire two overlapping `POST /transcriptions/
+    finalize` requests. Both used to read `already_extracted() == False` before either had
+    committed (a plain check-then-act, no row lock), so both ran their own LLM extraction and
+    both called `persist_entity_version` for every entity — which only no-ops on an EXACT hash
+    match, so two independently phrased extractions produced a spurious version 2 for entities
+    that should have had exactly one version. This was observed in production as a component,
+    both its data contracts, and the architecture entity all showing a v1 AND a v2 from what was
+    a single Publish click.
+
+    This fakes `extract_gold_facts_for_source` to return a DIFFERENT narrative on every call —
+    deliberately the worst case, guaranteeing a version bump if the two calls are not
+    serialized — then fires two concurrent `extract_and_persist_gold_facts` calls for the exact
+    same `(tenant, source_component, source_adr_version)`, each on its own `AsyncSession`, the
+    same way two overlapping HTTP requests each get their own session. `extract_and_persist_
+    gold_facts`'s `pg_advisory_xact_lock` must serialize them: exactly one call should actually
+    extract, and exactly one `gold_evolution` version should exist afterward."""
+    tenant = f"test-race-{uuid4().hex[:8]}"
+    source_component = f"race-{uuid4().hex[:8]}.en.vtt"
+    call_count = 0
+
+    async def fake_extract(adr_content: str) -> GoldExtractionResult:
+        nonlocal call_count
+        call_count += 1
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(
+                    name="Race Service", status="new", narrative=f"narrative variant {call_count}"
+                )
+            ],
+            contracts=[],
+            architecture_change="changed",
+            architecture_narrative=f"architecture narrative variant {call_count}",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract)
+
+    async def _run() -> bool:
+        async with async_session_factory() as session:
+            extracted = await extract_and_persist_gold_facts(
+                session, "adr content", source_component, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+            return extracted
+
+    results = await asyncio.gather(_run(), _run())
+    assert sorted(results) == [False, True]  # exactly one of the two calls actually extracted
+
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(GoldEvolution).where(
+                    GoldEvolution.tenant == tenant,
+                    GoldEvolution.source_component == source_component,
+                    GoldEvolution.canonical_name == "Race Service",
+                )
+            )
+        ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].version == 1
 
 
 async def test_current_gold_state_returns_only_the_latest_version_per_entity():

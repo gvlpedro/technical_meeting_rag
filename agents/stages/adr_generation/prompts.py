@@ -7,6 +7,7 @@ from typing import TypedDict
 
 import jinja2
 
+from agents.state import MentionedComponentItem, MentionedDataContractItem
 from agents.template import PROMPTS_DIR
 
 _ROLE_PATH = PROMPTS_DIR / "adr_generation" / "generator.jinja"
@@ -42,8 +43,24 @@ def _qa_pairs_block(clarifications: list[QaPair]) -> str:
     return "\n".join(lines)
 
 
+def _mentioned_components_block(components: list[MentionedComponentItem]) -> str:
+    if not components:
+        return "(none identified)"
+    return "\n".join(f"- {c['name']}: {c['status']}" for c in components)
+
+
+def _mentioned_data_contracts_block(contracts: list[MentionedDataContractItem]) -> str:
+    if not contracts:
+        return "(none identified)"
+    return "\n".join(f"- {c['name']}: {c['producer']} -> {c['consumer']} ({c['action']})" for c in contracts)
+
+
 def build_adr_generation_prompt(
-    transcript_text: str, clarifications: list[QaPair], previous_architecture_diagram: str = ""
+    transcript_text: str,
+    clarifications: list[QaPair],
+    previous_architecture_diagram: str = "",
+    mentioned_components: list[MentionedComponentItem] | None = None,
+    mentioned_data_contracts: list[MentionedDataContractItem] | None = None,
 ) -> list[dict]:
     """Renders `prompts/adr_generation/generator.jinja` as a real Jinja template. See that file
     for the actual generation rules: component-inclusion discipline, no placeholders, and
@@ -61,11 +78,27 @@ def build_adr_generation_prompt(
     The "regenerate with feedback" endpoint in `app/routers/frontend.py` passes a different value
     here instead: `agents.stages.adr_generation.service.own_previous_architecture_diagram`. That
     value is this very draft's own §2, unchanged by the new feedback. It is not Gold's state
-    again."""
+    again.
+
+    `mentioned_components`/`mentioned_data_contracts` are the architecture-questions
+    identification stage's own transcript-grounded classification of every component/contract
+    it found (`agents.graph.generate_architecture_questions`'s `state["mentioned_components"]`/
+    `state["mentioned_data_contracts"]`). Without these, this call had to independently
+    re-derive each component's status from `transcript_text`/`clarifications` alone — and could
+    (and did, in a real case) reach a stricter, inconsistent conclusion than identification
+    already had, e.g. excluding a component identification had already confirmed `new` just
+    because no clarification answer happened to restate it in words. Passing them closes that
+    gap: `prompts/adr_generation/generator.jinja` now treats a confirmed (non-`unknown`) entry
+    here as part of `DOCUMENTED_CONTENT`, the same as an answered clarification. Both default to
+    `None` (rendered as "(none identified)") because the "regenerate with feedback" endpoint has
+    no access to this stage's output — it re-drafts from persisted `SilverClarification` rows
+    only, long after the identification stage's own in-memory graph state is gone."""
     role_template = jinja2.Template(load_adr_generation_role())
     prompt = role_template.render(
         transcript=transcript_text,
         clarifications=_qa_pairs_block(clarifications),
         previous_architecture_diagram=previous_architecture_diagram,
+        identified_components=_mentioned_components_block(mentioned_components or []),
+        identified_data_contracts=_mentioned_data_contracts_block(mentioned_data_contracts or []),
     )
     return [{"role": "user", "content": prompt}]

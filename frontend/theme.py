@@ -15,6 +15,7 @@ versions. Streamlit's own docs recommend this same approach for custom CSS.
 """
 
 import base64
+import html
 from pathlib import Path
 
 import streamlit as st
@@ -439,6 +440,104 @@ def score_bar_html(score: int) -> str:
       <div style="background:var(--surface-elevated); border-radius:6px; height:8px;
                   overflow:hidden; border:1px solid var(--border-subtle);">
         <div style="width:{score}%; background:{color}; height:100%;"></div>
+      </div>
+    </div>
+    """
+
+
+def adr_metadata_header_html(
+    source_component: str,
+    version: int,
+    ingestion_date: str,
+    authored_by: str,
+    created_at: str,
+    content_hash: str,
+) -> str:
+    """Builds the colored metadata header shown above a published ADR's content, on the
+    "Architecture history" → "View ADR" page. Blue, not yellow — yellow is reserved for the
+    Gold-entity cards `gold_entity_cards_html` draws below the ADR's own content, so the two
+    blocks read as visually distinct without sharing a color."""
+    fields = [
+        ("Meeting date", ingestion_date),
+        ("Authored by", authored_by or "—"),
+        ("Generated at", created_at.split("T", 1)[0]),
+        ("Content hash", content_hash[:12]),
+    ]
+    fields_html = "".join(
+        f"""<div>
+              <div style="font-family:var(--mono); font-size:0.68rem; color:var(--blue-text);
+                          text-transform:uppercase; letter-spacing:0.04em; margin-bottom:2px;">{html.escape(label)}</div>
+              <div style="font-size:0.85rem; color:var(--text-primary);">{html.escape(str(value))}</div>
+            </div>"""
+        for label, value in fields
+    )
+    return f"""
+    <div style="background:rgba(96, 165, 250, 0.08); border:1px solid rgba(96, 165, 250, 0.35);
+                border-left:4px solid var(--blue); border-radius:8px; padding:14px 18px; margin:4px 0 16px 0;">
+      <div style="font-size:1.05rem; font-weight:700; color:var(--text-primary); margin-bottom:10px;">
+        {html.escape(source_component)} <span style="color:var(--blue-text); font-weight:600;">v{version}</span>
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:20px;">
+        {fields_html}
+      </div>
+    </div>
+    """
+
+
+# Maps a `gold_evolution.operation` value to a readable color, spanning `ComponentStatus`,
+# `ContractAction`, and `ArchitectureChangeType` (`agents/shared.py`, `agents/stages/gold/
+# schemas.py`) — this one dict covers all three, since a card never knows in advance which
+# entity_type it is drawing. Unrecognized values fall back to `--text-muted` rather than KeyError.
+_OPERATION_COLORS = {
+    "new": "var(--green-text)",
+    "forward-update": "var(--blue-text)",
+    "modified": "var(--blue-text)",
+    "changed": "var(--blue-text)",
+    "break-change": "var(--red-text)",
+    "removed": "var(--red-text)",
+    "deprecated": "var(--orange-text)",
+    "unchanged": "var(--text-muted)",
+    "unknown": "var(--text-muted)",
+}
+
+
+def gold_entity_cards_html(entities: list[dict]) -> str:
+    """Builds the "Generated in Gold" card row shown at the end of a published ADR — one card
+    per `gold_evolution` row this exact ADR version actually wrote (see
+    `agents.stages.gold.service.gold_entities_for_adr`). Each `entities` item needs
+    `entity_type`, `canonical_name`, `operation`, and `version` keys — the same shape
+    `ArchitectureHistoryGoldEntity` sends over the wire.
+
+    A very soft yellow background (`rgba(250, 204, 21, 0.10)`, derived from the theme's own
+    `--yellow`, not a new color) sets this block apart from the rest of the page, so a reader
+    can tell at a glance what THIS ADR added to Gold, separate from the ADR's own prose above."""
+    if not entities:
+        return (
+            '<p style="color:var(--text-muted); font-size:0.85rem;">'
+            "This ADR version did not add or change anything in Gold.</p>"
+        )
+    cards = "".join(
+        f"""<div style="background:rgba(250, 204, 21, 0.10); border:1px solid rgba(250, 204, 21, 0.4);
+                    border-radius:8px; padding:10px 14px; min-width:200px;">
+              <div style="font-family:var(--mono); font-size:0.65rem; color:var(--yellow-text);
+                          text-transform:uppercase; letter-spacing:0.04em;">{html.escape(entity["entity_type"])}</div>
+              <div style="font-size:0.9rem; font-weight:600; color:var(--text-primary); margin:2px 0 4px 0;">
+                {html.escape(entity["canonical_name"])}
+              </div>
+              <div style="font-size:0.75rem; color:{_OPERATION_COLORS.get(entity["operation"], "var(--text-muted)")};">
+                {html.escape(entity["operation"])} · v{entity["version"]}
+              </div>
+            </div>"""
+        for entity in entities
+    )
+    return f"""
+    <div style="margin-top:6px;">
+      <div style="font-family:var(--mono); font-size:0.72rem; color:var(--text-muted);
+                  text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
+        Generated in Gold — {len(entities)} entit{"y" if len(entities) == 1 else "ies"}
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px;">
+        {cards}
       </div>
     </div>
     """

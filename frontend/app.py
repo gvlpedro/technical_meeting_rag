@@ -196,10 +196,35 @@ def _render_adr_candidates(username: str, result: dict) -> None:
             ask_more_key = f"ask_more_in_progress::{source}"
             pending_key = f"ask_more_pending::{source}"
             no_questions_key = f"ask_more_no_questions::{source}"
+            # Bumped every time a fresh batch of pending questions is stored (see the
+            # `ask_result["questions"]` branch below). Each question row's widget key includes
+            # this round number. Without it, round 2's row at index 0 reuses round 1's row-0
+            # widget key, and Streamlit restores round 1's stale typed answer (or its Irrelevant/
+            # Infer/Suggest selection) into round 2's, DIFFERENT, question — it looks
+            # "pre-answered" even though the reviewer never touched it this round.
+            round_key = f"ask_more_round::{source}"
+            # "Publish" calls `finalize_document`, which persists a SilverDocument version AND
+            # runs Gold extraction — the only non-idempotent-by-click action on this whole card.
+            # Every OTHER action here (Regenerate, Ask me more, Submit answers) already follows
+            # the two-phase "set an in-progress flag, `st.rerun()`, THEN do the real work on the
+            # next run" pattern below, which disables its own button the instant it is clicked.
+            # Publish used to do its work inline, in the same run as the click, with no such
+            # flag — so a genuine double-click (two widget-trigger events queued by the browser
+            # before Streamlit re-rendered the button as disabled) could fire two overlapping
+            # `POST /transcriptions/finalize` requests. Both can pass `extract_and_persist_
+            # gold_facts`'s `already_extracted` check before either commits (that check has no
+            # row lock), so both run their own non-deterministic LLM extraction — producing a
+            # spurious version-2 in `gold_evolution` for any entity whose two independent
+            # extractions did not phrase the narrative byte-for-byte identically. This flag
+            # closes the client-side half of that race; `agents/stages/gold/service.py`'s
+            # `extract_and_persist_gold_facts` closes the other half with a Postgres advisory
+            # lock, for any caller that is not this button (two browser tabs, a retried request).
+            publish_key = f"publish_in_progress::{source}"
 
             regenerating = st.session_state.setdefault(regen_key, False)
             asking_more = st.session_state.setdefault(ask_more_key, False)
-            busy = regenerating or asking_more
+            publishing = st.session_state.setdefault(publish_key, False)
+            busy = regenerating or asking_more or publishing
 
             if st.session_state.pop(no_questions_key, False):
                 st.info("No new questions to ask — the transcript already covers everything found so far.")
@@ -213,9 +238,10 @@ def _render_adr_candidates(username: str, result: dict) -> None:
             if pending_questions:
                 st.info("Answer these to add more detail, then submit to regenerate the ADR.")
                 answers: dict[str, str] = {}
+                round_number = st.session_state.get(round_key, 0)
                 for index, question in enumerate(pending_questions):
                     answers[question] = _render_question_row(
-                        question, key_prefix=f"ask_more_answer::{source}::{index}", disabled=busy
+                        question, key_prefix=f"ask_more_answer::{source}::{round_number}::{index}", disabled=busy
                     )
                 if st.button(
                     "Submit answers", key=f"ask_more_submit::{source}", type="primary", disabled=busy
@@ -252,6 +278,11 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                     st.rerun()
 
                 if launch_col.button("Publish", key=f"launch::{source}", type="primary", disabled=busy):
+                    st.session_state[publish_key] = True
+                    st.rerun()
+
+            if st.session_state[publish_key]:
+                with st.spinner("Publishing — writing to Silver and Gold. Please wait, do not click again."):
                     try:
                         finalize_result = api_client.finalize_document(username, source, candidate["document"])
                         candidates[source]["finalized"] = True
@@ -270,7 +301,9 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                             _reset_input_transcription_state(result["thread_id"], thread_sources)
                     except requests.HTTPError as exc:
                         st.error(f"Publish failed: {_error_detail(exc)}")
-                    st.rerun()
+                    finally:
+                        st.session_state[publish_key] = False
+                st.rerun()
 
             if st.session_state[ask_more_key]:
                 with st.spinner("Drafting new clarification questions — same question limit as the original upload..."):
@@ -288,6 +321,7 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                         )
                         if ask_result["questions"]:
                             st.session_state[pending_key] = ask_result["questions"]
+                            st.session_state[round_key] = st.session_state.get(round_key, 0) + 1
                         else:
                             st.session_state[no_questions_key] = True
                     except requests.HTTPError as exc:
@@ -420,9 +454,21 @@ def _input_transcription_tab(username: str) -> None:
         # de-dupes exact-duplicate questions (agents.graph._top_questions). But keying widgets
         # off arbitrarily long, LLM-generated question text would still be fragile. An index is
         # always unique, and always short.
+        #
+        # `round_key`/`round_number` are the other half of that key. `thread_id` alone is NOT
+        # unique per batch of questions: `route_after_boss` can loop back to `ask_human` a
+        # second time within the SAME thread_id (one material-contradiction escalation, see
+        # `agents/graph.py`), so a second, different batch can land at the exact same
+        # `(thread_id, index)` pair a first batch already used. Without the round number, that
+        # second batch's row 0 would reuse the first batch's row-0 widget key, and Streamlit
+        # would restore the first batch's stale typed answer — or its Irrelevant/Infer/Suggest
+        # selection — into the second batch's unrelated question. See the matching "Ask me
+        # more" fix below, which bumps `ask_more_round::{source}` for the same reason.
+        round_key = f"resume_round::{result['thread_id']}"
+        round_number = st.session_state.get(round_key, 0)
         for index, question in enumerate(result["pending_questions"]):
             answers[question] = _render_question_row(
-                question, key_prefix=f"answer::{result['thread_id']}::{index}", disabled=resuming
+                question, key_prefix=f"answer::{result['thread_id']}::{round_number}::{index}", disabled=resuming
             )
 
         if st.button("Submit answers", type="primary", disabled=resuming):
@@ -437,9 +483,15 @@ def _input_transcription_tab(username: str) -> None:
                 "take a few minutes. Please wait, do not click again."
             ):
                 try:
-                    st.session_state.last_upload = api_client.resume_transcription(
+                    resume_result = api_client.resume_transcription(
                         st.session_state.resume_thread_id, st.session_state.resume_answers, username
                     )
+                    st.session_state.last_upload = resume_result
+                    if resume_result["status"] == "pending_review":
+                        # A second (or later) batch of pending questions for the SAME
+                        # thread_id — see the `round_key` comment above for why this must bump.
+                        resume_round_key = f"resume_round::{resume_result['thread_id']}"
+                        st.session_state[resume_round_key] = st.session_state.get(resume_round_key, 0) + 1
                 except requests.HTTPError as exc:
                     st.error(f"Resume failed: {_error_detail(exc)}")
                 finally:
@@ -503,7 +555,6 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
     (`?view_adr=...&view_adr_version=...`, read by `main()`). It shows a single, read-only
     ADR. It looks up that ADR from the same `architecture_history` payload the table itself
     renders from. There is no separate endpoint for this."""
-    st.caption(f"Architecture history — {source_component} v{version}")
     history = api_client.architecture_history(username)
     match = next(
         (
@@ -514,9 +565,41 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
         None,
     )
     if match is None:
+        st.caption(f"Architecture history — {source_component} v{version}")
         st.error(f"No ADR found for {source_component!r} version {version}.")
         return
+
+    # The caption and the download button share one row, button on the right, so the reader
+    # can grab the raw markdown without scrolling past the whole document first.
+    caption_col, download_col = st.columns([5, 1])
+    with caption_col:
+        st.caption(f"Architecture history — {source_component} v{version}")
+    with download_col:
+        st.download_button(
+            "⬇️ Markdown",
+            data=match["content"],
+            file_name=f"{source_component}-v{version}.md",
+            mime="text/markdown",
+        )
+
+    # Blue metadata header — every field this ADR version carries — followed by the document
+    # itself, then the soft-yellow Gold cards for whatever this exact version generated. Both
+    # helpers live in `theme.py`, next to `score_bar_html`, following the same "HTML string
+    # built in Python, rendered with `unsafe_allow_html`" convention as the rest of this app.
+    st.markdown(
+        theme.adr_metadata_header_html(
+            source_component=match["source_component"],
+            version=match["version"],
+            ingestion_date=match["ingestion_date"],
+            authored_by=match["authored_by"],
+            created_at=match["created_at"],
+            content_hash=match["content_hash"],
+        ),
+        unsafe_allow_html=True,
+    )
     st.markdown(match["content"])
+    st.markdown("---")
+    st.markdown(theme.gold_entity_cards_html(match["gold_entities"]), unsafe_allow_html=True)
 
 
 def _chat_tab(username: str) -> None:
@@ -530,9 +613,10 @@ def _chat_tab(username: str) -> None:
 
     question = st.chat_input("Ask about the architecture's evolution")
     if question:
+        prior_turns = list(history)
         history.append(("user", question))
         with st.spinner("Thinking..."):
-            result = api_client.chat(username, question)
+            result = api_client.chat(username, question, history=prior_turns)
         history.append(("assistant", result["answer"]))
         st.rerun()
 

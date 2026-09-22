@@ -1,6 +1,7 @@
 .atl
 .env
 output/*
+backups/
 __pycache__/
 .download_transcript.pid
 .idea

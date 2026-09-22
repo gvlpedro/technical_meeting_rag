@@ -113,10 +113,19 @@ def architecture_history(username: str) -> dict:
     return response.json()
 
 
-def chat(username: str, question: str, k: int = 8) -> dict:
+def chat(username: str, question: str, k: int = 8, history: list[tuple[str, str]] | None = None) -> dict:
+    """`history` is the chat's prior turns, oldest first, as `(role, content)` pairs with
+    `role` one of `"user"`/`"assistant"` — the caller's own `chat_history`, excluding the
+    current `question`. Enables the backend to resolve follow-up references ("who approved
+    it?") — see `.tmp/advanced_techniques.md` §8."""
     response = requests.post(
         f"{BACKEND_URL}/v1/frontend/chat",
-        json={"username": username, "question": question, "k": k},
+        json={
+            "username": username,
+            "question": question,
+            "k": k,
+            "history": [{"role": role, "content": content} for role, content in (history or [])],
+        },
         timeout=60,
     )
     response.raise_for_status()

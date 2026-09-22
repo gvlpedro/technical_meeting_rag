@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
@@ -159,6 +159,29 @@ async def already_extracted(
         .limit(1)
     )
     return result.scalar_one_or_none() is not None
+
+
+async def gold_entities_for_adr(
+    session: AsyncSession, source_component: str, source_adr_version: int, *, tenant: str = "default"
+) -> Sequence[GoldEvolution]:
+    """Returns every `gold_evolution` row this exact `(tenant, source_component,
+    source_adr_version)` triple actually wrote — every Gold entity this specific ADR version
+    created or changed. `persist_entity_version` is a hash-compare-then-bump no-op when an
+    entity's asserted state is unchanged from its prior version, so an entity this ADR merely
+    re-confirmed without altering has no row here; only entities this ADR version genuinely
+    added or changed do. This is the same `(tenant, source_component, source_adr_version)`
+    filter `already_extracted` uses to check existence — this returns the full rows instead, for
+    the frontend's "what did this ADR generate in Gold" view."""
+    result = await session.execute(
+        select(GoldEvolution)
+        .where(
+            GoldEvolution.tenant == tenant,
+            GoldEvolution.source_component == source_component,
+            GoldEvolution.source_adr_version == source_adr_version,
+        )
+        .order_by(GoldEvolution.entity_type, GoldEvolution.canonical_name)
+    )
+    return result.scalars().all()
 
 
 async def _lookup_entity_id(
@@ -412,7 +435,30 @@ async def extract_and_persist_gold_facts(
     `force=True` re-runs the LLM call regardless. Use this, for example, after changing the
     extraction prompt or model and wanting to reprocess history. Even with `force=True`,
     `persist_entity_version`'s own hash-compare-then-bump still no-ops any entity whose result
-    comes back identical. This function returns `True` when it actually extracted."""
+    comes back identical. This function returns `True` when it actually extracted.
+
+    `pg_advisory_xact_lock` below closes a real race in the `already_extracted` check above it:
+    without a lock, two overlapping calls for the exact same `(tenant, source_component,
+    source_adr_version)` — for example the frontend's "Publish" button double-clicked, sending
+    two overlapping `POST /transcriptions/finalize` requests — can both read `already_extracted
+    == False` before either has committed, so both go on to call the (non-deterministic) LLM
+    extraction and both call `persist_entity_version` for every entity. `persist_entity_version`
+    itself only no-ops on an EXACT hash match; two independent LLM calls rarely phrase a
+    narrative byte-for-byte identically, so the second call's entities each look like a genuine,
+    if spurious, new version — this was observed in practice as every entity from one ADR
+    getting both a v1 and a v2. The lock serializes the whole check-extract-persist sequence per
+    `(tenant, source_component, source_adr_version)`: a second overlapping call blocks here until
+    the first commits, then re-reads `already_extracted` as `True` and returns immediately,
+    instead of racing it. It is transaction-scoped (`_xact_`), so it releases itself at whatever
+    commit or rollback ends this call's transaction — never held past this request. The frontend
+    also disables the Publish button the instant it is clicked (see `frontend/app.py`'s
+    `publish_key`), which prevents the common case from firing two requests at all; this lock is
+    the guarantee for every other path into this function (a second browser tab, a retried
+    request, a concurrent `scripts/backfill_gold.py` run), not a fallback for the frontend fix."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key), :version)"),
+        {"lock_key": f"{tenant}:{source_component}", "version": source_adr_version},
+    )
     if not force and await already_extracted(session, source_component, source_adr_version, tenant=tenant):
         return False
 
@@ -956,8 +1002,30 @@ def _version_tag(row: GoldEvolution, latest: dict[tuple[str, str], int] | None) 
     return f" [superseded — latest is version {latest_version}]"
 
 
+# `answer_question`/`answer_evolution_question` only ever render this many of the most recent
+# `history` messages, even if a caller passes more. This bounds prompt size and cost for a
+# long-running chat session — resolving a follow-up question only ever needs a few turns of
+# context, never the whole conversation since login. See `.tmp/advanced_techniques.md` §8.
+MAX_HISTORY_MESSAGES = 6
+
+
+def _format_history_block(history: list[tuple[str, str]] | None) -> str:
+    """Renders the last `MAX_HISTORY_MESSAGES` of `history` — a list of `(role, content)` pairs,
+    `role` one of `"user"`/`"assistant"`, oldest first, matching `frontend/app.py`'s own
+    `chat_history` shape — as one labeled block for a prompt. Returns `""` when there is no
+    history, so a caller can always concatenate this in without an `if` of its own."""
+    if not history:
+        return ""
+    trimmed = history[-MAX_HISTORY_MESSAGES:]
+    lines = "\n".join(f"{role.capitalize()}: {content}" for role, content in trimmed)
+    return f"Previous conversation (most recent last):\n{lines}\n\n"
+
+
 async def answer_question(
-    question: str, rows: list[GoldEvolution], latest: dict[tuple[str, str], int] | None = None
+    question: str,
+    rows: list[GoldEvolution],
+    latest: dict[tuple[str, str], int] | None = None,
+    history: list[tuple[str, str]] | None = None,
 ) -> str:
     """Drafts a plain-text answer to `question` from the retrieved rows. This is the
     RAG-consumer step that top-k retrieval alone does not cover. It returns plain text, with no
@@ -968,7 +1036,16 @@ async def answer_question(
     or `[superseded — latest is version N]`, in the context the LLM sees. This stops a question
     about current state from getting answered using a row that ranked close by embedding
     similarity but has since been superseded. Without `latest`, every row is presented the same
-    way. That is what happens today when a caller does not pass it."""
+    way. That is what happens today when a caller does not pass it.
+
+    `history`, when given, is the most recent turns of this same chat session (see
+    `_format_history_block` and `.tmp/advanced_techniques.md` §8). It is rendered as its own
+    labeled block, never merged into `question` itself, so the model always sees one clean,
+    unambiguous line to answer. This is what lets a follow-up like "and who approved it?"
+    resolve "it" to whatever entity the previous turn was actually about, instead of being
+    answered as a brand-new, context-free question — the prompt below is explicit that history
+    may only be used to resolve what the question REFERS to, never as a source of facts on its
+    own; every fact in the answer must still come from `rows`."""
     if not rows:
         return "No relevant Gold facts were found for this question."
     context = "\n\n".join(
@@ -986,7 +1063,11 @@ async def answer_question(
                 "state its current/latest status explicitly, preferring facts tagged "
                 "[latest version] for that; facts tagged [superseded] describe history, not "
                 "the current state, and should only be used to answer questions about how "
-                "something evolved over time.\n\n"
+                "something evolved over time. If a previous conversation is given below, use it "
+                "ONLY to resolve what the question refers to (a pronoun, \"it\", \"that "
+                "component\") — never as a source of facts on its own; every fact in your "
+                "answer must still come from the retrieved facts.\n\n"
+                f"{_format_history_block(history)}"
                 f"Retrieved facts:\n{context}\n\nQuestion: {question}"
             ),
         }
@@ -1119,7 +1200,9 @@ def _evolution_step_line(row: GoldEvolution) -> str:
     )
 
 
-async def answer_evolution_question(question: str, canonical_name: str, rows: list[GoldEvolution]) -> str:
+async def answer_evolution_question(
+    question: str, canonical_name: str, rows: list[GoldEvolution], history: list[tuple[str, str]] | None = None
+) -> str:
     """Drafts a plain-text answer to a "how has X evolved over time" question, from EVERY
     version `entity_history` returned for one entity, oldest first. This is deliberately a
     separate function from `answer_question`, not a shared one with an extra flag: that
@@ -1135,7 +1218,15 @@ async def answer_evolution_question(question: str, canonical_name: str, rows: li
     why, then each later step and its own reason, in the style of "X introduced this on Y for
     Z, then evolved on V because...". `rows` empty means the entity was never found; the caller
     is expected to have already checked that via `find_entity_by_name_in_text` before calling
-    this, but this function still degrades safely instead of sending an empty prompt."""
+    this, but this function still degrades safely instead of sending an empty prompt.
+
+    `history`, when given, is the most recent turns of this same chat session — see
+    `_format_history_block` and `.tmp/advanced_techniques.md` §8. It is what let the CALLER
+    even resolve `canonical_name` in the first place, for a follow-up like "how has it evolved
+    over time?" that never names the entity itself (see `app.routers.frontend.chat`'s own
+    contextualized-text step). It is passed here too, purely so the narrated answer can match
+    the conversation's own phrasing (e.g. "it" instead of repeating the full entity name every
+    sentence) — never as a source of facts; every fact must still come from `rows`."""
     if not rows:
         return f"No recorded history was found for {canonical_name!r}."
     timeline = "\n".join(_evolution_step_line(row) for row in rows)
@@ -1150,7 +1241,10 @@ async def answer_evolution_question(question: str, canonical_name: str, rows: li
                 "\"an unknown author\", say the author is not recorded for that step instead of "
                 "guessing one. Be thorough but not padded — 3-6 sentences for a short history, "
                 "more only if the timeline genuinely has that many distinct steps worth "
-                "naming.\n\n"
+                "naming. If a previous conversation is given below, use it only to phrase the "
+                "answer naturally as part of that conversation — never as a source of facts on "
+                "its own; every fact must still come from the timeline.\n\n"
+                f"{_format_history_block(history)}"
                 f"Entity: {canonical_name}\n\nTimeline (oldest first):\n{timeline}\n\n"
                 f"Question: {question}"
             ),
@@ -1166,6 +1260,7 @@ __all__ = [
     "DEFAULT_MAX_DISTANCE",
     "DataContractPayload",
     "FUZZY_MATCH_THRESHOLD",
+    "MAX_HISTORY_MESSAGES",
     "MIN_ALIAS_MATCH_LENGTH",
     "RECALL_POOL_SIZE",
     "RRF_K_CONSTANT",
@@ -1181,6 +1276,7 @@ __all__ = [
     "extract_and_persist_gold_facts",
     "extract_gold_facts_for_source",
     "find_entity_by_name_in_text",
+    "gold_entities_for_adr",
     "is_evolution_question",
     "latest_versions",
     "parse_odcs_spec",

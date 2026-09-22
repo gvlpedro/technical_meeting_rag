@@ -8,8 +8,8 @@ You are a **Senior Data Governance Requirements Analyst** specialized in the
 Draft the **complete set of clarification questions** needed to produce a complete ODCS
 specification for every data contract already identified in `IDENTIFIED_DATA_CONTRACTS` below.
 
-You are **not** identifying which data contracts exist (that already happened in
-`architecture_questions.jinja`) and **not** drafting the ODCS documents themselves — only the
+You are **not** identifying which data contracts exist (that already happened in the
+architecture identification stage) and **not** drafting the ODCS documents themselves — only the
 questions that must be answered before those documents can be generated completely and
 accurately.
 
@@ -85,7 +85,10 @@ REQUIRED_INFORMATION =
 
 KNOWN_INFORMATION =
     information explicitly established by TRANSCRIPT for that contract
-    + the contract's own name/producer/consumer/action, already given
+    + the contract's own producer/consumer, always already given
+    + the contract's own name/action, already given ONLY when not `"unknown"` — an `"unknown"`
+      name or action is a gap this stage must question, not a resolved value to copy forward
+      (see PHASE 3's "An `unknown` name is not a known name" and PHASE 4)
 
 QUESTIONS =
     REQUIRED_INFORMATION
@@ -108,9 +111,11 @@ Do not impose an arbitrary maximum number of questions per contract.
 You are not being asked to:
 
 * discover new data contracts
-* re-decide a contract's producer, consumer, or action (already given — only ask about these if
-  `DATA_CONTRACT_REQUIREMENTS` needs more detail than what was given, e.g. the action was
-  `"unknown"`)
+* re-decide a contract's producer or consumer — always already given, never ask about these
+* re-decide a contract's name or action when they are NOT `"unknown"` — already given, only ask
+  about these when `DATA_CONTRACT_REQUIREMENTS` needs more detail than what was given; but DO
+  ask when the value itself IS `"unknown"` (see PHASE 3's "An `unknown` name is not a known
+  name" and PHASE 4)
 * generate the ODCS YAML/JSON itself
 * invent schema fields, quality rules, or SLA values
 * ask about architecture, components, or the ADR (the earlier stage's job)
@@ -169,6 +174,36 @@ For each contract, determine whether the following, if required, is known:
 If the transcript establishes the contract's purpose but not its usage pattern, ask only for the
 usage pattern.
 
+## An `unknown` name is not a known name
+
+`IDENTIFIED_DATA_CONTRACTS` giving `name: "unknown"` means the architecture stage found a real
+connection but the transcript never named what crosses it — a genuine gap, not a resolved value
+to copy forward. Treat it exactly like `action: "unknown"` below: draft a clarification question
+for it, scoped by `DATA_CONTRACT_REQUIREMENTS`' own identity requirement.
+
+Ask about the DATA, not the connection. Producer and consumer are already known — asking "what
+should we call the contract between X and Y?" only re-derives an `<X>-to-<Y>` label from
+information the reviewer already gave you once, which is not what a contract name is for. Ask
+instead what the transcript can actually answer: what is being exchanged, and for what purpose.
+For a `producer: "backend"`, `consumer: "postgreSQL"` contract with no stated name:
+
+> "What does the record the backend writes to postgreSQL when a customer completes checkout
+> represent — is it the order itself, a payment confirmation, something else?"
+
+not:
+
+> "What should the contract between the backend and postgreSQL be called?"
+
+The first grounds a name in the data's own subject (`order`, `payment-confirmation`); the second
+only invites the component pair right back as the answer. A data contract name is a noun phrase
+for what is exchanged (`user-authentication`, `order-created`, `payment-confirmation`), never
+`<component>-to-<component>` — that pattern is what `domain` already captures (see
+`DATA_CONTRACT_REQUIREMENTS`' own `domain` field), not what `name` is for. Two different
+contracts between the same two components need two different, data-specific names for exactly
+this reason: `domain` already says which components are involved; `name` is what actually tells
+one contract apart from another when a producer and consumer exchange more than one kind of
+data.
+
 ## A `new` contract's version is a fixed convention, never a question
 
 A `new` contract's initial version is always `1.0.0` — this is a structural fact of ODCS
@@ -203,8 +238,8 @@ When a data contract is a `forward-update` or `break-change`, determine:
 * Affected consumers
 
 If the identification stage marked the action `unknown`, first determine whether the change is
-compatible (`forward-update`) or breaking (`break-change`) per the same criteria
-`architecture_questions.jinja` Phase 7 uses, before asking about version numbers.
+compatible (`forward-update`) or breaking (`break-change`) per the same compatibility criteria
+used during architecture identification, before asking about version numbers.
 
 If the transcript says:
 

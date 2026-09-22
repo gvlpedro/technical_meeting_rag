@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1850" role="img" aria-label="LangGraph flow of agents/graph.py: thirteen nodes from load_bronze through persist_gold_evolution, two conditional routers (route_after_classify, route_after_boss), a shared ask_human interrupt node reused by both routers, and a redraft loop from boss_decide back into synthesize_document.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1930" role="img" aria-label="LangGraph flow of agents/graph.py: thirteen nodes from load_bronze through persist_gold_evolution, three conditional routers (route_after_classify, route_after_boss, route_after_write_document), a shared ask_human interrupt node reused by the first two, a redraft loop from boss_decide back into synthesize_document, and a draft-only exit after write_document that skips Gold entirely when state['persist'] is false.">
   <title>Silver + Gold LangGraph — agents/graph.py :: build_graph()</title>
   <desc>Node-by-node flow of the compiled StateGraph: entry at START, the classify/ask_human/synthesize branch, the critic/boss redraft loop, the Silver→Gold boundary after chunk_and_embed, and the terminal END.</desc>
   <defs>
@@ -23,7 +23,7 @@
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="1850" fill="#0d0d0d"/>
+  <rect x="0" y="0" width="1200" height="1930" fill="#0d0d0d"/>
 
   <text x="440" y="26" text-anchor="middle" class="title">Silver + Gold LangGraph</text>
   <text x="440" y="46" text-anchor="middle" class="b">agents/graph.py :: build_graph() — node-by-node flow, conditional routing, and the redraft loop</text>
@@ -154,45 +154,63 @@
   <rect x="200" y="1188" width="480" height="64" rx="10" class="surface"/>
   <text x="224" y="1214" class="h">write_document</text>
   <text x="224" y="1234" class="b">persists SilverDocument (hash-versioned) + SilverClarification rows</text>
-  <line x1="440" y1="1252" x2="440" y2="1282" class="edge" marker-end="url(#aGray)"/>
+  <line x1="440" y1="1252" x2="440" y2="1276" class="edge" marker-end="url(#aGray)"/>
+
+  <!-- diamond 3: route_after_write_document -->
+  <polygon points="440,1276 580,1321 440,1366 300,1321" class="diamond"/>
+  <text x="440" y="1316" text-anchor="middle" class="h">route_after_write_document(state)</text>
+  <text x="440" y="1332" text-anchor="middle" class="small">state['persist']?</text>
+
+  <!-- diamond3 -> chunk_and_embed (persist=True, e.g. make clarify) -->
+  <line x1="440" y1="1366" x2="440" y2="1390" class="edge" marker-end="url(#aGray)"/>
+  <text x="455" y="1382" class="edgeLabel">persist == True</text>
+
+  <!-- diamond3 -> draft-only END (persist=False, e.g. frontend upload preview) -->
+  <polyline points="580,1321 770,1321" class="edgeDashed" marker-end="url(#aGray)" fill="none"/>
+  <text x="600" y="1313" class="edgeLabel">persist == False</text>
+  <rect x="770" y="1299" width="220" height="44" rx="22" class="term"/>
+  <text x="880" y="1326" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+  <text x="770" y="1284" class="small">draft only — frontend preview,</text>
+  <text x="770" y="1360" class="small">no Gold, nothing persisted beyond the audit trail</text>
 
   <!-- chunk_and_embed -->
-  <rect x="200" y="1282" width="480" height="64" rx="10" class="surface"/>
-  <text x="224" y="1308" class="h">chunk_and_embed</text>
-  <text x="224" y="1328" class="b">embeds ADR, upserts SilverChunk for (source, version)</text>
-  <line x1="440" y1="1346" x2="440" y2="1406" class="edge" marker-end="url(#aGray)"/>
+  <rect x="200" y="1390" width="480" height="64" rx="10" class="surface"/>
+  <text x="224" y="1416" class="h">chunk_and_embed</text>
+  <text x="224" y="1436" class="b">embeds ADR, upserts SilverChunk for (source, version)</text>
+  <line x1="440" y1="1454" x2="440" y2="1514" class="edge" marker-end="url(#aGray)"/>
 
   <!-- Silver / Gold boundary -->
-  <line x1="60" y1="1376" x2="1150" y2="1376" class="edgeDashed" stroke="#199e70"/>
-  <text x="1150" y="1370" text-anchor="end" class="small" fill="#199e70">Silver ↔ Gold boundary — same graph run, no separate pipeline</text>
+  <line x1="60" y1="1484" x2="1150" y2="1484" class="edgeDashed" stroke="#199e70"/>
+  <text x="1150" y="1478" text-anchor="end" class="small" fill="#199e70">Silver ↔ Gold boundary — same graph run, no separate pipeline</text>
 
   <!-- extract_gold_facts -->
-  <rect x="200" y="1406" width="480" height="70" rx="10" class="llm"/>
-  <rect x="200" y="1406" width="8" height="70" fill="#199e70"/>
-  <text x="670" y="1424" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
-  <text x="670" y="1466" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
-  <text x="224" y="1430" class="h">extract_gold_facts</text>
-  <text x="224" y="1450" class="b">LLM call · per source with boss_verdict == ok</text>
-  <text x="224" y="1466" class="small">skipped if already extracted for this (source, version)</text>
-  <line x1="440" y1="1476" x2="440" y2="1536" class="edge" marker-end="url(#aGray)"/>
+  <rect x="200" y="1514" width="480" height="70" rx="10" class="llm"/>
+  <rect x="200" y="1514" width="8" height="70" fill="#199e70"/>
+  <text x="670" y="1532" text-anchor="end" class="tag" fill="#3987e5">LLM</text>
+  <text x="670" y="1574" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1538" class="h">extract_gold_facts</text>
+  <text x="224" y="1558" class="b">LLM call · per source with boss_verdict == ok</text>
+  <text x="224" y="1574" class="small">skipped if already extracted for this (source, version)</text>
+  <line x1="440" y1="1584" x2="440" y2="1644" class="edge" marker-end="url(#aGray)"/>
 
   <!-- resolve_gold_identity -->
-  <rect x="200" y="1536" width="480" height="64" rx="10" class="surface"/>
-  <rect x="200" y="1536" width="8" height="64" fill="#199e70"/>
-  <text x="670" y="1554" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
-  <text x="224" y="1562" class="h">resolve_gold_identity</text>
-  <text x="224" y="1582" class="b">no LLM · exact alias → pg_trgm fuzzy match → mint uuid4</text>
-  <line x1="440" y1="1600" x2="440" y2="1630" class="edge" marker-end="url(#aGray)"/>
+  <rect x="200" y="1644" width="480" height="64" rx="10" class="surface"/>
+  <rect x="200" y="1644" width="8" height="64" fill="#199e70"/>
+  <text x="670" y="1662" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1670" class="h">resolve_gold_identity</text>
+  <text x="224" y="1690" class="b">no LLM · exact alias → pg_trgm fuzzy match → mint uuid4</text>
+  <line x1="440" y1="1708" x2="440" y2="1738" class="edge" marker-end="url(#aGray)"/>
 
   <!-- persist_gold_evolution -->
-  <rect x="200" y="1630" width="480" height="64" rx="10" class="surface"/>
-  <rect x="200" y="1630" width="8" height="64" fill="#199e70"/>
-  <text x="670" y="1648" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
-  <text x="224" y="1656" class="h">persist_gold_evolution</text>
-  <text x="224" y="1676" class="b">no LLM · hash-compare-then-bump → gold_evolution / gold_aliases</text>
-  <line x1="440" y1="1694" x2="440" y2="1740" class="edge" marker-end="url(#aGray)"/>
+  <rect x="200" y="1738" width="480" height="64" rx="10" class="surface"/>
+  <rect x="200" y="1738" width="8" height="64" fill="#199e70"/>
+  <text x="670" y="1756" text-anchor="end" class="tag" fill="#199e70">GOLD</text>
+  <text x="224" y="1764" class="h">persist_gold_evolution</text>
+  <text x="224" y="1784" class="b">no LLM · hash-compare-then-bump → gold_evolution / gold_aliases</text>
+  <line x1="440" y1="1802" x2="440" y2="1848" class="edge" marker-end="url(#aGray)"/>
 
   <!-- END -->
-  <rect x="340" y="1740" width="200" height="44" rx="22" class="term"/>
-  <text x="440" y="1767" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+  <rect x="340" y="1848" width="200" height="44" rx="22" class="term"/>
+  <text x="440" y="1875" text-anchor="middle" class="h" fill="#0d0d0d">END</text>
+  <text x="440" y="1902" text-anchor="middle" class="small">persisted — Gold updated</text>
 </svg>

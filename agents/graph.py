@@ -44,7 +44,12 @@ from agents.stages import gold
 from agents.stages.adr_critic.prompts import build_critic_prompt
 from agents.stages.adr_critic.schemas import CritiqueResult
 from agents.stages.adr_generation.prompts import build_adr_generation_prompt
-from agents.stages.adr_generation.service import adr_has_placeholder_leak, strip_diagram_colors
+from agents.stages.adr_generation.service import (
+    SUGGEST_INFO_CORRECTION_MESSAGE,
+    adr_drops_suggest_info_content,
+    adr_has_placeholder_leak,
+    strip_diagram_colors,
+)
 from agents.stages.architecture_questions.service import (
     generate_architecture_questions_for_batch,
     previous_architecture_context,
@@ -469,7 +474,11 @@ async def synthesize_document(state: SilverState) -> dict:
         )
         for source in sources:
             messages = build_adr_generation_prompt(
-                source_content(state["bronze_documents"], source), qa_pairs, previous_diagram
+                source_content(state["bronze_documents"], source),
+                qa_pairs,
+                previous_diagram,
+                mentioned_components=state["mentioned_components"],
+                mentioned_data_contracts=state["mentioned_data_contracts"],
             )
             # We use temperature=0 for the same reason `classify_questions` needs it: we saw
             # a real run-to-run inconsistency here, where the same case's structural
@@ -479,18 +488,37 @@ async def synthesize_document(state: SilverState) -> dict:
             # see `generate_architecture_questions_for_batch`'s own docstring.
             response = await router.complete(messages, temperature=0, reasoning_effort="none")
             content = response.choices[0].message.content
-            # This is a mechanical retry on a template leak (see `adr_has_placeholder_leak`).
-            # It follows the same shallow-retry approach that
+            # This is a mechanical retry on two known failure modes: a template leak (see
+            # `adr_has_placeholder_leak`) and a silently-dropped `[SUGGEST INFO]` answer (see
+            # `adr_drops_suggest_info_content` — confirmed real: the exact same transcript and
+            # clarifications produced a correct suggestion, WITH a diagram edge, on one run and
+            # dropped it entirely, leaving two components disconnected in the diagram, on
+            # others). It follows the same shallow-retry approach that
             # `generate_architecture_questions_for_batch` already uses for ITS stage's own
-            # observed failure, applied here for ADR generation's own failure: temperature=0
-            # makes a clean run reliably reproducible, but it also reliably reproduces a leak
-            # if one happens. Each retry samples at a nonzero temperature to break out of
-            # that fixed behavior. It is not a general "retry on any failure" policy.
+            # observed failure: temperature=0 makes a clean run reliably reproducible, but it
+            # also reliably reproduces a bad one.
+            #
+            # The two failure modes retry differently. A placeholder leak has no specific gap to
+            # name, so it gets a blind resample at a higher temperature, same as before. A
+            # dropped `[SUGGEST INFO]` answer DOES have a specific, nameable gap — real testing
+            # (both against the golden transcripts above and a real user's own reported case)
+            # showed a blind resample sometimes needs 3-4 attempts to recover, a real chance of
+            # exhausting `SHALLOW_RETRY_ATTEMPTS` before it does — while naming the exact problem
+            # in a follow-up turn (`SUGGEST_INFO_CORRECTION_MESSAGE`), the same correction a human
+            # reviewer would give, converged in a single retry in that same testing. This is not
+            # a general "retry on any failure" policy — each check stays narrow to the one real
+            # failure it was built to catch.
             for _ in range(SHALLOW_RETRY_ATTEMPTS):
-                if not adr_has_placeholder_leak(content):
+                dropped_suggestion = adr_drops_suggest_info_content(content, qa_pairs)
+                if not adr_has_placeholder_leak(content) and not dropped_suggestion:
                     break
+                retry_messages = (
+                    [*messages, {"role": "assistant", "content": content}, {"role": "user", "content": SUGGEST_INFO_CORRECTION_MESSAGE}]
+                    if dropped_suggestion
+                    else messages
+                )
                 retry_response = await router.complete(
-                    messages, temperature=SHALLOW_RETRY_TEMPERATURE, reasoning_effort="none"
+                    retry_messages, temperature=SHALLOW_RETRY_TEMPERATURE, reasoning_effort="none"
                 )
                 content = retry_response.choices[0].message.content
             documents[source] = content
@@ -850,6 +878,16 @@ async def resolve_gold_identity(state: SilverState) -> dict:
             version = state["document_versions"][source]
             name_to_id: dict[str, str] = dict(entity_id_maps.get(source, {}))
 
+            # A name referenced only as someone else's dependency/contract must be excluded
+            # here too when that same name is ALSO its own top-level entry with status/action
+            # "unknown" — otherwise this mints an alias + entity_id for it anyway (via the
+            # reference), while `_persist_components`/`_persist_contracts` still correctly
+            # refuse to write it a `gold_evolution` row (same "unknown" skip). That mismatch
+            # leaves a dangling alias pointing at an entity Gold has no history for, and a
+            # `dependency_ids`/`contract_ids` payload elsewhere silently references it.
+            unknown_component_names = {c["name"] for c in extraction["components"] if c["status"] == "unknown"}
+            unknown_contract_names = {c["name"] for c in extraction["contracts"] if c["action"] == "unknown"}
+
             for component in extraction["components"]:
                 if component["status"] == "unknown":
                     continue
@@ -857,10 +895,14 @@ async def resolve_gold_identity(state: SilverState) -> dict:
                     session, "component", component["name"], name_to_id, source, version, tenant=state["tenant"]
                 )
                 for dep_name in component.get("dependency_names", []):
+                    if dep_name in unknown_component_names:
+                        continue
                     await gold.resolve_and_alias(
                         session, "component", dep_name, name_to_id, source, version, tenant=state["tenant"]
                     )
                 for contract_name in component.get("contract_names", []):
+                    if contract_name in unknown_contract_names:
+                        continue
                     await gold.resolve_and_alias(
                         session, "data_contract", contract_name, name_to_id, source, version, tenant=state["tenant"]
                     )
@@ -872,6 +914,8 @@ async def resolve_gold_identity(state: SilverState) -> dict:
                     session, "data_contract", contract["name"], name_to_id, source, version, tenant=state["tenant"]
                 )
                 for component_name in (contract["producer"], contract["consumer"]):
+                    if component_name in unknown_component_names:
+                        continue
                     await gold.resolve_and_alias(
                         session, "component", component_name, name_to_id, source, version, tenant=state["tenant"]
                     )

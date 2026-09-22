@@ -13,18 +13,16 @@ clarifications, not merely for lacking evidence (an honest `evidenced: false` is
 a defect — mark those `"low"` if flagged at all). Only flag claims that are actually wrong or
 unsupported; do not flag every sentence.
 
-Never flag a claim starting with the literal prefix `LLM SUGGESTION:` — the generator only
-writes that prefix when the reviewer explicitly authorized a suggestion for that gap
-(`prompts/adr_generation/generator.jinja`'s CLARIFICATION ANSWER MARKERS), and it already discloses that
-status more precisely than a generic flag would.
+Never flag a claim starting with the literal prefix `LLM SUGGESTION:` — that prefix only ever
+appears when the reviewer explicitly authorized a suggestion for that one specific gap, and the
+prefix itself already discloses that status more precisely than a generic flag would.
 
 Never flag a claim naming or describing something the document's own "## 2. Previous
 Architecture" establishes (a pre-existing component, its prior role, its diagram) — that
-section snapshots the already-confirmed, previously-published architecture (from Gold, the
-reconciled cross-source record — see `agents.graph.synthesize_document`), fed in as trusted
-input, not something this source's own transcript needs to independently support. "The
-existing architecture already includes X" is correct and expected even when this transcript
-never mentions X, because X predates it.
+section snapshots the already-confirmed, previously-published architecture, fed in as trusted
+input, not something this source's own transcript needs to independently support. "The existing
+architecture already includes X" is correct and expected even when this transcript never
+mentions X, because X predates it.
 
 ---
 
@@ -37,15 +35,30 @@ confirmed. `version: not-specified`, `status: not-specified`, an empty `schema.p
 next to an included contract: unresolved information dressed as a finished field, not a
 genuinely empty section.
 
+**A `new` contract's `version` and `status` are structural ODCS conventions, not transcript
+facts — do not flag them as unconfirmed just because the transcript never said them out loud.**
+A new contract's version is always `1.0.0`, and its status is `active` for any contract
+currently in force (new, forward-updated, or unchanged) — nobody says "this is version 1.0.0" in
+a meeting, the same way nobody says a brand-new contract's status is "active." Seeing exactly
+those conventional values on a `new`/in-force contract is a correctly filled field, not evidence
+of an unresolved gap. Only flag `version`/`status` when the VALUE itself is actually wrong: a version
+other than `1.0.0` on a contract the document itself calls `new`; a `forward-update`/
+`break-change` contract whose version was never bumped from a stated previous one; `active` on a
+contract the transcript or clarifications say is being deprecated/retired; or a missing
+`deprecated`/`retired` status on a contract the document itself says is being phased out. A
+schema field with no declared `type`, or an array field with no `items` schema, is a real,
+document-level gap — unlike version/status, nothing about a field's shape is a fixed convention,
+so judge those purely by what the document actually shows.
+
 `completeness_score` (0-100): 100 means every included item has every required field resolved,
 no placeholder-like value anywhere. Deduct roughly in proportion to how much required structure
 is placeholder/unresolved rather than confirmed fact — one contract with an unresolved
-version/status/schema out of an otherwise complete document should cost noticeably more than a
-few points.
+schema field out of an otherwise complete document should cost noticeably more than a few
+points. Never deduct for a correctly-conventional `version`/`status` per the paragraph above.
 
-`unresolved_points` — one entry per specific unresolved field/fact, e.g. `"notification-created
-contract: version not specified"`, `"Email Worker: dependency list not confirmed"`. Empty only
-when `completeness_score` is 100.
+`unresolved_points` — one entry per specific unresolved field/fact, e.g.
+`"notification-created contract: items array has no declared item schema"`, `"Email Worker:
+dependency list not confirmed"`. Empty only when `completeness_score` is 100.
 
 A correct omission is not an unresolved point and doesn't reduce the score: a component/contract
 the transcript only mentions in passing, with no confirmed role, is expected to be absent from

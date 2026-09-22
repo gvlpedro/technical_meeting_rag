@@ -38,6 +38,14 @@ actually makes `rerank` reachable from this CLI at all: `top_k_gold_evolution`'s
 `rerank` parameter has no effect unless some real caller passes `rerank=True`, and before
 this flag existed, nothing in this codebase ever did.
 
+Fourth, this REPL keeps a running `history` of `(role, content)` turns across the session and
+threads it through both retrieval and generation the same way `app/routers/frontend.py::chat`
+does: a contextualized question (recent history + the current question) drives entity
+matching/embedding/lexical search, so a follow-up like "and who approved it?" still resolves
+to the right rows, while the raw history is passed to `answer_question`/
+`answer_evolution_question` for reference resolution only — see
+`.tmp/advanced_techniques.md` §8.
+
 Usage:
     uv run python3 scripts/chat_gold.py
     uv run python3 scripts/chat_gold.py --k 10 --max-distance 0.7
@@ -49,6 +57,7 @@ import asyncio
 
 from agents.stages.gold.service import (
     DEFAULT_MAX_DISTANCE,
+    MAX_HISTORY_MESSAGES,
     answer_evolution_question,
     answer_question,
     embed_question,
@@ -63,17 +72,37 @@ from db.session import async_session_factory
 DEFAULT_K = 8
 
 
+def _contextualize(question: str, history: list[tuple[str, str]]) -> str:
+    """Same purpose as `app/routers/frontend.py::_contextualize_question` — folds the last
+    `MAX_HISTORY_MESSAGES` turns into the text handed to retrieval, so a follow-up question
+    still targets the right rows. Only used for retrieval; generation gets the raw `history`
+    and the original `question` separately."""
+    if not history:
+        return question
+    trimmed = history[-MAX_HISTORY_MESSAGES:]
+    lines = "\n".join(f"{role.capitalize()}: {content}" for role, content in trimmed)
+    return f"{lines}\n{question}"
+
+
 async def _answer(
-    session, question: str, k: int, max_distance: float | None, tenant: str, rerank: bool
+    session,
+    question: str,
+    k: int,
+    max_distance: float | None,
+    tenant: str,
+    rerank: bool,
+    history: list[tuple[str, str]],
 ) -> str:
-    if is_evolution_question(question):
-        match = await find_entity_by_name_in_text(session, question, tenant=tenant)
+    contextualized_question = _contextualize(question, history)
+
+    if is_evolution_question(contextualized_question):
+        match = await find_entity_by_name_in_text(session, contextualized_question, tenant=tenant)
         if match is not None:
             entity_type, entity_id, matched_alias = match
             rows = await entity_history(session, entity_type, entity_id, tenant=tenant)
-            return await answer_evolution_question(question, matched_alias, rows)
+            return await answer_evolution_question(question, matched_alias, rows, history=history)
 
-    vector = await embed_question(question)
+    vector = await embed_question(contextualized_question)
     rows = await top_k_gold_evolution(
         session,
         vector,
@@ -81,17 +110,18 @@ async def _answer(
         max_distance=max_distance,
         tenant=tenant,
         mode="hybrid",
-        question_text=question,
+        question_text=contextualized_question,
         rerank=rerank,
     )
     latest = await latest_versions(session, rows)
-    return await answer_question(question, rows, latest)
+    return await answer_question(question, rows, latest, history=history)
 
 
 async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -> None:
     print(f"Gold RAG chat (tenant={tenant!r}) — ask about the architecture's evolution. Ctrl+D or 'exit' to quit.\n")
     if rerank:
         print("(reranking enabled — each answer costs one extra local cross-encoder pass)\n")
+    history: list[tuple[str, str]] = []
     async with async_session_factory() as session:
         while True:
             try:
@@ -101,8 +131,10 @@ async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -
                 return
             if not question or question.lower() in {"exit", "quit"}:
                 return
-            answer = await _answer(session, question, k, max_distance, tenant, rerank)
+            answer = await _answer(session, question, k, max_distance, tenant, rerank, history)
             print(f"\n{answer}\n")
+            history.append(("user", question))
+            history.append(("assistant", answer))
 
 
 if __name__ == "__main__":

@@ -44,8 +44,16 @@ each one, extract:
   a harmless omission — a later question asking how this component evolved over time depends on
   every one of its versions' narratives carrying whatever reason each one's own ADR gave. Do not
   invent a reason the ADR never states; say only what it actually gives.
-* `dependency_names` — names of other components this one depends on, exactly as written in
-  the ADR. Empty list if none stated.
+* `dependency_names` — names of other components this one connects to. Two sources count
+  equally, not just prose: a sentence stating a dependency, AND every edge touching this
+  component in the ADR's own "Target Architecture" Mermaid diagram (§3) — an edge `A --> B`
+  means A names B here (and, symmetrically, B names A: the diagram states a connection exists
+  between them, not a one-way claim only the arrow's source may record). A diagram-only edge is
+  not weaker evidence than a stated sentence — the diagram is as much a part of this ADR as its
+  prose. Empty list only if this component has neither a stated dependency nor a diagram edge at
+  all. This is what lets the downstream live architecture diagram draw the same connections the
+  ADR itself already visualized — that diagram draws edges from this very field, so a real edge
+  left out here is a real edge silently missing there.
 * `contract_names` — names of data contracts this component produces or consumes, exactly as
   written in the ADR. Empty list if none stated.
 

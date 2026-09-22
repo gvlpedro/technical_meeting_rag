@@ -559,11 +559,22 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
 # --- Architecture history ------------------------------------------------------------------
 
 
+class ArchitectureHistoryGoldEntity(BaseModel):
+    entity_type: str
+    canonical_name: str
+    operation: str
+    version: int
+
+
 class ArchitectureHistoryAdr(BaseModel):
     source_component: str
     version: int
     ingestion_date: str
     content: str
+    authored_by: str
+    created_at: str
+    content_hash: str
+    gold_entities: list[ArchitectureHistoryGoldEntity]
 
 
 class ArchitectureHistoryResponse(BaseModel):
@@ -593,32 +604,64 @@ async def architecture_history(
         )
     ).scalars().all()
     diagram = await gold.current_architecture_diagram(db, tenant=tenant)
-    return ArchitectureHistoryResponse(
-        diagram=diagram,
-        adrs=[
+    adrs = []
+    for doc in docs:
+        entities = await gold.gold_entities_for_adr(db, doc.source_component, doc.version, tenant=tenant)
+        adrs.append(
             ArchitectureHistoryAdr(
                 source_component=doc.source_component,
                 version=doc.version,
                 ingestion_date=doc.ingestion_date.isoformat(),
                 content=doc.content,
+                authored_by=doc.authored_by,
+                created_at=doc.created_at.isoformat(),
+                content_hash=doc.content_hash,
+                gold_entities=[
+                    ArchitectureHistoryGoldEntity(
+                        entity_type=entity.entity_type,
+                        canonical_name=entity.canonical_name,
+                        operation=entity.operation,
+                        version=entity.version,
+                    )
+                    for entity in entities
+                ],
             )
-            for doc in docs
-        ],
-    )
+        )
+    return ArchitectureHistoryResponse(diagram=diagram, adrs=adrs)
 
 
 # --- Chat with RAG -------------------------------------------------------------------------
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class ChatRequest(BaseModel):
     username: str
     question: str
     k: int = 8
+    history: list[ChatMessage] = []
 
 
 class ChatResponse(BaseModel):
     answer: str
     retrieved: list[dict]
+
+
+def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
+    """Prefixes `question` with the last `gold.MAX_HISTORY_MESSAGES` turns of `history`, so a
+    follow-up that only makes sense in context ("And who approved it?") still retrieves the
+    right rows. Used ONLY for retrieval targeting (entity matching, embedding, lexical search)
+    — the answer itself is still generated strictly from retrieved Gold facts, via `history`
+    passed separately to `gold.answer_question`/`gold.answer_evolution_question`. See
+    `.tmp/advanced_techniques.md` §8."""
+    if not history:
+        return question
+    trimmed = history[-gold.MAX_HISTORY_MESSAGES :]
+    lines = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in trimmed)
+    return f"{lines}\n{question}"
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -638,18 +681,28 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     embedding alone might blur still surfaces — see `top_k_gold_evolution`'s own docstring and
     `.tmp/advanced_techniques.md` §1.
 
+    `request.history` (recent `(role, content)` turns from the client's own chat transcript)
+    is used two ways: `_contextualize_question` folds it into the text handed to entity
+    matching/embedding/lexical search, so a context-dependent follow-up still resolves to the
+    right entity or rows; the raw history is also passed straight through to
+    `gold.answer_question`/`gold.answer_evolution_question`, which use it ONLY to resolve what
+    the question refers to, never as a source of facts — see `.tmp/advanced_techniques.md` §8.
+
     `tenant` comes from `_tenant_for_username(request.username)`, never a client-supplied
     field — this is what stops a chat question from ever retrieving another tenant's Gold
     facts, the same guardrail `architecture_history` applies to the ADR history view."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
 
-    if gold.is_evolution_question(request.question):
-        match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
+    history = [(m.role, m.content) for m in request.history]
+    contextualized_question = _contextualize_question(request.question, request.history)
+
+    if gold.is_evolution_question(contextualized_question):
+        match = await gold.find_entity_by_name_in_text(db, contextualized_question, tenant=tenant)
         if match is not None:
             entity_type, entity_id, matched_alias = match
             rows = await gold.entity_history(db, entity_type, entity_id, tenant=tenant)
-            answer = await gold.answer_evolution_question(request.question, matched_alias, rows)
+            answer = await gold.answer_evolution_question(request.question, matched_alias, rows, history=history)
             retrieved = [
                 {
                     "entity_type": row.entity_type,
@@ -663,16 +716,16 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
             ]
             return ChatResponse(answer=answer, retrieved=retrieved)
 
-    vector = await gold.embed_question(request.question)
+    vector = await gold.embed_question(contextualized_question)
     rows = await gold.top_k_gold_evolution(
-        db, vector, k=request.k, tenant=tenant, mode="hybrid", question_text=request.question
+        db, vector, k=request.k, tenant=tenant, mode="hybrid", question_text=contextualized_question
     )
 
     if not rows:
         return ChatResponse(answer="No Gold facts were relevant to this question.", retrieved=[])
 
     latest = await gold.latest_versions(db, rows)
-    answer = await gold.answer_question(request.question, rows, latest)
+    answer = await gold.answer_question(request.question, rows, latest, history=history)
     retrieved = [
         {
             "entity_type": row.entity_type,

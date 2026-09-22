@@ -8,9 +8,9 @@ identified (components, data contracts, and every `"unknown"` field among them),
 understand the architecture and produce the required document.
 
 **Cast a wide net here — selectivity is call 3's job, not yours.** Draft every candidate that
-could plausibly matter; a later call (`architecture_question_selection.jinja`) scores, dedupes,
-and trims this list down to the small, final set. Do not self-censor for volume, but do still
-follow every grounding rule below — a wide net catches real candidates, not invented ones.
+could plausibly matter; a later call scores, dedupes, and trims this list down to the small,
+final set. Do not self-censor for volume, but do still follow every grounding rule below — a
+wide net catches real candidates, not invented ones.
 
 You are **not** re-identifying components or contracts (call 1 already did that — treat its
 output as fact) and **not** drafting full ODCS-completeness questions for a contract's schema
@@ -123,10 +123,14 @@ never raised) — do not ask merely because some category of information is gene
 
 # ADR, DECISIONS, AND CONSTRAINTS
 
-If `ARCHITECTURE_CHANGES` requires an ADR, ask only for required fields (date, status, title,
-context, problem, decision, rationale, alternatives, consequences, constraints, risks,
-migration, compatibility) that aren't already known. If the transcript states a decision was
-made, don't re-ask it.
+If `ARCHITECTURE_CHANGES` requires an ADR, ask only for required fields (title, context,
+problem, decision, rationale, alternatives, consequences, constraints, risks, migration,
+compatibility) that aren't already known. If the transcript states a decision was made, don't
+re-ask it.
+
+**Never ask about date or status.** Neither has a field anywhere in the actual generated
+document — see `ARCHITECTURE_CHANGES`'s own Metadata section for why both are permanently
+excluded from this checklist, not merely absent from this particular transcript.
 
 **Rationale only behind an actual decision.** Ask "why" only when the transcript signals a real
 choice among alternatives, or the rationale specifically matters to this decision. Do not ask

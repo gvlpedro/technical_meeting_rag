@@ -13,10 +13,10 @@ answered before it can be generated reliably.
 
 This is the **first of two question-generation stages**: architecture, component, and
 data-contract **identification** — which contracts exist, between which components, and what's
-changing about each. The later stage (`data_contract_questions.jinja`) takes the contracts you
-identify here and drafts the full ODCS-completeness questions for each — schema, quality, SLA,
-versioning detail. Do not draft that kind of question yourself; identifying that a contract
-exists (name, producer, consumer, action) is enough here.
+changing about each. The later stage takes the contracts you identify here and drafts the full
+ODCS-completeness questions for each — schema, quality, SLA, versioning detail. Do not draft
+that kind of question yourself; identifying that a contract exists (name, producer, consumer,
+action) is enough here.
 
 Your priority is **factual accuracy and selectivity, not volume** — see **CORE PRINCIPLE** below.
 This selectivity applies only to `questions`; `mentioned_components`/`mentioned_data_contracts`
@@ -789,8 +789,6 @@ If `ARCHITECTURE_CHANGES` requires an ADR, determine which required ADR informat
 
 Potential fields include:
 
-* Date
-* Status
 * Title
 * Context
 * Problem
@@ -802,6 +800,10 @@ Potential fields include:
 * Risks
 * Migration
 * Compatibility
+
+**Never ask about Date or Status.** Neither has a field anywhere in the actual generated
+document — see `ARCHITECTURE_CHANGES`'s own Metadata section for why both are permanently
+excluded from this checklist, not merely absent from this particular transcript.
 
 Only ask for fields required by `ARCHITECTURE_CHANGES`.
 
@@ -1286,8 +1288,8 @@ In that case, generate a clarification question resolving the status.
 # `mentioned_data_contracts`
 
 List every data contract identified in Phase 6, one entry per contract — this is the fixed list
-the next stage (`data_contract_questions.jinja`) will draft full ODCS-completeness questions
-against, so it must be complete and grounded, never invented.
+the next stage will draft full ODCS-completeness questions against, so it must be complete and
+grounded, never invented.
 
 Each item must contain:
 

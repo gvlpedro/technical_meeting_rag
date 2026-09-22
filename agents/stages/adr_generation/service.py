@@ -99,3 +99,47 @@ def adr_has_placeholder_leak(document: str) -> bool:
     document's CONTENT is actually good. That judgment is still the Critic's job, not this
     function's."""
     return any(pattern.search(document) for pattern in _PLACEHOLDER_PATTERNS)
+
+
+def adr_drops_suggest_info_content(document: str, qa_pairs: list[dict]) -> bool:
+    """This is a mechanical backstop for `prompts/adr_generation/generator.jinja`'s own
+    `[SUGGEST INFO]` handling — the same kind of backstop `adr_has_placeholder_leak` already is
+    for the NO PLACEHOLDERS section, applied to a second, real, reported failure mode: a
+    reviewer answers a clarification `[SUGGEST INFO]` (explicitly authorizing a suggested,
+    `LLM SUGGESTION:`-prefixed answer for that one gap), but the model sometimes drops it
+    silently instead — no suggestion anywhere in the document, no diagram edge, nothing. This
+    was confirmed to actually happen at temperature=0, and to be flaky: the exact same
+    transcript/clarifications produced a correct suggestion (and a diagram edge) on one run and
+    dropped it entirely on the next two, with zero code changes between runs. This is exactly
+    why `agents.graph.synthesize_document` needs a retry trigger here, the same as it already
+    has for a placeholder leak — temperature=0 makes a bad run just as reproducible as a good
+    one.
+
+    Returns `True` (retry-worthy) only when at least one `qa_pairs` answer is the literal
+    `[SUGGEST INFO]` marker AND the document contains zero `LLM SUGGESTION:` occurrences at all.
+    This is deliberately a coarse, binary check — it does not try to match each `[SUGGEST INFO]`
+    answer to its own specific suggestion, the same way `adr_has_placeholder_leak` does not
+    judge content quality. It only catches the total-silent-drop failure actually observed."""
+    if not any(pair.get("answer") == "[SUGGEST INFO]" for pair in qa_pairs):
+        return False
+    return "LLM SUGGESTION:" not in document
+
+
+# `agents.graph.synthesize_document` sends this as a follow-up user turn, after the model's own
+# dropped draft, when `adr_drops_suggest_info_content` fires. A blind resample at a higher
+# temperature (the same recovery `adr_has_placeholder_leak` uses) measurably works here too, but
+# real testing showed it needs 3-4 attempts on a genuinely hard case — leaving a real, if small,
+# chance of exhausting all `SHALLOW_RETRY_ATTEMPTS` before recovering, which is exactly what a
+# real user hit. Naming the specific, actual problem (as a human reviewer would) instead of
+# re-rolling blind measurably converges in one retry instead of three or four, in the same real
+# testing. This is deliberately never used for a plain placeholder leak — that failure mode has
+# no specific gap to name, so a blind resample stays the right (and already-proven) fix there.
+SUGGEST_INFO_CORRECTION_MESSAGE = (
+    "Your draft above answers one or more clarifications marked `[SUGGEST INFO]` but never "
+    "actually states the suggestion anywhere — no `LLM SUGGESTION:` line appears in the "
+    "document at all. Revise the document: for every `[SUGGEST INFO]`-answered clarification, "
+    "add a concrete, plausible answer prefixed with `LLM SUGGESTION:`, in the section it "
+    "belongs to — including a diagram edge and a data-contract entry in §3/§5/§6 when the gap "
+    "is about how two components interact, not only a prose sentence. Keep everything else "
+    "unchanged. Return the FULL corrected document."
+)

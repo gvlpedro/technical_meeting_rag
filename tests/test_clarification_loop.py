@@ -10,7 +10,14 @@ from fastapi import HTTPException
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import delete, select
 
-from agents.graph import _drop_new_contract_version_questions, _ensure_schema_questions, build_graph, checkpointer_dsn
+from agents.graph import (
+    _drop_new_contract_version_questions,
+    _ensure_schema_questions,
+    build_graph,
+    checkpointer_dsn,
+    synthesize_document,
+)
+from agents.stages.adr_generation.service import SUGGEST_INFO_CORRECTION_MESSAGE
 from agents.state import initial_state
 from app.config import settings
 from app.routers.frontend import _resume_graph
@@ -1442,3 +1449,53 @@ def test_drop_new_contract_version_questions_keeps_version_question_for_forward_
     result = _drop_new_contract_version_questions(questions, contracts)
 
     assert result == questions
+
+
+async def test_synthesize_document_retries_with_a_named_correction_when_suggest_info_is_dropped(monkeypatch):
+    """Regression test for a real, reported bug: a reviewer answers a clarification
+    `[SUGGEST INFO]` (e.g. "how do the frontend and backend interact?"), but the model
+    sometimes drops it silently — no `LLM SUGGESTION:` anywhere, no diagram edge, leaving two
+    brand-new components disconnected in the ADR's own diagram (and, downstream, in Gold's live
+    architecture diagram too). `agents.graph.synthesize_document`'s retry loop must, on this
+    specific failure, send a follow-up turn naming the exact gap
+    (`SUGGEST_INFO_CORRECTION_MESSAGE`) rather than only blindly resampling — real testing
+    showed a blind resample sometimes needs 3-4 attempts to recover, while a named correction
+    converged in one."""
+    dropped_document = "# ADR — Marketplace\n\nFrontend and backend are both introduced."
+    corrected_document = (
+        "# ADR — Marketplace\n\nFrontend and backend are both introduced.\n\n"
+        "LLM SUGGESTION: The frontend calls the backend over a REST API."
+    )
+    calls: list[list[dict]] = []
+
+    async def fake_acompletion(*, model, api_key, messages, **kwargs):
+        calls.append(messages)
+        content = dropped_document if len(calls) == 1 else corrected_document
+        return _fake_response(content)
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+
+    state = initial_state("20260919")
+    state["bronze_documents"] = [{"source_component": "market.en.vtt", "content": "backend and frontend"}]
+    state["mentioned_components"] = [
+        {"name": "frontend", "status": "new"},
+        {"name": "backend", "status": "new"},
+    ]
+    state["clarifications"] = [
+        {
+            "id": "architecture.interface",
+            "scope": "architecture",
+            "target": "frontend-backend interaction",
+            "requirement": "technical interface",
+            "question": "How do the frontend and backend interact?",
+            "answer": "[SUGGEST INFO]",
+            "status": "answered",
+        }
+    ]
+
+    result = await synthesize_document(state)
+
+    assert result["documents"]["market.en.vtt"] == corrected_document
+    assert len(calls) == 2
+    assert calls[1][-1]["content"] == SUGGEST_INFO_CORRECTION_MESSAGE
+    assert calls[1][0]["content"] == calls[0][0]["content"]
