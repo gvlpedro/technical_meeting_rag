@@ -8,19 +8,13 @@ make up
 
 ## Tests
 
-The fast suite (mocked LLM calls, safe to run anytime) currently has 75 tests
+The fast suite (mocked LLM calls, safe to run anytime):
 
 ```bash
 make test
 ```
 
 ## Useful commands
-
-
-Ingest youtube transcriptions
-```bash
-make ingestion DATE=20260515
-```
 
 Generate architecture questions for sessions on date 2024-05-15 in Silver (interactive mode) :
 ```bash
@@ -84,6 +78,10 @@ roster. Each login maps to its own **tenant**, which is what actually isolates d
 | -------- | -------- | ------- |
 | `pepe`   | `1234`   | `lidr`  |
 | `peter`  | `123`    | `lotus` |
+| `martin` | `123`    | `lotus` |
+
+`martin` shares `peter`'s tenant (`lotus`), so the two see and edit the exact same data — unlike
+`pepe`, who is isolated in a separate tenant.
 
 One command starts everything — Postgres, the backend, and the frontend, all in Docker:
 

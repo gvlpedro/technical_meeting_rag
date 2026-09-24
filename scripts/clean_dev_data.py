@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""This script wipes every Bronze, Silver, and Gold row, and every LangGraph checkpoint, from
-the dev database. It also wipes the `output/` directory's generated audit files. This gives a
-full reset back to "nothing uploaded yet". Use it when you want to start a fresh round of
-uploads, with no old transcripts, ADRs, or Gold facts left over. This is the `make clean`
-entry point.
+"""This script wipes every Bronze, Silver, and Gold row, every logged LLM call, and every
+LangGraph checkpoint, from the dev database. It also wipes the `output/` directory's generated
+audit files. This gives a full reset back to "nothing uploaded yet". Use it when you want to
+start a fresh round of uploads, with no old transcripts, ADRs, Gold facts, or Monitor-tab call
+history left over. This is the `make clean` entry point.
 
 This script uses TRUNCATE, not DELETE, on the same list of tables that
-`agents/stages/gold/testing/test_golden_set.py` already truncates between its own steps. That
-list is one definition of "every table this app writes rows to": `gold_aliases`,
-`gold_evolution`, `silver_chunks`, `silver_clarifications`, `silver_documents`, and
-`bronze_documents`. The script reads this list from each model's own `__tablename__`, so it
-cannot drift out of sync with `db/models.py`.
+`agents/stages/gold/testing/test_golden_set.py` already truncates between its own steps
+(`_TABLES_TO_TRUNCATE` there), plus `llm_costs` — that other list does not include it either;
+both are a hand-kept "every table this app writes rows to" enumeration, so a new table only
+ends up wiped here once someone explicitly adds it, not automatically. `gold_aliases`,
+`gold_evolution`, `silver_chunks`, `silver_clarifications`, `silver_documents`,
+`bronze_documents`, `llm_costs`. The script reads this list from each model's own
+`__tablename__`, so a table already listed here cannot drift out of sync with `db/models.py` —
+it just does not catch a table that was never added to the list in the first place, which is
+exactly what happened to `llm_costs` when it was introduced.
 
 This script also truncates the LangGraph checkpointer's three data tables: `checkpoints`,
 `checkpoint_blobs`, and `checkpoint_writes`. This makes sure no paused, half-answered
@@ -35,7 +39,15 @@ from pathlib import Path
 from sqlalchemy import text
 
 from app.config import settings
-from db.models import BronzeDocument, GoldAlias, GoldEvolution, SilverChunk, SilverClarification, SilverDocument
+from db.models import (
+    BronzeDocument,
+    GoldAlias,
+    GoldEvolution,
+    LlmCost,
+    SilverChunk,
+    SilverClarification,
+    SilverDocument,
+)
 from db.session import async_session_factory
 
 _APP_TABLES = [
@@ -45,6 +57,7 @@ _APP_TABLES = [
     SilverClarification.__tablename__,
     SilverDocument.__tablename__,
     BronzeDocument.__tablename__,
+    LlmCost.__tablename__,
 ]
 _CHECKPOINT_TABLES = ["checkpoint_writes", "checkpoint_blobs", "checkpoints"]
 
@@ -79,7 +92,10 @@ async def main() -> None:
     print(f"Wiping all app data from {settings.database_url!r} and resetting {settings.output_dir!r}...")
     await _truncate_all()
     _reset_output_dir()
-    print("Done — Bronze/Silver/Gold, checkpoints, and output/ are all empty. Ready for a fresh upload.")
+    print(
+        "Done — Bronze/Silver/Gold, llm_costs, checkpoints, and output/ are all empty. "
+        "Ready for a fresh upload."
+    )
 
 
 if __name__ == "__main__":

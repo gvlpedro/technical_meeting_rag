@@ -17,7 +17,7 @@ DEV_DB_NAME ?= technical_meeting_rag
 BACKUP_DIR ?= backups
 FILE ?=
 
-.PHONY: test test-acb up down db migrate clean test-db migrate-test ingestion questions questions-arch questions-data-contracts clarify test-gold-arch-evolution chat frontend backup restore
+.PHONY: test test-acb up down db migrate clean test-db migrate-test questions questions-arch questions-data-contracts clarify test-gold-arch-evolution chat frontend backup restore
 
 db:
 	docker compose up -d postgres < /dev/null
@@ -92,10 +92,6 @@ up: down
 	@echo "Backend up, verify on http://localhost:$(PORT)/health"
 	@echo "Frontend starting (waits on the backend's own healthcheck first) — give it a few"
 	@echo "seconds, then open http://localhost:$(FRONTEND_PORT)"
-
-ingestion: migrate
-	@test -n "$(DATE)" || (echo "Usage: make ingestion DATE=YYYYMMDD" >&2; exit 1)
-	PYTHONPATH=. uv run python scripts/ingest.py --ingestion-date $(DATE)
 
 questions: migrate
 	@test -n "$(DATE)" || (echo "Usage: make questions DATE=YYYYMMDD" >&2; exit 1)

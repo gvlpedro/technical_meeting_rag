@@ -2,7 +2,36 @@
 that more than one pipeline stage depends on. This test file stays under `tests/`, not under
 any `agents/stages/<stage>/test/` folder, because no single stage owns this code."""
 
-from agents.shared import mentions_grounded_in_source
+from agents.shared import (
+    extract_source_line,
+    insert_authors_line,
+    insert_source_line,
+    mentions_grounded_in_source,
+)
+
+
+def test_insert_source_line_round_trips_through_extract():
+    document = "# ADR — Introduce Kafka\n\nSome body text."
+    stamped = insert_source_line(document, "meeting.en.vtt")
+    assert extract_source_line(stamped) == "meeting.en.vtt"
+    assert "Some body text." in stamped
+
+
+def test_insert_source_line_is_a_noop_for_an_empty_source_component():
+    document = "# ADR — Introduce Kafka\n\nSome body text."
+    assert insert_source_line(document, "") == document
+
+
+def test_insert_source_line_composes_with_insert_authors_line():
+    """`agents.graph.write_document` chains both stamps together
+    (`insert_source_line(insert_authors_line(content, username), source)`) — this is the same
+    order, checked here in isolation from the rest of the graph."""
+    document = "# ADR — Introduce Kafka\n\nSome body text."
+    stamped = insert_source_line(insert_authors_line(document, "alice"), "meeting.en.vtt")
+    assert stamped == (
+        "# ADR — Introduce Kafka\n\n**Source:** meeting.en.vtt\n\n**Authors:** alice\n\nSome body text."
+    )
+    assert extract_source_line(stamped) == "meeting.en.vtt"
 
 
 def test_mentions_grounded_in_source_keeps_only_names_present_in_that_source_text():

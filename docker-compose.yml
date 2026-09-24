@@ -8,8 +8,6 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/technical_meeting_rag
-    volumes:
-      - ./input:/app/input:ro
     depends_on:
       postgres:
         condition: service_healthy

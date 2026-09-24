@@ -276,7 +276,7 @@ async def _score_qa_item(session, item: dict) -> dict:
     rows = await top_k_gold_evolution(
         session, vector, k=8, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=item["question"]
     )
-    answer = await answer_question(item["question"], rows)
+    answer = await answer_question(session, item["question"], rows)
     expected = item["expected_entity"]
 
     return {
@@ -440,20 +440,21 @@ async def _check_legacy_monolith_retrieval() -> tuple[list[str], str]:
             session, vector, k=8, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
         )
 
-    removed_hit = any(
-        row.entity_type == "component"
-        and row.canonical_name.lower() == "legacy order monolith"
-        and row.operation == "removed"
-        for row in rows
-    )
-    if not removed_hit:
-        violation = (
-            "top-k for the legacy monolith question missed its removed row: "
-            f"{[(row.canonical_name, row.operation) for row in rows]}"
+        removed_hit = any(
+            row.entity_type == "component"
+            and row.canonical_name.lower() == "legacy order monolith"
+            and row.operation == "removed"
+            for row in rows
         )
-        return [violation], ""
+        if not removed_hit:
+            violation = (
+                "top-k for the legacy monolith question missed its removed row: "
+                f"{[(row.canonical_name, row.operation) for row in rows]}"
+            )
+            return [violation], ""
 
-    answer = await answer_question(question, rows)
+        answer = await answer_question(session, question, rows)
+
     if any(keyword in answer.lower() for keyword in ("removed", "retired", "decommissioned")):
         return [], answer
     violation = f"generated answer for the legacy monolith question lacks an expected keyword: {answer!r}"
@@ -533,8 +534,8 @@ async def _check_summary_judgment() -> tuple[str, dict]:
         rows = await top_k_gold_evolution(
             session, vector, k=15, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
         )
+        answer = await answer_question(session, question, rows)
 
-    answer = await answer_question(question, rows)
     judgment = await _critique_summary(answer)
     return answer, judgment
 

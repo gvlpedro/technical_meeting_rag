@@ -37,7 +37,6 @@ class Settings(BaseSettings):
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     chunk_size_tokens: int = 400
     chunk_overlap_tokens: int = 50
-    input_dir: str = "input"
     output_dir: str = "output"
 
     # APP CONFIG
@@ -70,6 +69,7 @@ class Settings(BaseSettings):
     frontend_users: list[FrontendUser] = [
         FrontendUser(username="pepe", password="1234", tenant="lidr"),
         FrontendUser(username="peter", password="123", tenant="lotus"),
+        FrontendUser(username="martin", password="123", tenant="lotus"),
     ]
 
 

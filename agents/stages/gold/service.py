@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import Numeric, and_, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
@@ -197,7 +197,20 @@ async def _lookup_entity_id(
     `tenant` scopes both lookups. This is the one place where a missing tenant filter would cause
     a real data leak, not just a wrong count. Without this filter, tenant A's "Order Service"
     alias would exact-match or fuzzy-match tenant B's own "Order Service" mention. That would
-    silently merge two unrelated companies' components under the same entity_id."""
+    silently merge two unrelated companies' components under the same entity_id.
+
+    The fuzzy comparison rounds `similarity()` to 4 decimal places before comparing it to
+    `FUZZY_MATCH_THRESHOLD`, instead of comparing the raw value directly. `pg_trgm.similarity()`
+    returns a 4-byte `real`, and `FUZZY_MATCH_THRESHOLD` is a Python `float` (8-byte double) —
+    comparing `real > float8` widens the `real` to double precision first, and that widening can
+    turn a conceptually exact 0.6 into something like `0.6000000238418579`, which then passes a
+    strict `> 0.6` check it should not. This is not theoretical: `similarity('frontend',
+    'frontend-intra')` is exactly this case, and without the rounding here, it silently merged
+    two genuinely different components (a marketplace frontend and an unrelated, deliberately
+    separate intranet frontend) into one Gold entity — confirmed by reproducing the exact query
+    against the live database. Rounding first makes the comparison exact at the precision that
+    actually matters (four decimal places is already far finer than this threshold needs to be
+    tuned to), so a true 0.6 compares as 0.6, never as marginally more."""
     exact = (
         await session.execute(
             select(GoldAlias.entity_id).where(
@@ -208,15 +221,16 @@ async def _lookup_entity_id(
     if exact is not None:
         return exact
 
+    rounded_similarity = func.round(func.similarity(GoldAlias.alias, name).cast(Numeric), 4)
     fuzzy = (
         await session.execute(
             select(GoldAlias.entity_id)
             .where(
                 GoldAlias.tenant == tenant,
                 GoldAlias.entity_type == entity_type,
-                func.similarity(GoldAlias.alias, name) > FUZZY_MATCH_THRESHOLD,
+                rounded_similarity > FUZZY_MATCH_THRESHOLD,
             )
-            .order_by(func.similarity(GoldAlias.alias, name).desc())
+            .order_by(rounded_similarity.desc())
             .limit(1)
         )
     ).scalars().first()
@@ -1002,6 +1016,67 @@ def _version_tag(row: GoldEvolution, latest: dict[tuple[str, str], int] | None) 
     return f" [superseded — latest is version {latest_version}]"
 
 
+async def _resolve_entity_names(
+    session: AsyncSession, tenant: str, ids_by_type: dict[str, set[str]]
+) -> dict[tuple[str, str], str]:
+    """Batched `entity_id -> canonical_name` lookup for `answer_question`'s payload
+    enrichment below. A component's `dependency_ids`/`contract_ids` and a data contract's
+    `producer_id`/`consumer_id` (`ComponentPayload`/`DataContractPayload`) only ever store
+    resolved ids, never names — showing a raw ULID to the answering LLM would be useless. This
+    picks each id's latest version's `canonical_name`, one query per entity_type, not one
+    query per id."""
+    result: dict[tuple[str, str], str] = {}
+    for entity_type, ids in ids_by_type.items():
+        if not ids:
+            continue
+        rows = (
+            await session.execute(
+                select(GoldEvolution.entity_id, GoldEvolution.canonical_name, GoldEvolution.version)
+                .where(
+                    GoldEvolution.tenant == tenant,
+                    GoldEvolution.entity_type == entity_type,
+                    GoldEvolution.entity_id.in_(ids),
+                )
+                .order_by(GoldEvolution.entity_id, GoldEvolution.version.desc())
+            )
+        ).all()
+        seen: set[str] = set()
+        for entity_id, canonical_name, _version in rows:
+            if entity_id in seen:
+                continue
+            seen.add(entity_id)
+            result[(entity_type, entity_id)] = canonical_name
+    return result
+
+
+def _payload_detail(row: GoldEvolution, names: dict[tuple[str, str], str]) -> str:
+    """Renders `row.payload`'s structured facts as a short trailing clause for
+    `answer_question`'s context line — the detail a "what does X depend on" / "what does this
+    contract cover" question needs, and that `row.narrative` alone does not reliably restate.
+    Returns `""` when the payload has nothing to add (e.g. an architecture-entity row, or a
+    component with no known dependencies/contracts)."""
+    if row.entity_type == "component":
+        payload = ComponentPayload.model_validate(row.payload or {})
+        deps = [names[("component", i)] for i in payload.dependency_ids if ("component", i) in names]
+        contracts = [names[("data_contract", i)] for i in payload.contract_ids if ("data_contract", i) in names]
+        parts = []
+        if deps:
+            parts.append(f"depends on: {', '.join(deps)}")
+        if contracts:
+            parts.append(f"data contracts: {', '.join(contracts)}")
+        return f" ({'; '.join(parts)})" if parts else ""
+    if row.entity_type == "data_contract":
+        payload = DataContractPayload.model_validate(row.payload or {})
+        parts = []
+        if payload.producer or payload.consumer:
+            parts.append(f"producer: {payload.producer or 'unknown'}, consumer: {payload.consumer or 'unknown'}")
+        fields = list(payload.odcs_spec.get("schema", {}).get("properties", {}).keys())
+        if fields:
+            parts.append(f"schema fields: {', '.join(fields)}")
+        return f" ({'; '.join(parts)})" if parts else ""
+    return ""
+
+
 # `answer_question`/`answer_evolution_question` only ever render this many of the most recent
 # `history` messages, even if a caller passes more. This bounds prompt size and cost for a
 # long-running chat session — resolving a follow-up question only ever needs a few turns of
@@ -1022,6 +1097,7 @@ def _format_history_block(history: list[tuple[str, str]] | None) -> str:
 
 
 async def answer_question(
+    session: AsyncSession,
     question: str,
     rows: list[GoldEvolution],
     latest: dict[tuple[str, str], int] | None = None,
@@ -1038,6 +1114,13 @@ async def answer_question(
     similarity but has since been superseded. Without `latest`, every row is presented the same
     way. That is what happens today when a caller does not pass it.
 
+    `session` is used only to resolve each row's `payload` ids (a component's dependencies and
+    contracts, a data contract's producer/consumer/schema fields — see `_payload_detail`) into
+    names the LLM can actually read; `rows` themselves are not re-fetched. Before this, only
+    `narrative` ever reached this prompt, so a question genuinely asking for a component's
+    dependencies or a contract's schema had no way to be answered even when that exact data was
+    already sitting in `payload` — this closes that gap.
+
     `history`, when given, is the most recent turns of this same chat session (see
     `_format_history_block` and `.tmp/advanced_techniques.md` §8). It is rendered as its own
     labeled block, never merged into `question` itself, so the model always sees one clean,
@@ -1048,9 +1131,21 @@ async def answer_question(
     own; every fact in the answer must still come from `rows`."""
     if not rows:
         return "No relevant Gold facts were found for this question."
+
+    component_payloads = [
+        ComponentPayload.model_validate(row.payload or {}) for row in rows if row.entity_type == "component"
+    ]
+    component_ids = {i for p in component_payloads for i in p.dependency_ids}
+    contract_ids = {i for p in component_payloads for i in p.contract_ids}
+    names = await _resolve_entity_names(
+        session, rows[0].tenant, {"component": component_ids, "data_contract": contract_ids}
+    )
     context = "\n\n".join(
         f"- [{row.entity_type}] {row.canonical_name} (version {row.version}, "
-        f"operation={row.operation}){_version_tag(row, latest)}: {row.narrative}"
+        f"operation={row.operation}, {row.ingestion_date.isoformat()}, by "
+        f"{row.authored_by or 'an unknown author'}, from ADR {row.source_component} "
+        f"v{row.source_adr_version}){_version_tag(row, latest)}: {row.narrative}"
+        f"{_payload_detail(row, names)}"
         for row in rows
     )
     messages = [
@@ -1058,12 +1153,25 @@ async def answer_question(
             "role": "user",
             "content": (
                 "Answer the question below using ONLY the retrieved architecture facts as "
-                "context — do not invent anything the facts don't state. Be concise (2-4 "
-                "sentences). If the facts describe an entity's evolution across versions, "
-                "state its current/latest status explicitly, preferring facts tagged "
-                "[latest version] for that; facts tagged [superseded] describe history, not "
-                "the current state, and should only be used to answer questions about how "
-                "something evolved over time. If a previous conversation is given below, use it "
+                "context — do not invent anything the facts don't state. Default to concise "
+                "(2-4 sentences); only go longer, covering every relevant fact in the context "
+                "(including the parenthetical dependency/contract/schema detail after a fact, "
+                "when present), when the question itself asks for detail, specifics, or a full "
+                "picture (e.g. \"details\", \"detalles\", \"tell me everything about\", "
+                "\"explain fully\") — length must track what was actually asked, never padded "
+                "beyond what the facts support. If the facts describe an entity's evolution "
+                "across versions, state its current/latest status explicitly, preferring facts "
+                "tagged [latest version] for that; facts tagged [superseded] describe history, "
+                "not the current state, and should only be used to answer questions about how "
+                "something evolved over time. Each fact's parenthetical also carries its "
+                "ingestion date and author — use them directly for a \"when\"/\"who\" question; "
+                "if the author shown is \"an unknown author\", say the author is not recorded "
+                "instead of claiming no information exists at all. Each fact also names the "
+                "exact ADR it came from (\"from ADR <source_component> v<version>\") — give this "
+                "back verbatim, source_component and version both, whenever the question asks "
+                "which ADR/document a fact comes from, so the reader can look that exact ADR up "
+                "in the Architecture history table. If a previous conversation is given below, use it "
+                "given below, use it "
                 "ONLY to resolve what the question refers to (a pronoun, \"it\", \"that "
                 "component\") — never as a source of facts on its own; every fact in your "
                 "answer must still come from the retrieved facts.\n\n"
@@ -1195,7 +1303,8 @@ async def find_entity_by_name_in_text(
 def _evolution_step_line(row: GoldEvolution) -> str:
     author = row.authored_by or "an unknown author"
     return (
-        f"- Version {row.version}, {row.ingestion_date.isoformat()}, by {author} "
+        f"- Version {row.version}, {row.ingestion_date.isoformat()}, by {author}, from ADR "
+        f"{row.source_component} v{row.source_adr_version} "
         f"(operation={row.operation}): {row.narrative}"
     )
 
@@ -1213,7 +1322,8 @@ async def answer_evolution_question(
 
     Each step's line names its version, event-time date (`ingestion_date`, when the change was
     asserted, not `changed_at`), author (`authored_by`, empty for a CLI/script/test run with no
-    real user — see `GoldEvolution.authored_by`'s own column comment), operation, and narrative.
+    real user — see `GoldEvolution.authored_by`'s own column comment), the exact ADR it came
+    from (`source_component`/`source_adr_version`), operation, and narrative.
     The prompt asks for a chronological prose account: who introduced the entity, when, and
     why, then each later step and its own reason, in the style of "X introduced this on Y for
     Z, then evolved on V because...". `rows` empty means the entity was never found; the caller
@@ -1241,7 +1351,10 @@ async def answer_evolution_question(
                 "\"an unknown author\", say the author is not recorded for that step instead of "
                 "guessing one. Be thorough but not padded — 3-6 sentences for a short history, "
                 "more only if the timeline genuinely has that many distinct steps worth "
-                "naming. If a previous conversation is given below, use it only to phrase the "
+                "naming. Each step also names the exact ADR it came from (source_component and "
+                "version) — give that back verbatim if the question asks which ADR/document a "
+                "step comes from, so the reader can look that exact ADR up in the Architecture "
+                "history table. If a previous conversation is given below, use it only to phrase the "
                 "answer naturally as part of that conversation — never as a source of facts on "
                 "its own; every fact must still come from the timeline.\n\n"
                 f"{_format_history_block(history)}"

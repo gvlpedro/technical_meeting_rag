@@ -29,6 +29,7 @@ from agents.shared import (
     bronze_content_for_source,
     bronze_ingestion_date_for_source,
     insert_authors_line,
+    insert_source_line,
     qa_pairs_for_source,
 )
 from agents.stages import gold
@@ -46,11 +47,11 @@ from agents.stages.data_contract_questions.service import generate_data_contract
 from agents.state import initial_state
 from agents.template import load_json_response
 from app.config import settings
-from db.models import SilverChunk, SilverDocument
+from db.models import LlmCost, SilverChunk, SilverDocument
 from db.session import get_session
 from ingestion.embedder import embed
 from ingestion.service import NoTranscriptsFoundError, ingest_uploaded_files
-from llm.router import LLM_USAGE_LOG, bind_tenant
+from llm.router import bind_tenant
 from llm.router import complete as llm_complete
 
 router = APIRouter(prefix="/v1/frontend", tags=["frontend"])
@@ -348,8 +349,9 @@ async def regenerate_document(
 
     # This is stamped AFTER the Critic has already reviewed `document`. See
     # `insert_authors_line`'s own docstring for why doing this any earlier would get
-    # the line flagged as an unsupported claim.
-    document = insert_authors_line(document, request.username)
+    # the line flagged as an unsupported claim — `insert_source_line` carries the same
+    # constraint, for the same reason.
+    document = insert_source_line(insert_authors_line(document, request.username), request.source_component)
 
     return RegenerateResponse(
         document=document, score=critique.completeness_score, unresolved_points=critique.unresolved_points
@@ -725,7 +727,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
         return ChatResponse(answer="No Gold facts were relevant to this question.", retrieved=[])
 
     latest = await gold.latest_versions(db, rows)
-    answer = await gold.answer_question(request.question, rows, latest, history=history)
+    answer = await gold.answer_question(db, request.question, rows, latest, history=history)
     retrieved = [
         {
             "entity_type": row.entity_type,
@@ -741,38 +743,65 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
 # --- Test monitor --------------------------------------------------------------------------
 
 
+class LlmCostRow(BaseModel):
+    id: int
+    method: str
+    model: str
+    prompt: str
+    input_cost: float
+    output_cost: float
+    created_at: str
+
+
 class TestMonitorResponse(BaseModel):
     suites: list[dict]
-    llm_usage_by_tenant: dict[str, dict]
+    llm_costs: list[LlmCostRow]
+
+
+# `test_monitor` below only ever returns this many of the caller's tenant's most recent
+# `llm_costs` rows. Every real LLM call writes one row (`llm.router._log_usage`), so an
+# unbounded query here would grow without limit as the app keeps running — this caps what one
+# Monitor-tab load actually pulls and renders, newest calls first.
+_LLM_COSTS_DISPLAY_LIMIT = 200
 
 
 @router.get("/test-monitor", response_model=TestMonitorResponse)
-async def test_monitor() -> TestMonitorResponse:
-    """"For all application", matching the tab's own description. This is a global,
-    app-wide view: every tenant's spend, every test suite. It is not scoped to the
-    caller's own tenant. It is gated only by `start_test_mode` at the frontend. This
-    endpoint itself stays reachable; `start_test_mode` only hides the tab that calls
-    it."""
+async def test_monitor(username: str, db: AsyncSession = Depends(get_session)) -> TestMonitorResponse:
+    """Backs the "Monitor" tab. Test suite results (`testing_*/output/result.json`) stay a
+    global, app-wide view — the ACB golden sets are not tenant data. `llm_costs`, below, is the
+    opposite: every real LLM call is tagged with the tenant `bind_tenant` set at that call's
+    own request boundary (see `llm.router.complete`'s own docstring), so this endpoint filters
+    to the CALLER's own tenant only, the same isolation `architecture_history`/`chat` already
+    enforce — one tenant must never see how much another tenant's usage cost. Gated only by
+    `start_test_mode`; the endpoint itself stays reachable, `start_test_mode` only hides the
+    tab that calls it."""
     if not settings.start_test_mode:
         raise HTTPException(status_code=404, detail="Test monitor is disabled (start_test_mode=False)")
+    tenant = _tenant_for_username(username)
 
     suites = []
     for result_path in sorted(Path(".").glob("testing_*/output/result.json")):
         suites.append({"suite": result_path.parent.parent.name, "results": json.loads(result_path.read_text())})
 
-    usage_by_tenant: dict[str, dict] = {}
-    if LLM_USAGE_LOG.exists():
-        for line in LLM_USAGE_LOG.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            entry = json.loads(line)
-            bucket = usage_by_tenant.setdefault(
-                entry.get("tenant", "default"),
-                {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_eur": 0.0},
-            )
-            bucket["calls"] += 1
-            bucket["input_tokens"] += entry.get("input_tokens") or 0
-            bucket["output_tokens"] += entry.get("output_tokens") or 0
-            bucket["cost_eur"] += entry.get("cost_eur") or 0.0
+    rows = (
+        await db.execute(
+            select(LlmCost)
+            .where(LlmCost.tenant == tenant)
+            .order_by(LlmCost.created_at.desc())
+            .limit(_LLM_COSTS_DISPLAY_LIMIT)
+        )
+    ).scalars().all()
+    llm_costs = [
+        LlmCostRow(
+            id=row.id,
+            method=row.method,
+            model=row.model,
+            prompt=row.prompt,
+            input_cost=row.input_cost,
+            output_cost=row.output_cost,
+            created_at=row.created_at.isoformat(),
+        )
+        for row in rows
+    ]
 
-    return TestMonitorResponse(suites=suites, llm_usage_by_tenant=usage_by_tenant)
+    return TestMonitorResponse(suites=suites, llm_costs=llm_costs)

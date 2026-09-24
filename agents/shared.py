@@ -140,10 +140,51 @@ def extract_authors_line(document: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def insert_source_line(document: str, source_component: str) -> str:
+    """Inserts a `**Source:** <source_component>` line right after the ADR's own
+    `# ADR — <title>` heading (and after `**Authors:**`, when `insert_authors_line` already
+    ran first) — this is the reference back to the original uploaded transcript this ADR was
+    generated from, embedded in the document itself so a reader who only has the downloaded
+    `.md` file (no access to the app's own Architecture history table) can still tell which
+    source it came from, and a person can cross-check what the chat names against what a
+    downloaded file actually says.
+
+    Plain, deterministic Python, never left to the LLM — `source_component` is already known
+    before generation starts (it names the uploaded input file, not something the transcript
+    itself needs to state), so there is nothing here for the model to get wrong or invent.
+
+    This does NOT also stamp the ADR's `version` number: unlike `source_component`,
+    `version` is only decided by `_persist_document_version`'s own hash-compare-then-bump,
+    which runs AFTER this document's final content (this line included) already exists — the
+    version cannot be known before the content it would be embedded in is finished. The
+    version half of an ADR's identifier stays something the Architecture history table (and
+    the downloaded file's own name, `<source_component>-v<version>.md`) provides instead.
+
+    Must be called AFTER the Critic has already reviewed the document, same reasoning as
+    `insert_authors_line`: `TRANSCRIPT`/`CLARIFICATIONS` never state the uploaded file's own
+    name, so the Critic would flag this line as an unsupported claim if it existed at review
+    time. Does nothing when `source_component` is empty, the same no-op convention
+    `insert_authors_line` already uses for a missing username."""
+    if not source_component:
+        return document
+    heading, _, rest = document.partition("\n")
+    return f"{heading}\n\n**Source:** {source_component}\n\n{rest.lstrip(chr(10))}"
+
+
+_SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(.+)$", re.MULTILINE)
+
+
+def extract_source_line(document: str) -> str:
+    """The inverse of `insert_source_line`. Returns `""` if the document has no such line —
+    see `insert_source_line`."""
+    match = _SOURCE_LINE_RE.search(document)
+    return match.group(1).strip() if match else ""
+
+
 def transcription_base_name(source_component: str) -> str:
     """"real_time_delivery_architecture_at_twitter.en.vtt" becomes
     "real_time_delivery_architecture_at_twitter". This strips both the `.vtt` extension and
-    the language-code suffix that `scripts/download_transcript.py` adds. It does this by
+    a trailing language-code suffix, when the source filename has one. It does this by
     taking `Path.stem` twice, once for each suffix. Every stage that names a file on disk
     after a source uses this. Examples: `agents.graph.write_document`'s ADR audit file, and
     `agents.stages.gold.service.current_architecture_diagram`'s node subtitle."""
@@ -278,25 +319,13 @@ async def load_bronze_rows(
 
 
 def _no_bronze_documents_message(ingestion_date_str: str) -> str:
-    """Tells apart two different reasons why `bronze_documents` can be empty for a date. The
-    first reason is a transcript file that was never ingested. This is the common case, and
-    it is easy to miss: a file on disk is not the same thing as a row in the table. The
-    second reason is that nothing exists at all — a typo in the date, or genuinely nothing
-    uploaded yet. This function returns a different message for each case, instead of one
-    generic message that reads the same either way."""
-    transcripts_dir = Path(settings.input_dir) / "transcriptions" / f"ingestion_date={ingestion_date_str}"
-    vtt_files = sorted(p.name for p in transcripts_dir.glob("*.vtt")) if transcripts_dir.is_dir() else []
-    if vtt_files:
-        return (
-            f"Found {len(vtt_files)} transcript file(s) in {transcripts_dir} "
-            f"({', '.join(vtt_files)}), but none are ingested into bronze_documents yet for "
-            f"ingestion_date={ingestion_date_str!r}. A file on disk is not the same as a row in "
-            f"the table — run `make ingestion DATE={ingestion_date_str}` first, then retry."
-        )
+    """The single message shown when `bronze_documents` has no rows for this date — a typo in
+    the date, or genuinely nothing uploaded yet. Upload happens through the frontend's own
+    "Input transcription" tab (`ingestion.service.ingest_uploaded_files`); there is no
+    disk-based ingestion path to check for anymore."""
     return (
-        f"No bronze_documents found for ingestion_date={ingestion_date_str!r}, and no transcript "
-        f"files exist at {transcripts_dir} either — nothing to ingest. Check the date, or place "
-        f".vtt file(s) there first."
+        f"No bronze_documents found for ingestion_date={ingestion_date_str!r} — check the date, "
+        f"or upload a transcript for it first via the frontend's Input transcription tab."
     )
 
 

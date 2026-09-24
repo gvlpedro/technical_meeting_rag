@@ -114,7 +114,7 @@ async def _answer(
         rerank=rerank,
     )
     latest = await latest_versions(session, rows)
-    return await answer_question(question, rows, latest, history=history)
+    return await answer_question(session, question, rows, latest, history=history)
 
 
 async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -> None:

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Computed, Date, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Computed, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,15 +30,15 @@ class BronzeDocument(Base):
     # anywhere in Bronze, Silver, or Gold must filter by tenant. Nothing here enforces
     # that at the DB level, beyond the unique constraints that include it.
     tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
-    # This is the date the source video was uploaded on YouTube.
+    # This is the meeting date the reviewer selects when uploading, on the frontend's own
+    # "Input transcription" tab.
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     # This is the filename of the .vtt transcript this chunk was cut from. We keep it
     # for traceability.
     source_component: Mapped[str] = mapped_column(String, nullable=False)
     # This is who uploaded this chunk: the frontend's logged-in username (see
-    # FrontendUser), passed through from `ingest_uploaded_files`. It is `""` for the
-    # disk-based `ingest_bronze` path (`scripts/ingest.py` or `POST /v1/ingest`). That
-    # path predates the frontend, so it has no user to attribute a row to.
+    # FrontendUser), passed through from `ingest_uploaded_files`. It is `""` for a
+    # script or test run with no real logged-in user.
     uploaded_by: Mapped[str] = mapped_column(String, nullable=False, server_default="")
     # This is the chunk's actual text, the text we feed to the embedding model.
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -285,5 +285,36 @@ class GoldAlias(Base):
     source_component: Mapped[str] = mapped_column(String, nullable=False)
     source_adr_version: Mapped[int] = mapped_column(Integer, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LlmCost(Base):
+    """One row per real LLM call, written by `llm.router.complete` itself — see that
+    function's own docstring. This replaces the old append-only `llm_usage.jsonl` file: the
+    same event, now a queryable Postgres table instead of a file the "Monitor" tab had to
+    parse and aggregate by hand. A mocked-LLM test call never reaches this table (no
+    `response.usage` to cost), the same exclusion the old JSONL log already applied — this
+    stays a record of real, billed calls only.
+    """
+
+    __tablename__ = "llm_costs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True, server_default="default")
+    # The name of the function that called `complete()`, read off the call stack inside
+    # `complete()` itself (`sys._getframe(1).f_code.co_name`) — never passed in by the caller.
+    # A call site can never mislabel or forget this the way an explicit `method="..."` kwarg
+    # at every one of `complete()`'s real call sites could, and it can never drift out of sync
+    # with a function that gets renamed later.
+    method: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # The actual model string sent to the provider (e.g. `settings.openai_model`), not the
+    # provider name — two calls with the same `provider` can still use different models if
+    # `settings` changes between them, and cost/quality only ever depend on the model itself.
+    model: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # EUR, via the same fixed `llm.router.USD_TO_EUR` rate the old JSONL log already used —
+    # not a live FX lookup, just enough to size what a call cost.
+    input_cost: Mapped[float] = mapped_column(Float, nullable=False)
+    output_cost: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 

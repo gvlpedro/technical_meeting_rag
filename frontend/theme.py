@@ -413,7 +413,7 @@ def inject() -> None:
     st.markdown(
         f"""<div class="app-header-bar">
             <img src="{_LOGO_DATA_URI}" alt="logo" />
-            <span class="app-header-title">Technical Meeting RAG</span>
+            <span class="app-header-title">Architecture evolution RAG v.0.1</span>
         </div>""",
         unsafe_allow_html=True,
     )

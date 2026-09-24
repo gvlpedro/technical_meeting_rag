@@ -86,21 +86,7 @@ Identify items that are hidden due to permissions or organizational boundaries, 
 ## Samples
 
 * Synthetic transcriptions: Specific descriptions for managing unit tests and verify expected behavior from different descriptions.
-* Youtube transcriptions: Only to process real transcriptions that are very different from each other the youtube transcriptions will be used as input.
-   These transcripts will be processed to generate the clarified architecture record, applying the same guardrails to identify missing information, inconsistencies, implementation status, and boundaries between profiles.
 
-```
-# Download a video's transcript; its session is derived from the video's own
-# YouTube upload_date (input/transcriptions/session=<upload_date>/)
-python3 scripts/download_transcript.py "https://www.youtube.com/watch?v=04uC4zrU10k"
-
-# Re-download every link already tracked in input/links.json
-python3 scripts/download_transcript.py
-
-# ...or only the ones uploaded on a given date
-python3 scripts/download_transcript.py --session 20260906
-```
-  
 ## User interface
 
 Once user authenticates in a session (isolating information) to show different tabs:

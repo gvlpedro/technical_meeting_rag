@@ -8,7 +8,6 @@ wider picture: HTTP endpoints, CLI entry points, and where each one does or does
 flowchart TD
     subgraph EP["HTTP endpoints — app/main.py"]
         H1["GET /health<br/>no LLM"]
-        H2["POST /v1/ingest<br/>ingestion.service.ingest_bronze<br/>no LLM — parse_vtt + chunk_text + local embed()"]
         H3["POST /v1/completions<br/>llm.router.complete(messages)<br/>LLM call · caller-supplied prompt, no fixed file"]
     end
 
@@ -25,13 +24,11 @@ flowchart TD
     end
 
     subgraph CLI["CLI entry points — Makefile"]
-        M1["make ingestion<br/>scripts/ingest.py"]
         M2["make questions[-arch|-data-contracts]<br/>scripts/questions.py"]
         M3["make clarify<br/>scripts/clarify.py"]
         M4["make chat<br/>scripts/chat_gold.py · REPL, same retrieval/answer code as /chat"]
     end
 
-    M1 -. same service as .-> H2
     F2 -. same graph as .-> M3
 
     subgraph GRAPH["agents/graph.py — Silver LangGraph"]

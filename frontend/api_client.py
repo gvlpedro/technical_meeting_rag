@@ -132,7 +132,9 @@ def chat(username: str, question: str, k: int = 8, history: list[tuple[str, str]
     return response.json()
 
 
-def test_monitor() -> dict:
-    response = requests.get(f"{BACKEND_URL}/v1/frontend/test-monitor", timeout=10)
+def test_monitor(username: str) -> dict:
+    response = requests.get(
+        f"{BACKEND_URL}/v1/frontend/test-monitor", params={"username": username}, timeout=10
+    )
     response.raise_for_status()
     return response.json()

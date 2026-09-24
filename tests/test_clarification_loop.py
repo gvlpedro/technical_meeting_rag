@@ -813,7 +813,11 @@ async def test_contradiction_escalates_once_and_passes_after_human_informed_redr
                 .scalars()
                 .one()
             )
-        assert doc.content == "# Architecture Description / Evolution\n\nAuth service is active and maintained."
+        assert doc.content == (
+            "# Architecture Description / Evolution\n\n"
+            "**Source:** meeting_c.en.vtt\n\n"
+            "Auth service is active and maintained."
+        )
     finally:
         await _cleanup_date(DATE_CONTRADICTION)
 

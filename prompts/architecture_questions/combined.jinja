@@ -273,6 +273,29 @@ delivered over one. If a name only ever appears as "X is delivered over Kafka" /
 add a field" / "X moves from v1.0 to v1.1", that is a data contract changing, not a new or
 modified component — list it once, under PHASE 6 only.
 
+**Reuse an existing component's exact name from `KNOWN_ARCHITECTURE` — never paraphrase it.**
+When the transcript refers to a component `KNOWN_ARCHITECTURE` already lists, use that literal
+name, character for character, even if the transcript itself describes it more descriptively
+("the marketplace backend", "the existing PostgreSQL database", "the frontend used by
+customers"). A paraphrase is not a new component and must never get its own
+`mentioned_components` entry alongside the real one — list the existing component under its
+`KNOWN_ARCHITECTURE` name only, exactly once.
+
+This matters even more than usual when the transcript is explicitly drawing a boundary around a
+NEW component by contrasting it with existing ones ("the new MySQL database is independent from
+the existing marketplace PostgreSQL database, Redis instance, marketplace backend, and
+marketplace frontend"). That contrast is naming already-known components — `PostgreSQL`, `Redis`,
+`backend`, `frontend` in `KNOWN_ARCHITECTURE` — using looser, descriptive language, not
+introducing four more components. Real, observed failure: exactly that sentence produced BOTH
+`"PostgreSQL"` (correct) AND a second, separate `"marketplace PostgreSQL database"` entry
+(wrong) in the same `mentioned_components` list — two entries for one real component, under two
+different names, neither one ever connected to anything since the transcript only ever denies a
+connection. A paraphrased duplicate like this cannot be fuzzy-matched back to the real entity
+downstream (the wording is too different), so it becomes a permanent, disconnected phantom
+component in the live architecture diagram. Before adding any `mentioned_components` entry, check
+whether `KNOWN_ARCHITECTURE` already has a component this name could just be a looser way of
+referring to — if so, use the existing name, do not add a second entry.
+
 For every component determine its change status.
 
 Allowed statuses:
@@ -292,6 +315,12 @@ unknown
 ## `new`
 
 Use when the transcript establishes that a component is being introduced and it does not correspond to an existing component in `KNOWN_ARCHITECTURE`.
+
+**Check the name against `KNOWN_ARCHITECTURE` before using this status, every time — never skip
+straight to `new` just because the transcript calls something "new"/"introducing"/"newly
+introduced."** A name that already appears in `KNOWN_ARCHITECTURE` can never be `new`, no matter
+how the transcript phrases it this round; see **STATUS RULES** below for the exact failure mode
+this guards against and a worked example.
 
 Example:
 
@@ -458,6 +487,24 @@ Then:
 ```text
 status = new
 ```
+
+**...only when `KNOWN_ARCHITECTURE` does not already contain an `Event Processor`.** If it does,
+"introducing"/"new"/"newly introduced" wording about a name that already appears in
+`KNOWN_ARCHITECTURE` is not evidence the component is new — it directly contradicts
+`KNOWN_ARCHITECTURE`, and a contradiction is never resolved by trusting whichever side you read
+last. Never let a transcript's own descriptive phrasing about a component override a name match
+in `KNOWN_ARCHITECTURE`; a name match is the stronger signal every time.
+
+Concrete case, taken from a real failure: `KNOWN_ARCHITECTURE` already lists `backend`. This
+transcript is about adding PostgreSQL persistence, and its own closing summary says PostgreSQL
+components "interact with the newly introduced backend" — sloppy wording (the transcript is
+really talking about the new *interaction*, not a new *component*), but explicit. Because
+`backend` already appears in `KNOWN_ARCHITECTURE`, and the transcript separately establishes
+`backend` gaining new data contracts to PostgreSQL (a `modified` signal per the **`modified`**
+section above), the correct status is `modified` if that changed-dependency evidence is clear
+enough to stand on its own — or `unknown` (plus a clarification question) if it genuinely is
+not — but never a silent `new` just because the transcript happened to call it "newly
+introduced" once.
 
 If transcript and known architecture contradict each other and the contradiction cannot be resolved, use:
 

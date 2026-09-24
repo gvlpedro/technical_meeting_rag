@@ -81,7 +81,9 @@ async def test_answer_question_includes_history_in_the_prompt_sent_to_the_llm(mo
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 
     history = [("user", "What is Order Service?"), ("assistant", "It owns order placement.")]
-    await answer_question("And who approved it?", [_row()], history=history)
+    # `session=None` is safe here: `_row()` has an empty payload, so `answer_question` never
+    # looks up dependency/contract names and never touches `session`.
+    await answer_question(None, "And who approved it?", [_row()], history=history)
 
     assert "Previous conversation" in captured["content"]
     assert "What is Order Service?" in captured["content"]
@@ -97,7 +99,7 @@ async def test_answer_question_omits_history_block_when_no_history_given(monkeyp
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 
-    await answer_question("What is Order Service?", [_row()])
+    await answer_question(None, "What is Order Service?", [_row()])
 
     assert "Previous conversation" not in captured["content"]
 

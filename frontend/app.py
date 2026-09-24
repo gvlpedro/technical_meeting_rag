@@ -19,7 +19,7 @@ import streamlit as st
 import api_client
 import theme
 
-st.set_page_config(page_title="Technical Meeting RAG", layout="wide")
+st.set_page_config(page_title="Architecture evolution RAG v.0.1", layout="wide")
 
 # These are the three literal answer strings that a clarification-question action button sends,
 # instead of typed text. They must match `agents.graph.py`'s own copies exactly:
@@ -301,6 +301,8 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                             _reset_input_transcription_state(result["thread_id"], thread_sources)
                     except requests.HTTPError as exc:
                         st.error(f"Publish failed: {_error_detail(exc)}")
+                    except requests.RequestException:
+                        st.error("Failed, try again.")
                     finally:
                         st.session_state[publish_key] = False
                 st.rerun()
@@ -326,6 +328,8 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                             st.session_state[no_questions_key] = True
                     except requests.HTTPError as exc:
                         st.error(f"Ask me more failed: {_error_detail(exc)}")
+                    except requests.RequestException:
+                        st.error("Failed, try again.")
                     finally:
                         st.session_state[ask_more_key] = False
                 st.rerun()
@@ -347,6 +351,14 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                         }
                     except requests.HTTPError as exc:
                         st.error(f"Regenerate failed: {_error_detail(exc)}")
+                    except requests.RequestException:
+                        # No HTTP response to read a detail from at all — a timeout (e.g. every
+                        # LLM provider hanging because the account behind it is out of credits,
+                        # a real observed case) or a dropped connection. `finally` below already
+                        # clears `regen_key`, so this card's buttons — Regenerate, Ask me more,
+                        # AND Publish — are all enabled again on the very next render, ready to
+                        # retry once whatever caused the timeout is fixed.
+                        st.error("Failed, try again.")
                     finally:
                         st.session_state[regen_key] = False
                 st.rerun()
@@ -378,8 +390,8 @@ def _input_transcription_tab(username: str) -> None:
         key=f"prompt_text::{form_gen}",
     )
     uploaded = st.file_uploader(
-        "Transcript (.vtt, .txt, .md) and extra documentation (.pdf)",
-        type=["txt", "vtt", "md", "pdf"],
+        "Transcript (.vtt, .txt, .md)",
+        type=["txt", "vtt", "md"],
         accept_multiple_files=True,
         disabled=uploading,
         key=f"uploaded_files::{form_gen}",
@@ -435,6 +447,8 @@ def _input_transcription_tab(username: str) -> None:
                 )
             except requests.HTTPError as exc:
                 st.error(f"Upload failed: {_error_detail(exc)}")
+            except requests.RequestException:
+                st.error("Failed, try again.")
             finally:
                 st.session_state.upload_in_progress = False
         st.rerun()
@@ -494,6 +508,8 @@ def _input_transcription_tab(username: str) -> None:
                         st.session_state[resume_round_key] = st.session_state.get(resume_round_key, 0) + 1
                 except requests.HTTPError as exc:
                     st.error(f"Resume failed: {_error_detail(exc)}")
+                except requests.RequestException:
+                    st.error("Failed, try again.")
                 finally:
                     st.session_state.resume_in_progress = False
             st.rerun()
@@ -528,26 +544,47 @@ def _architecture_history_tab(username: str) -> None:
         st.info("No ADRs published yet.")
         return
 
-    # This uses a real `st.dataframe`, not hand-rolled `st.columns` rows. That way, "View ADR"
-    # can be a genuine link cell (`LinkColumn`) that opens in a new browser tab. It uses the
-    # same query-param scheme as `gold_service.current_architecture_diagram`'s own node links.
-    # `main()`'s `_adr_viewer_page` branch reads that scheme back. Opening that link starts a
-    # brand new Streamlit session, because a separate browser tab always does. So it asks for
-    # login again. This is not a defect. It is just how Streamlit tabs work.
-    rows = [
-        {
-            "Source": adr["source_component"],
-            "Version": adr["version"],
-            "Ingestion date": adr["ingestion_date"],
-            "View": f"?view_adr={quote(adr['source_component'], safe='')}&view_adr_version={adr['version']}",
-        }
-        for adr in history["adrs"]
-    ]
-    st.dataframe(
-        rows,
-        hide_index=True,
-        column_config={"View": st.column_config.LinkColumn(display_text="View ADR")},
-    )
+    # This is hand-rolled `st.columns` rows, not a single `st.dataframe`. A dataframe cell can
+    # only ever be a link (`LinkColumn`), never a genuine `st.download_button` — and a plain
+    # `<a>` link to a `data:` URI does not reliably trigger a download across browsers for a
+    # text mime type (most just navigate to it and render the raw text instead). "Download" per
+    # row needs the real widget, the same one `_adr_viewer_page` already uses for its own single
+    # ADR, so this reuses that exact mechanism instead of a second, weaker one.
+    #
+    # "View ADR" keeps the exact query-param scheme `LinkColumn` used before
+    # (`?view_adr=...&view_adr_version=...`, the same scheme `gold_service.current_architecture_diagram`'s
+    # own node links and `main()`'s `_adr_viewer_page` branch already read back) — only the
+    # widget rendering it changed, from a `LinkColumn` cell to `st.link_button`, which still
+    # opens in a new tab. A new tab means a brand new Streamlit session, so it asks for login
+    # again — not a defect, just how Streamlit tabs work.
+    header_cols = st.columns([2.4, 3, 1, 2, 1.3, 1.3])
+    for col, label in zip(header_cols, ["ADR ID", "Source", "Version", "Ingestion date", "", ""]):
+        if label:
+            col.markdown(f"**{label}**")
+
+    for adr in history["adrs"]:
+        id_col, source_col, version_col, date_col, view_col, download_col = st.columns(
+            [2.4, 3, 1, 2, 1.3, 1.3]
+        )
+        row_key = f"{adr['source_component']}-v{adr['version']}"
+        # Same "<source_component> v<version>" wording the chat itself gives back when asked
+        # which ADR a fact came from (`answer_question`/`answer_evolution_question` in
+        # `agents/stages/gold/service.py`) — so a chat answer can be matched against this
+        # column by eye, character for character, no format translation needed.
+        id_col.code(f"{adr['source_component']} v{adr['version']}", language=None)
+        source_col.write(adr["source_component"])
+        version_col.write(adr["version"])
+        date_col.write(adr["ingestion_date"])
+        view_url = f"?view_adr={quote(adr['source_component'], safe='')}&view_adr_version={adr['version']}"
+        view_col.link_button("View ADR", view_url, key=f"view-{row_key}", use_container_width=True)
+        download_col.download_button(
+            "Download",
+            data=adr["content"],
+            file_name=f"{row_key}.md",
+            mime="text/markdown",
+            key=f"download-{row_key}",
+            use_container_width=True,
+        )
 
 
 def _adr_viewer_page(username: str, source_component: str, version: int) -> None:
@@ -602,9 +639,41 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
     st.markdown(theme.gold_entity_cards_html(match["gold_entities"]), unsafe_allow_html=True)
 
 
+def _prompt_viewer_page(username: str, prompt_id: int) -> None:
+    """This is the landing page a Monitor-tab "View prompt" link opens, in its new tab
+    (`?view_prompt=...`, read by `main()`) — the same pattern `_adr_viewer_page` already
+    established for "View ADR": no dedicated endpoint of its own, just the already-fetched
+    `/v1/frontend/test-monitor` payload, searched here for the one row this link points at.
+    That payload already carries the full, untruncated `prompt` text — the Monitor table only
+    ever drops it to keep each row one line tall."""
+    try:
+        data = api_client.test_monitor(username)
+    except requests.HTTPError:
+        st.error("Monitor is disabled (start_test_mode is off).")
+        return
+
+    match = next((row for row in data["llm_costs"] if row["id"] == prompt_id), None)
+    if match is None:
+        st.caption(f"LLM call #{prompt_id}")
+        st.error(f"No LLM call found with id {prompt_id} for this tenant.")
+        return
+
+    st.caption(
+        f"LLM call #{prompt_id} — {match['method']} — {match['model']} — "
+        f"{_format_when(match['created_at'])}"
+    )
+    st.text_area("Prompt", match["prompt"], height=600, disabled=True)
+
+
 def _chat_tab(username: str) -> None:
-    st.subheader("Chat with RAG")
-    st.caption("Once an ADR is accepted, ask about the architecture and the timeline of its components.")
+    title_col, clear_col = st.columns([5, 1])
+    with title_col:
+        st.subheader("Chat with RAG")
+        st.caption("Once an ADR is accepted, ask about the architecture and the timeline of its components.")
+    with clear_col:
+        if st.button("Clear chat", use_container_width=True):
+            st.session_state.chat_history = []
+            st.rerun()
 
     history = st.session_state.setdefault("chat_history", [])
     for role, text in history:
@@ -621,27 +690,64 @@ def _chat_tab(username: str) -> None:
         st.rerun()
 
 
-def _test_monitor_tab() -> None:
+def _format_when(iso_timestamp: str) -> str:
+    """`created_at` arrives as a full ISO-8601 string (with seconds, microseconds, and a UTC
+    offset) — the Monitor table only ever needs to show it as `yyyy-MM-dd HH:mm`."""
+    return datetime.fromisoformat(iso_timestamp).strftime("%Y-%m-%d %H:%M")
+
+
+def _test_monitor_tab(username: str) -> None:
     st.subheader("Monitor")
-    st.caption("Test suite results and LLM token/cost consumption for the whole application.")
+    st.caption("Test suite results, and every real LLM call this tenant made and what it cost.")
 
     try:
-        data = api_client.test_monitor()
+        data = api_client.test_monitor(username)
     except requests.HTTPError:
         st.info("Monitor is disabled (start_test_mode is off).")
         return
 
-    st.write("#### LLM usage by tenant")
-    usage = data["llm_usage_by_tenant"]
-    if usage:
-        st.table(
-            [
-                {"tenant": tenant, **bucket}
-                for tenant, bucket in usage.items()
-            ]
+    st.write("#### LLM calls")
+    costs = data["llm_costs"]
+    if costs:
+        st.caption(f"{len(costs)} most recent call(s) for this tenant, newest first.")
+        # Hand-rolled `st.columns` rows, not `st.dataframe` — same reason as Architecture
+        # history's own table: a dataframe cell can only ever be a link, never a real button,
+        # and "View prompt" needs one. Dropping the raw prompt text from this table entirely
+        # (instead of a truncated dataframe cell) is the actual fix for the column being
+        # unreadable; "View prompt" is how you get the untruncated text back, in a new tab, off the SAME
+        # `/v1/frontend/test-monitor` payload this tab already fetched — no second endpoint
+        # just to look up one prompt by id.
+        header_cols = st.columns([1.3, 1.6, 1.4, 0.9, 0.9, 1.6])
+        for col, label in zip(header_cols, ["When", "Method", "Model", "Input (€)", "Output (€)", ""]):
+            if label:
+                col.markdown(f"**{label}**")
+        for row in costs:
+            when_col, method_col, model_col, input_col, output_col, view_col = st.columns(
+                [1.3, 1.6, 1.4, 0.9, 0.9, 1.6]
+            )
+            when_col.write(_format_when(row["created_at"]))
+            method_col.write(row["method"])
+            model_col.write(row["model"])
+            input_col.write(f"{row['input_cost']:.6f}")
+            output_col.write(f"{row['output_cost']:.6f}")
+            view_col.link_button(
+                "View prompt", f"?view_prompt={row['id']}", key=f"view-prompt-{row['id']}", use_container_width=True
+            )
+
+        # Sums only the rows actually shown above — `test_monitor` caps at
+        # `_LLM_COSTS_DISPLAY_LIMIT` (200) most recent rows, so this is not necessarily this
+        # tenant's all-time total once it has made more calls than that. The label says so
+        # explicitly instead of implying a lifetime total it cannot actually back.
+        total_input = sum(row["input_cost"] for row in costs)
+        total_output = sum(row["output_cost"] for row in costs)
+        when_col, method_col, model_col, input_col, output_col, view_col = st.columns(
+            [1.3, 1.6, 1.4, 0.9, 0.9, 1.6]
         )
+        method_col.markdown(f"**Total (of the {len(costs)} row(s) shown)**")
+        input_col.markdown(f"**{total_input:.6f}**")
+        output_col.markdown(f"**{total_output:.6f}**")
     else:
-        st.info("No real LLM calls have been logged yet.")
+        st.info("No real LLM calls have been logged yet for this tenant.")
 
     st.write("#### Test suite results")
     for suite in data["suites"]:
@@ -689,7 +795,7 @@ def _main_app() -> None:
     elif active_page == "Chat with RAG":
         _chat_tab(user["username"])
     elif active_page == "Monitor":
-        _test_monitor_tab()
+        _test_monitor_tab(user["username"])
 
 
 def main() -> None:
@@ -714,6 +820,13 @@ def main() -> None:
     version = st.query_params.get("view_adr_version")
     if source_component and version:
         _adr_viewer_page(st.session_state.user["username"], source_component, int(version))
+        return
+
+    # Same new-tab scheme as "View ADR" above, for the Monitor tab's own "View prompt" button
+    # (`?view_prompt=<llm_costs.id>`, read back by `_prompt_viewer_page`).
+    prompt_id = st.query_params.get("view_prompt")
+    if prompt_id:
+        _prompt_viewer_page(st.session_state.user["username"], int(prompt_id))
         return
 
     _main_app()

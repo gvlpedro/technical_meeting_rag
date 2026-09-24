@@ -34,6 +34,7 @@ from agents.shared import (
     distinct_sources,
     extract_authors_line,
     insert_authors_line,
+    insert_source_line,
     latest_document_content,
     load_bronze_rows,
     mentions_grounded_in_source,
@@ -73,7 +74,7 @@ logfire.configure(
     service_name="silver-clarification-loop",
 )
 
-_DECLINE_PHRASES = {"", "no sé", "no se", "unknown", "n/a", "idk", "i don't know", "[irrelevant]"}
+_DECLINE_PHRASES = {"", "unknown", "n/a", "idk", "i don't know", "[irrelevant]","none"}
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
 
 # The frontend's per-question "Infer an answer" and "Suggest info" buttons (see
@@ -195,13 +196,40 @@ async def load_bronze(state: SilverState) -> dict:
 async def generate_architecture_questions(state: SilverState) -> dict:
     """Generates architecture questions and mentions.
 
-    `architecture_diagram` (this stage's own KNOWN_ARCHITECTURE input) is built from each
-    distinct source's own previous ADR, if one exists. This comes from Silver's own version
-    history, never from Gold (see `agents.stages.architecture_questions.service.previous_architecture_context`). A source
-    with no prior ADR contributes nothing here. That is exactly "no prior architecture known"
-    from the prompt's point of view."""
+    `architecture_diagram` (this stage's own KNOWN_ARCHITECTURE input) is built from two
+    sources, combined:
+
+    1. Gold's own tenant-wide, cross-source current state (`gold.current_architecture_diagram`)
+       — every component ANY source has ever established, still live. This is what lets this
+       stage correctly classify a component a DIFFERENT source already introduced as
+       `unchanged`/`modified` here, instead of `new`. Before this existed, a component already
+       published by source A had no way to be recognized while processing source B, because
+       the per-source lookup below only ever sees THIS source's own prior versions. A real,
+       observed case: a transcript describing new PostgreSQL persistence for an
+       already-published `backend` called it "the newly introduced backend" — sloppy but
+       explicit wording that, with no cross-source knowledge to contradict it, got taken at
+       face value and wrongly classified `backend` as `new` instead of `modified`, even though
+       four new data contracts were being added to it. **COMPONENT STATUS**'s own `new` rule
+       already says "and it does not correspond to an existing component in
+       `KNOWN_ARCHITECTURE`" — that condition only works if `KNOWN_ARCHITECTURE` actually
+       contains every component Gold already knows about, not just this one source's own.
+    2. Each distinct source's own previous ADR, if one exists (Silver's own version history,
+       via `agents.stages.architecture_questions.service.previous_architecture_context`) — this
+       adds the per-component status TABLE Gold's diagram alone does not carry, plus detail for
+       a source still mid-batch (not yet in Gold, since Gold is only written after this whole
+       batch's clarification loop finishes).
+
+    A tenant with no live Gold components yet, and a source with no prior ADR, both contribute
+    nothing to their own part — combined, that is exactly "no prior architecture known" from
+    the prompt's point of view."""
     known_architecture_parts = []
     async with async_session_factory() as session:
+        gold_diagram = strip_diagram_colors(await gold.current_architecture_diagram(session, tenant=state["tenant"]))
+        if gold_diagram:
+            known_architecture_parts.append(
+                "### Tenant-wide current architecture (Gold, across every source)\n\n"
+                f"```mermaid\n{gold_diagram}\n```"
+            )
         for source in distinct_sources(state["bronze_documents"]):
             previous = await latest_document_content(session, state["tenant"], source)
             context = previous_architecture_context(previous)
@@ -721,15 +749,16 @@ async def write_document(state: SilverState) -> dict:
     reads a per-ADR grounded list, instead of working it out again from the finished
     Markdown.
 
-    This stamps `state["username"]` onto every document here, using
-    `insert_authors_line`, AFTER `critic_document` and `boss_decide` have already run — this
-    is the last node before Gold. So the Critic never sees this line, and cannot flag it as
-    an unsupported claim. This returns the stamped `documents` dict regardless of `persist`,
-    so the frontend's draft preview shows the same `**Authors:**` line that the eventually
-    published version will have."""
+    This stamps `state["username"]` and this source's own `source_component` onto every
+    document here, using `insert_authors_line`/`insert_source_line`, AFTER `critic_document`
+    and `boss_decide` have already run — this is the last node before Gold. So the Critic
+    never sees either line, and cannot flag either as an unsupported claim. This returns the
+    stamped `documents` dict regardless of `persist`, so the frontend's draft preview shows
+    the same `**Authors:**`/`**Source:**` lines that the eventually published version will
+    have."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     documents = {
-        source: insert_authors_line(content, state["username"])
+        source: insert_source_line(insert_authors_line(content, state["username"]), source)
         for source, content in state["documents"].items()
     }
     document_versions: dict[str, int] = dict(state["document_versions"])
