@@ -10,10 +10,7 @@ _ROLE_PATH = PROMPTS_DIR / "adr_critic" / "critic.jinja"
 
 
 def load_adr_critic_role() -> str:
-    """Returns the raw text of `prompts/adr_critic/critic.jinja`. The `{{document}}`,
-    `{{clarifications}}`, and `{{source_content}}` placeholders are still empty here.
-    `build_critic_prompt` fills them in. The production graph's `critic_document` node uses this
-    (`agents/graph.py`)."""
+    """Returns the raw text of `prompts/adr_critic/critic.jinja`."""
     return _ROLE_PATH.read_text(encoding="utf-8")
 
 

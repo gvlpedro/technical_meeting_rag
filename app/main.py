@@ -19,7 +19,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    log.info("app_startup", environment=settings.environment)
+    log.info("adr_rag", environment=settings.environment)
     yield
 
 

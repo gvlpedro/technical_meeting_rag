@@ -32,7 +32,7 @@ The project refine the final understanding of the organization asking to clarify
 
 The goal is not simply to summarize a meeting, but to produce a **consistent, clarified record of the organization's architecture**, while explicitly identifying gaps, boundaries, dependencies, and inconsistencies.
 
-Check document [doc/silver_process.md](doc/silver_process.md) for more details.
+Check document [doc/silver_process.md](.tmp/silver_process.md) for more details.
 
 ## Workflow
 
@@ -139,11 +139,11 @@ GETTING_STARTED.md's "Frontend usage" section for the two example accounts and t
 
 ### System diagram
 
-![System architecture: Bronze raw ingestion feeds Silver's Actor-Critic-Boss clarification loop, which feeds Gold's entity extraction and evolution ledger](doc/architecture.png)
+![Arquitectura general: el usuario sube un transcript o pregunta al Frontend, que llama al Backend, que orquesta LangGraph. LangGraph llama al LLM y escribe en Postgres siguiendo el patrón medallion: Bronze, luego Silver, luego Gold. El Chat lee directamente de Gold.](doc/dataviz_architecture_general.svg)
 
 ### Agent graph
 
-![LangGraph flow of agents/graph.py: thirteen nodes from load_bronze through persist_gold_evolution, two conditional routers, a shared ask_human interrupt node, and a redraft loop from boss_decide back into synthesize_document](doc/agent_graph.png)
+![Ciclo de agentes de LangGraph: carga Bronze, genera y clasifica preguntas, si falta algo por responder un humano contesta, el Actor redacta el ADR, el Critic lo revisa, y si queda una afirmación sin verificar se vuelve a preguntar al humano una vez; si no, se publica en Silver y Gold.](doc/dataviz_langgraph_cycle.svg)
 
 ### Layers
 

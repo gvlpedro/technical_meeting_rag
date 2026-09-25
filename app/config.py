@@ -55,17 +55,11 @@ class Settings(BaseSettings):
     max_architecture_pending_questions: int = 10
     max_data_contract_pending_questions: int = 10
 
-    # Caps how much any single uploaded file can weigh, checked in
-    # `app.routers.frontend.upload_transcription` before its bytes are ever handed to
-    # ingestion. Without this, nothing stopped a single upload from being 500 MB and paying
-    # for tokenizing, chunking, and embedding all of it, or a script that uploads in a loop
-    # from running the process out of memory one file at a time.
     max_upload_file_bytes: int = 50 * 1024 * 1024  # 50 MB
 
-    # These are hardcoded example logins for the Streamlit frontend. See the "Frontend
-    # usage" section in GETTING_STARTED.md. Each login maps to its own tenant. The tenant
-    # is what actually keeps data separate, see FrontendUser's docstring. There is no user
-    # table behind this.
+    # These are hardcoded example logins for the Streamlit frontend.
+    # See the "Frontend usage" section in GETTING_STARTED.md. Each login maps to its own tenant. The tenant
+    # is what actually keeps data separate
     frontend_users: list[FrontendUser] = [
         FrontendUser(username="pepe", password="1234", tenant="lidr"),
         FrontendUser(username="peter", password="123", tenant="lotus"),

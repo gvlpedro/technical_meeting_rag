@@ -1,8 +1,6 @@
-"""This is the Streamlit frontend. It matches the "User interface" section of the root
-README: one tab per bullet point there. Every tab is thin. It collects input, calls
-`api_client`, and renders the response. All the real logic lives in the backend
-(`app/routers/frontend.py`): the auth check, the LangGraph run, and Gold retrieval. This file
-never touches the database or an LLM directly.
+"""Streamlit frontend: each tab collects input, calls `api_client`, and renders the response,
+while all real logic (auth, the LangGraph run, Gold retrieval) lives in the backend at
+`app/routers/frontend.py`.
 
 Run:
     uv run streamlit run frontend/app.py
@@ -21,38 +19,20 @@ import theme
 
 st.set_page_config(page_title="Architecture evolution RAG v.0.1", layout="wide")
 
-# These are the three literal answer strings that a clarification-question action button sends,
-# instead of typed text. They must match `agents.graph.py`'s own copies exactly:
-# `INFER_FROM_CONTEXT_MARKER`, `SUGGEST_INFO_MARKER`, and `"[irrelevant]"` in
-# `_DECLINE_PHRASES`. This match matters because the frontend and backend are separate
-# processes, with no shared import. The CLARIFICATION ANSWER MARKERS section in
-# `prompts/adr_generation/generator.jinja` is what actually interprets the two non-decline
-# markers.
+# The three literal marker strings a clarification action button sends instead of typed
+# text — they must match `agents/graph.py`'s own `INFER_FROM_CONTEXT_MARKER`,
+# `SUGGEST_INFO_MARKER`, and `_DECLINE_PHRASES` copies exactly, since frontend and backend
+# are separate processes with no shared import.
 _IRRELEVANT_MARKER = "[IRRELEVANT]"
 _INFER_MARKER = "[INFER FROM CONTEXT]"
 _SUGGEST_MARKER = "[SUGGEST INFO]"
 
 
 def _render_question_row(question: str, key_prefix: str, disabled: bool) -> str:
-    """This renders one clarification question: its text input, plus three action buttons the
-    reviewer can click instead of typing. The buttons always show the same colors (red, orange,
-    green), using `theme.py`'s own `qbtn-*` CSS. "Irrelevant" means this question does not need
-    an answer. "Infer an answer" means the answer is already given elsewhere in what we already
-    have, so the system should look it up instead of asking. "Suggest info" explicitly lets the
-    ADR propose an answer; that answer is always labeled `LLM SUGGESTION:` in the output.
-
-    This function returns whatever should be sent as this question's answer: the typed text, or
-    the matching marker.
-
-    Clicking an already-selected action toggles it back off, so we do not need a separate
-    "clear" control. While an action is selected, the text input is disabled. A typed answer and
-    a marker are mutually exclusive: they cannot both apply to the same question.
-
-    This renders as two rows, not one. The question takes the full row on its own line, because
-    it is often longer than the 60% width an inline label would leave for it. A second row then
-    splits 60/40 between the answer box and the three action buttons. Keeping them on the same
-    row makes both start at the same vertical position. Otherwise, if the question were used as
-    the input's own label, the buttons would sit one line higher than the input."""
+    """Renders one clarification question as a text input plus Irrelevant/Infer an
+    answer/Suggest info buttons (mutually exclusive with typed text, each toggling back off
+    on a second click), and returns whichever the reviewer chose — the typed text or the
+    matching marker."""
     action_key = f"{key_prefix}::action"
     selected = st.session_state.get(action_key)
 
@@ -91,16 +71,10 @@ def _render_question_row(question: str, key_prefix: str, disabled: bool) -> str:
 
 
 def _error_detail(exc: requests.HTTPError) -> str:
-    """This returns the backend's own `{"detail": ...}` message, when there is one. But the
-    backend does not always get to send that shape. An unhandled exception never reaches a
-    FastAPI `HTTPException`. For example, this actually happened once when every real LLM
-    provider failed at once (see `llm.router.AllProvidersFailedError`). In that case,
-    Starlette's own default handler returns a plain text 500 body instead. Calling
-    `response.json()` on that body raises its own `JSONDecodeError`. That used to crash this
-    screen, instead of showing the original error at all.
-
-    This function falls back to the raw response text, and then to the exception itself. So it
-    can never crash the caller."""
+    """Returns the backend's `{"detail": ...}` message when present, falling back to the raw
+    response text and then to the exception itself, since an unhandled backend exception
+    (e.g. every LLM provider failing at once, see `llm.router.AllProvidersFailedError`)
+    never reaches a structured FastAPI `HTTPException`."""
     try:
         return str(exc.response.json().get("detail", exc))
     except ValueError:
@@ -125,22 +99,16 @@ def _login_screen() -> None:
 
 
 def _reset_input_transcription_state(thread_id: str, sources: list[str]) -> None:
-    """This clears every session_state key tied to one upload and clarification cycle, once
-    every ADR candidate from that cycle has been published. A transcript's lifecycle ends at
-    Publish. So nothing about that cycle needs to survive into the next one: not the upload
-    result, not its drafts, not its per-question widget state.
-
-    This is called right before the `st.rerun()` that follows a Publish click. That way,
-    "Input transcription" renders its blank initial form again on the next run, instead of
-    leaving the finalized card on screen forever."""
+    """Clears every session_state key tied to one upload/clarification cycle once all of its
+    ADR candidates are published, called right before the rerun that follows a Publish click
+    so "Input transcription" renders a blank form again instead of the finalized card."""
     st.session_state.pop("last_upload", None)
     st.session_state.pop("upload_payload", None)
     st.session_state.pop("upload_ingestion_date", None)
     st.session_state.pop("upload_max_questions", None)
-    # This changes the keys of the date, prompt, uploader, and max-questions widgets (see
-    # `_input_transcription_tab`). So they render with fresh, empty defaults, instead of the
-    # last typed or uploaded values. Without this, a widget with no explicit key would keep
-    # its old value across reruns on its own.
+    # Bumps the widget-key generation so the date, prompt, uploader, and max-questions
+    # widgets in `_input_transcription_tab` render with fresh, empty defaults instead of
+    # keeping their last value across reruns.
     st.session_state["upload_form_generation"] = st.session_state.get("upload_form_generation", 0) + 1
     candidates = st.session_state.get("adr_candidates", {})
     for source in sources:
@@ -157,14 +125,10 @@ def _reset_input_transcription_state(thread_id: str, sources: list[str]) -> None
 
 
 def _render_adr_candidates(username: str, result: dict) -> None:
-    """This renders one review card per generated ADR. Each card shows the completeness score,
-    the unresolved points, the document itself, a feedback box, a "Regenerate ADR" button, and
-    a "Publish" button.
-
-    This function tracks each source's current draft in `st.session_state.adr_candidates`,
-    separate from `result` itself. Regenerating only updates this local state; nothing is
-    persisted until "Publish". So a regenerated draft survives reruns without re-uploading.
-    """
+    """Renders one review card per generated ADR (score, unresolved points, document,
+    feedback box, Regenerate/Publish buttons), tracking each source's current draft in
+    `st.session_state.adr_candidates` so a regenerated draft survives reruns without
+    persisting anything until Publish."""
     candidates = st.session_state.setdefault("adr_candidates", {})
     for source, document in result["documents"].items():
         if candidates.get(source, {}).get("thread_id") != result["thread_id"]:
@@ -196,29 +160,15 @@ def _render_adr_candidates(username: str, result: dict) -> None:
             ask_more_key = f"ask_more_in_progress::{source}"
             pending_key = f"ask_more_pending::{source}"
             no_questions_key = f"ask_more_no_questions::{source}"
-            # Bumped every time a fresh batch of pending questions is stored (see the
-            # `ask_result["questions"]` branch below). Each question row's widget key includes
-            # this round number. Without it, round 2's row at index 0 reuses round 1's row-0
-            # widget key, and Streamlit restores round 1's stale typed answer (or its Irrelevant/
-            # Infer/Suggest selection) into round 2's, DIFFERENT, question — it looks
-            # "pre-answered" even though the reviewer never touched it this round.
+            # Bumped each time a fresh batch of pending questions is stored, so a new round's
+            # widget keys don't collide with a prior round's and Streamlit doesn't restore a
+            # stale answer into a different question.
             round_key = f"ask_more_round::{source}"
-            # "Publish" calls `finalize_document`, which persists a SilverDocument version AND
-            # runs Gold extraction — the only non-idempotent-by-click action on this whole card.
-            # Every OTHER action here (Regenerate, Ask me more, Submit answers) already follows
-            # the two-phase "set an in-progress flag, `st.rerun()`, THEN do the real work on the
-            # next run" pattern below, which disables its own button the instant it is clicked.
-            # Publish used to do its work inline, in the same run as the click, with no such
-            # flag — so a genuine double-click (two widget-trigger events queued by the browser
-            # before Streamlit re-rendered the button as disabled) could fire two overlapping
-            # `POST /transcriptions/finalize` requests. Both can pass `extract_and_persist_
-            # gold_facts`'s `already_extracted` check before either commits (that check has no
-            # row lock), so both run their own non-deterministic LLM extraction — producing a
-            # spurious version-2 in `gold_evolution` for any entity whose two independent
-            # extractions did not phrase the narrative byte-for-byte identically. This flag
-            # closes the client-side half of that race; `agents/stages/gold/service.py`'s
-            # `extract_and_persist_gold_facts` closes the other half with a Postgres advisory
-            # lock, for any caller that is not this button (two browser tabs, a retried request).
+            # Publish persists a SilverDocument version and runs Gold extraction — the only
+            # non-idempotent action on this card — so, unlike every other button here, it
+            # needs this in-progress flag to stop a genuine double-click from firing two
+            # overlapping finalize requests; the other half of that race is closed
+            # server-side by a Postgres advisory lock in `agents/stages/gold/service.py`.
             publish_key = f"publish_in_progress::{source}"
 
             regenerating = st.session_state.setdefault(regen_key, False)
@@ -229,11 +179,9 @@ def _render_adr_candidates(username: str, result: dict) -> None:
             if st.session_state.pop(no_questions_key, False):
                 st.info("No new questions to ask — the transcript already covers everything found so far.")
 
-            # "Ask me more" replaces the feedback box with a fresh, targeted round of
-            # questions. Answering these questions and submitting them feeds that Q&A into the
-            # SAME regenerate call that the feedback box below uses. It formats the Q&A as one
-            # feedback string. So there is only one Actor/Critic call path to maintain:
-            # `api_client.regenerate_document`.
+            # "Ask me more" replaces the feedback box with a targeted round of questions
+            # whose answers get formatted into one feedback string and fed through the same
+            # `api_client.regenerate_document` call, keeping a single Actor/Critic call path.
             pending_questions = st.session_state.get(pending_key)
             if pending_questions:
                 st.info("Answer these to add more detail, then submit to regenerate the ADR.")
@@ -253,11 +201,10 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                     st.session_state[pending_key] = None
                     st.rerun()
             else:
-                # The feedback box and "Regenerate ADR" button are grouped together. The
-                # button acts on exactly this text box's content, and nothing else. "Ask me
-                # more" and "Publish" are deliberately in their own section below. Neither one
-                # submits the feedback box. ("Ask me more" only reads the feedback box, to
-                # ground its new questions. See below.)
+                # The feedback box and "Regenerate ADR" button are grouped together because
+                # the button acts only on this text box's content; "Ask me more" and
+                # "Publish", below, never submit it (though "Ask me more" reads it to ground
+                # its new questions).
                 feedback_key = f"feedback::{result['thread_id']}::{source}"
                 feedback = st.text_area(
                     "Feedback — request changes or details to include",
@@ -291,9 +238,8 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                             f"Published — version {finalize_result['version']} saved to Gold.",
                             icon="✅",
                         )
-                        # Only reset once every candidate from THIS upload is published. In a
-                        # multi-file batch, other cards may still need review or publishing.
-                        # Those cards must keep their state until they are done too.
+                        # Only resets once every candidate from this upload is published,
+                        # since a multi-file batch's other cards may still need review.
                         thread_sources = [
                             s for s, c in candidates.items() if c["thread_id"] == result["thread_id"]
                         ]
@@ -310,13 +256,12 @@ def _render_adr_candidates(username: str, result: dict) -> None:
             if st.session_state[ask_more_key]:
                 with st.spinner("Drafting new clarification questions — same question limit as the original upload..."):
                     try:
-                        # This is the number the reviewer set on "Input transcription". "Ask
-                        # me more" reuses it instead of asking again, as the user requested.
+                        # Reuses the question limit the reviewer already set on "Input
+                        # transcription" instead of asking again.
                         max_questions = st.session_state.get("upload_max_questions", 10)
-                        # This uses the draft as it stands right now, plus whatever is
-                        # currently in the feedback box, submitted or not. Before this, the
-                        # code grounded on a stale database copy of the ORIGINAL draft. That
-                        # is exactly what made it re-ask questions that were already answered.
+                        # Grounds on the draft as it stands now plus whatever is in the
+                        # feedback box, since grounding on the original database draft used
+                        # to re-ask questions already answered.
                         current_feedback = st.session_state.get(f"feedback::{result['thread_id']}::{source}", "")
                         ask_result = api_client.ask_more_questions(
                             username, source, max_questions, candidate["document"], current_feedback
@@ -352,12 +297,10 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                     except requests.HTTPError as exc:
                         st.error(f"Regenerate failed: {_error_detail(exc)}")
                     except requests.RequestException:
-                        # No HTTP response to read a detail from at all — a timeout (e.g. every
-                        # LLM provider hanging because the account behind it is out of credits,
-                        # a real observed case) or a dropped connection. `finally` below already
-                        # clears `regen_key`, so this card's buttons — Regenerate, Ask me more,
-                        # AND Publish — are all enabled again on the very next render, ready to
-                        # retry once whatever caused the timeout is fixed.
+                        # No HTTP response to read here — a timeout (every LLM provider
+                        # hanging, an actually observed case) or a dropped connection — but
+                        # the `finally` below still clears `regen_key`, re-enabling every
+                        # button on this card for a retry.
                         st.error("Failed, try again.")
                     finally:
                         st.session_state[regen_key] = False
@@ -372,11 +315,9 @@ def _input_transcription_tab(username: str) -> None:
     )
 
     uploading = st.session_state.setdefault("upload_in_progress", False)
-    # This changes the key of every initial-form widget. `_reset_input_transcription_state`
-    # bumps this value after a full publish. So each widget gets a brand-new key that Streamlit
-    # has never seen before, and there is no prior value to restore. Without this, a plain
-    # `pop()` of the old key would not help: a widget with no explicit key keeps its own
-    # last-typed value across reruns regardless.
+    # Changes the key of every initial-form widget; `_reset_input_transcription_state` bumps
+    # it after a full publish so each widget gets a brand-new key with no prior value to
+    # restore.
     form_gen = st.session_state.setdefault("upload_form_generation", 0)
 
     ingestion_date = st.date_input(
@@ -390,8 +331,8 @@ def _input_transcription_tab(username: str) -> None:
         key=f"prompt_text::{form_gen}",
     )
     uploaded = st.file_uploader(
-        "Transcript (.vtt, .txt, .md)",
-        type=["txt", "vtt", "md"],
+        "Transcript (.txt, .md)",
+        type=["txt", "md"],
         accept_multiple_files=True,
         disabled=uploading,
         key=f"uploaded_files::{form_gen}",
@@ -410,21 +351,15 @@ def _input_transcription_tab(username: str) -> None:
 
     has_input = bool(uploaded) or bool(prompt_text.strip())
     if st.button("Process and clarify", disabled=uploading or not has_input, type="primary"):
-        # This saves the file bytes and this click's own inputs into session_state. Then it
-        # reruns once, BEFORE the actual, slow, real-LLM call. This is what lets the button
-        # below render as disabled while the call is in flight. Without this extra rerun, the
-        # button would only render as disabled AFTER the blocking call already finished. That
-        # would leave a window where an impatient extra click starts a second graph run, which
-        # would be billed separately.
+        # Saves the inputs into session_state and reruns once before the slow, real-LLM
+        # call, so the button below renders disabled while it's in flight instead of leaving
+        # a window for an impatient double-click to start a second, separately-billed graph
+        # run.
         payload = [(f.name, f.getvalue()) for f in uploaded] if uploaded else []
         if prompt_text.strip():
-            # This uses the same extension the file uploader itself accepts. So the backend
-            # never learns that this text came from a text box instead of a real file.
-            # (`ingestion.service.ingest_uploaded_files` decodes .txt as plain text either
-            # way.) The file name includes a timestamp, instead of a fixed name like
-            # "prompt.txt". A fixed name would make every typed prompt, across totally
-            # unrelated test sessions, resolve to the SAME source_component. That would
-            # silently pool or version-chain content that has nothing to do with each other.
+            # Uses a `.txt` name with a timestamp, not a fixed "prompt.txt", so the backend
+            # treats it like a real upload while distinct typed prompts don't collide on the
+            # same source_component.
             prompt_filename = f"prompt_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt"
             payload.append((prompt_filename, prompt_text.encode("utf-8")))
         st.session_state.upload_payload = payload
@@ -464,20 +399,14 @@ def _input_transcription_tab(username: str) -> None:
         )
         resuming = st.session_state.setdefault("resume_in_progress", False)
         answers: dict[str, str] = {}
-        # This keys each widget by position, not by question text. The backend already
-        # de-dupes exact-duplicate questions (agents.graph._top_questions). But keying widgets
-        # off arbitrarily long, LLM-generated question text would still be fragile. An index is
-        # always unique, and always short.
+        # Keys each widget by position rather than by the arbitrarily long, LLM-generated
+        # question text, which would be a fragile key even after the backend's own de-dup in
+        # `agents.graph._top_questions`.
         #
-        # `round_key`/`round_number` are the other half of that key. `thread_id` alone is NOT
-        # unique per batch of questions: `route_after_boss` can loop back to `ask_human` a
-        # second time within the SAME thread_id (one material-contradiction escalation, see
-        # `agents/graph.py`), so a second, different batch can land at the exact same
-        # `(thread_id, index)` pair a first batch already used. Without the round number, that
-        # second batch's row 0 would reuse the first batch's row-0 widget key, and Streamlit
-        # would restore the first batch's stale typed answer — or its Irrelevant/Infer/Suggest
-        # selection — into the second batch's unrelated question. See the matching "Ask me
-        # more" fix below, which bumps `ask_more_round::{source}` for the same reason.
+        # `round_key`/`round_number` cover the other half of that key, since `thread_id`
+        # alone isn't unique per batch — `route_after_boss` can loop back to `ask_human` a
+        # second time within the same thread_id — so without it a second batch's row 0 would
+        # restore the first batch's stale answer into an unrelated question.
         round_key = f"resume_round::{result['thread_id']}"
         round_number = st.session_state.get(round_key, 0)
         for index, question in enumerate(result["pending_questions"]):
@@ -502,8 +431,8 @@ def _input_transcription_tab(username: str) -> None:
                     )
                     st.session_state.last_upload = resume_result
                     if resume_result["status"] == "pending_review":
-                        # A second (or later) batch of pending questions for the SAME
-                        # thread_id — see the `round_key` comment above for why this must bump.
+                        # A second (or later) batch of pending questions for the same
+                        # thread_id, so this must bump — see the `round_key` comment above.
                         resume_round_key = f"resume_round::{resume_result['thread_id']}"
                         st.session_state[resume_round_key] = st.session_state.get(resume_round_key, 0) + 1
                 except requests.HTTPError as exc:
@@ -529,11 +458,9 @@ def _architecture_history_tab(username: str) -> None:
 
     if history["diagram"]:
         st.mermaid_chart(history["diagram"])
-        # If the rendered diagram above ever looks wrong, for example boxes missing or only
-        # edges visible, this is the exact Mermaid source it was given. Compare the two before
-        # reporting a bug. This tells apart a generation bug, where the source itself is wrong,
-        # from a rendering bug, where the source is fine but `st.mermaid_chart` does not draw
-        # it.
+        # Shows the exact Mermaid source behind the diagram above, to tell apart a
+        # generation bug (bad source) from a rendering bug (`st.mermaid_chart` not drawing
+        # good source).
         with st.expander("View Mermaid source"):
             st.code(history["diagram"], language="text")
     else:
@@ -544,19 +471,13 @@ def _architecture_history_tab(username: str) -> None:
         st.info("No ADRs published yet.")
         return
 
-    # This is hand-rolled `st.columns` rows, not a single `st.dataframe`. A dataframe cell can
-    # only ever be a link (`LinkColumn`), never a genuine `st.download_button` — and a plain
-    # `<a>` link to a `data:` URI does not reliably trigger a download across browsers for a
-    # text mime type (most just navigate to it and render the raw text instead). "Download" per
-    # row needs the real widget, the same one `_adr_viewer_page` already uses for its own single
-    # ADR, so this reuses that exact mechanism instead of a second, weaker one.
+    # Hand-rolled `st.columns` rows, not `st.dataframe`, because a dataframe cell can only
+    # ever be a link, never a real `st.download_button` — so "Download" reuses the same
+    # widget `_adr_viewer_page` already uses for its own ADR.
     #
-    # "View ADR" keeps the exact query-param scheme `LinkColumn` used before
-    # (`?view_adr=...&view_adr_version=...`, the same scheme `gold_service.current_architecture_diagram`'s
-    # own node links and `main()`'s `_adr_viewer_page` branch already read back) — only the
-    # widget rendering it changed, from a `LinkColumn` cell to `st.link_button`, which still
-    # opens in a new tab. A new tab means a brand new Streamlit session, so it asks for login
-    # again — not a defect, just how Streamlit tabs work.
+    # "View ADR" keeps the same `?view_adr=...&view_adr_version=...` query-param scheme
+    # `gold_service.current_architecture_diagram`'s node links and `_adr_viewer_page` already
+    # read, just rendered with `st.link_button` instead of a `LinkColumn` cell.
     header_cols = st.columns([2.4, 3, 1, 2, 1.3, 1.3])
     for col, label in zip(header_cols, ["ADR ID", "Source", "Version", "Ingestion date", "", ""]):
         if label:
@@ -567,10 +488,9 @@ def _architecture_history_tab(username: str) -> None:
             [2.4, 3, 1, 2, 1.3, 1.3]
         )
         row_key = f"{adr['source_component']}-v{adr['version']}"
-        # Same "<source_component> v<version>" wording the chat itself gives back when asked
-        # which ADR a fact came from (`answer_question`/`answer_evolution_question` in
-        # `agents/stages/gold/service.py`) — so a chat answer can be matched against this
-        # column by eye, character for character, no format translation needed.
+        # Uses the same "<source_component> v<version>" wording the chat gives back for a
+        # fact's source (`agents/stages/gold/service.py`), so a chat answer matches this
+        # column character for character.
         id_col.code(f"{adr['source_component']} v{adr['version']}", language=None)
         source_col.write(adr["source_component"])
         version_col.write(adr["version"])
@@ -588,10 +508,9 @@ def _architecture_history_tab(username: str) -> None:
 
 
 def _adr_viewer_page(username: str, source_component: str, version: int) -> None:
-    """This is the landing page that a "View ADR" link opens, in its new tab
-    (`?view_adr=...&view_adr_version=...`, read by `main()`). It shows a single, read-only
-    ADR. It looks up that ADR from the same `architecture_history` payload the table itself
-    renders from. There is no separate endpoint for this."""
+    """The landing page a "View ADR" link opens in a new tab
+    (`?view_adr=...&view_adr_version=...`, read by `main()`), showing a single read-only ADR
+    looked up from the same `architecture_history` payload the table itself uses."""
     history = api_client.architecture_history(username)
     match = next(
         (
@@ -619,10 +538,9 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
             mime="text/markdown",
         )
 
-    # Blue metadata header — every field this ADR version carries — followed by the document
-    # itself, then the soft-yellow Gold cards for whatever this exact version generated. Both
-    # helpers live in `theme.py`, next to `score_bar_html`, following the same "HTML string
-    # built in Python, rendered with `unsafe_allow_html`" convention as the rest of this app.
+    # Blue metadata header, then the document, then the soft-yellow Gold cards for this
+    # version, both rendered via `theme.py` helpers following the same
+    # HTML-string-plus-`unsafe_allow_html` convention as the rest of this app.
     st.markdown(
         theme.adr_metadata_header_html(
             source_component=match["source_component"],
@@ -640,12 +558,9 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
 
 
 def _prompt_viewer_page(username: str, prompt_id: int) -> None:
-    """This is the landing page a Monitor-tab "View prompt" link opens, in its new tab
-    (`?view_prompt=...`, read by `main()`) — the same pattern `_adr_viewer_page` already
-    established for "View ADR": no dedicated endpoint of its own, just the already-fetched
-    `/v1/frontend/test-monitor` payload, searched here for the one row this link points at.
-    That payload already carries the full, untruncated `prompt` text — the Monitor table only
-    ever drops it to keep each row one line tall."""
+    """The landing page a Monitor-tab "View prompt" link opens in a new tab
+    (`?view_prompt=...`, read by `main()`), showing the full, untruncated prompt text for one
+    row of the already-fetched `/v1/frontend/test-monitor` payload."""
     try:
         data = api_client.test_monitor(username)
     except requests.HTTPError:
@@ -691,8 +606,8 @@ def _chat_tab(username: str) -> None:
 
 
 def _format_when(iso_timestamp: str) -> str:
-    """`created_at` arrives as a full ISO-8601 string (with seconds, microseconds, and a UTC
-    offset) — the Monitor table only ever needs to show it as `yyyy-MM-dd HH:mm`."""
+    """Formats a full ISO-8601 `created_at` timestamp down to `yyyy-MM-dd HH:mm` for the
+    Monitor table."""
     return datetime.fromisoformat(iso_timestamp).strftime("%Y-%m-%d %H:%M")
 
 
@@ -710,13 +625,10 @@ def _test_monitor_tab(username: str) -> None:
     costs = data["llm_costs"]
     if costs:
         st.caption(f"{len(costs)} most recent call(s) for this tenant, newest first.")
-        # Hand-rolled `st.columns` rows, not `st.dataframe` — same reason as Architecture
-        # history's own table: a dataframe cell can only ever be a link, never a real button,
-        # and "View prompt" needs one. Dropping the raw prompt text from this table entirely
-        # (instead of a truncated dataframe cell) is the actual fix for the column being
-        # unreadable; "View prompt" is how you get the untruncated text back, in a new tab, off the SAME
-        # `/v1/frontend/test-monitor` payload this tab already fetched — no second endpoint
-        # just to look up one prompt by id.
+        # Hand-rolled `st.columns` rows, not `st.dataframe`, same reason as Architecture
+        # history's table — plus dropping the raw prompt text entirely (instead of
+        # truncating it) is what fixes the unreadable column, with "View prompt" reopening
+        # it untruncated from the same already-fetched payload.
         header_cols = st.columns([1.3, 1.6, 1.4, 0.9, 0.9, 1.6])
         for col, label in zip(header_cols, ["When", "Method", "Model", "Input (€)", "Output (€)", ""]):
             if label:
@@ -734,10 +646,8 @@ def _test_monitor_tab(username: str) -> None:
                 "View prompt", f"?view_prompt={row['id']}", key=f"view-prompt-{row['id']}", use_container_width=True
             )
 
-        # Sums only the rows actually shown above — `test_monitor` caps at
-        # `_LLM_COSTS_DISPLAY_LIMIT` (200) most recent rows, so this is not necessarily this
-        # tenant's all-time total once it has made more calls than that. The label says so
-        # explicitly instead of implying a lifetime total it cannot actually back.
+        # Sums only the rows shown above, since `test_monitor` caps at 200 most recent rows
+        # and isn't necessarily this tenant's all-time total.
         total_input = sum(row["input_cost"] for row in costs)
         total_output = sum(row["output_cost"] for row in costs)
         when_col, method_col, model_col, input_col, output_col, view_col = st.columns(
@@ -769,11 +679,9 @@ def _main_app() -> None:
         st.markdown(f"**{user['username']}**")
         st.caption(f"tenant: {user['tenant']}")
         st.markdown("---")
-        # This is the vertical nav: each item is a full-width button. The CURRENT page renders
-        # with type="primary". This is only a hook for theme.py's CSS, to style it as "active"
-        # (filled, bright text), versus every other item's plain "inactive" look. It never
-        # triggers theme.py's own purple primary-button styling, because that styling is
-        # scoped to the main content area only, not the sidebar.
+        # The vertical nav: each item is a full-width button, with the current page's
+        # type="primary" only a hook for theme.py's "active" CSS, since that styling is
+        # scoped to the main content area, not the sidebar.
         for item in nav_items:
             if st.button(
                 item,
@@ -811,11 +719,10 @@ def main() -> None:
         except requests.RequestException:
             st.session_state.start_test_mode = False
 
-    # A "View ADR" link always opens in a NEW browser tab with these query params. This link
-    # can come from `_architecture_history_tab`'s table, or from a node in
-    # `gold_service.current_architecture_diagram`. A new tab means a fresh Streamlit session,
-    # so the login gate above still applies first. Once logged in, this branch takes over the
-    # whole page, instead of the normal sidebar nav.
+    # A "View ADR" link (from `_architecture_history_tab`'s table or a
+    # `gold_service.current_architecture_diagram` node) always opens in a new tab, which is a
+    # fresh Streamlit session, so the login gate above still applies before this branch takes
+    # over the whole page.
     source_component = st.query_params.get("view_adr")
     version = st.query_params.get("view_adr_version")
     if source_component and version:

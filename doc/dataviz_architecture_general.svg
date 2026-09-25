@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" role="img"
+     aria-label="Arquitectura general: el usuario sube un transcript o pregunta al Frontend, que llama al Backend, que orquesta LangGraph. LangGraph llama al LLM y escribe en Postgres siguiendo el patrón medallion: Bronze, luego Silver, luego Gold. El Chat lee directamente de Gold.">
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0b0b0b; }
+    .title    { font-size: 22px; font-weight: 700; text-anchor: middle; }
+    .subtitle { font-size: 13px; fill: #52514e; text-anchor: middle; }
+    .box-title    { font-size: 16px; font-weight: 700; text-anchor: middle; }
+    .box-subtitle { font-size: 12px; fill: #52514e; text-anchor: middle; }
+    .sub-title    { font-size: 14px; font-weight: 700; text-anchor: middle; }
+    .sub-subtitle { font-size: 11px; fill: #52514e; text-anchor: middle; }
+    .arrow-label  { font-size: 11.5px; fill: #52514e; text-anchor: middle; }
+    .group-label  { font-size: 12.5px; font-weight: 600; fill: #52514e; letter-spacing: 0.5px; }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#898781"/>
+    </marker>
+  </defs>
+
+  <!-- page -->
+  <rect x="0" y="0" width="1000" height="700" fill="#fcfcfb"/>
+
+  <!-- title -->
+  <text class="title" x="440" y="34">Arquitectura general</text>
+  <text class="subtitle" x="440" y="56">De la subida de un transcript a la respuesta del chat</text>
+
+  <!-- 1. Usuario -->
+  <rect x="290" y="76" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="440" y="102">Usuario</text>
+  <text class="box-subtitle" x="440" y="121">sube un transcript o hace una pregunta</text>
+
+  <line x1="440" y1="140" x2="440" y2="174" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 2. Frontend -->
+  <rect x="290" y="176" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="440" y="202">Frontend</text>
+  <text class="box-subtitle" x="440" y="221">Streamlit — formularios y chat</text>
+
+  <line x1="440" y1="240" x2="440" y2="274" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 3. Backend -->
+  <rect x="290" y="276" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="440" y="302">Backend</text>
+  <text class="box-subtitle" x="440" y="321">FastAPI — único punto de entrada</text>
+
+  <line x1="440" y1="340" x2="440" y2="374" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 4. LangGraph -->
+  <rect x="290" y="376" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="440" y="402">LangGraph</text>
+  <text class="box-subtitle" x="440" y="421">ciclo de clarificación (agentes)</text>
+
+  <!-- LLM satellite -->
+  <rect x="650" y="376" width="180" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="740" y="402">LLM</text>
+  <text class="sub-subtitle" x="740" y="421">OpenAI / Anthropic</text>
+
+  <line x1="592" y1="408" x2="648" y2="408" stroke="#898781" stroke-width="2"
+        marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text class="arrow-label" x="620" y="396">llama al modelo</text>
+
+  <line x1="440" y1="440" x2="440" y2="474" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Postgres container -->
+  <rect x="90" y="476" width="700" height="184" rx="16" fill="none" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="group-label" x="114" y="500">POSTGRESQL — ARQUITECTURA MEDALLION</text>
+
+  <!-- Bronze -->
+  <rect x="114" y="522" width="190" height="80" rx="10" fill="#2a78d6" fill-opacity="0.10" stroke="#2a78d6" stroke-width="1.5"/>
+  <text class="sub-title" x="209" y="552">Bronze</text>
+  <text class="sub-subtitle" x="209" y="572">transcript en bruto</text>
+
+  <line x1="304" y1="562" x2="342" y2="562" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Silver -->
+  <rect x="344" y="522" width="190" height="80" rx="10" fill="#eb6834" fill-opacity="0.10" stroke="#eb6834" stroke-width="1.5"/>
+  <text class="sub-title" x="439" y="552">Silver</text>
+  <text class="sub-subtitle" x="439" y="572">ADR clarificado</text>
+
+  <line x1="534" y1="562" x2="572" y2="562" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Gold -->
+  <rect x="574" y="522" width="190" height="80" rx="10" fill="#1baf7a" fill-opacity="0.10" stroke="#1baf7a" stroke-width="1.5"/>
+  <text class="sub-title" x="669" y="552">Gold</text>
+  <text class="sub-subtitle" x="669" y="572">hechos versionados</text>
+
+  <!-- read path: Gold -> Backend (Chat) -->
+  <path d="M 764,552 C 940,480 940,330 592,308" fill="none" stroke="#898781" stroke-width="2"
+        stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+  <text class="arrow-label" x="920" y="450">Chat lee</text>
+  <text class="arrow-label" x="920" y="464">hechos de Gold</text>
+</svg>

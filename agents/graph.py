@@ -8,11 +8,6 @@ separate commits would mean landing broken states in between.
 
 import os
 
-# This must run before `langgraph` (imported below) loads anywhere in the process. LangGraph
-# ships its own OpenTelemetry tracing through the bundled LangSmith SDK, and it reads these
-# settings at import time. Once `logfire.configure()` below installs the global OTel tracer
-# provider, LangSmith's tracer detects it. After that, every graph-run and node span flows
-# straight into Logfire. We need no separate LangSmith account, exporter, or API key for this.
 os.environ.setdefault("LANGSMITH_OTEL_ENABLED", "true")
 os.environ.setdefault("LANGSMITH_OTEL_ONLY", "true")
 os.environ.setdefault("LANGSMITH_TRACING", "true")
@@ -77,13 +72,8 @@ logfire.configure(
 _DECLINE_PHRASES = {"", "unknown", "n/a", "idk", "i don't know", "[irrelevant]","none"}
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
 
-# The frontend's per-question "Infer an answer" and "Suggest info" buttons (see
-# `frontend/app.py`) send one of these two exact strings as the answer, instead of free text.
-# We never add these to `_DECLINE_PHRASES` above. They must survive into
-# `SilverClarification.answer` as real answered text, for
-# `prompts/adr_generation/generator.jinja`'s own CLARIFICATION ANSWER MARKERS section to read.
-# "Irrelevant" is different: it really does mean "no answer," so it belongs in the decline set
-# instead. It has no special meaning downstream of its own.
+# The frontend's per-question "Infer an answer" and "Suggest info" buttons.
+# "Irrelevant" is different: it really does mean "no answer"
 INFER_FROM_CONTEXT_MARKER = "[INFER FROM CONTEXT]"
 SUGGEST_INFO_MARKER = "[SUGGEST INFO]"
 
@@ -103,29 +93,7 @@ def _top_questions(
     data_contract_cap: int,
     scopes: dict[str, str] | None = None,
 ) -> list[str]:
-    """When `scopes` is given (a map from question text to scope), the questions came from
-    the classify stage and each one carries a real scope. In that case, this function splits
-    the questions into two buckets: an architecture bucket (everything except
-    `data_contract`, ranked by `_QUESTIONS_PRIORITIES` and capped at `architecture_cap`) and a
-    data-contract bucket (capped at `data_contract_cap`, cut off in drafted order). Boss-origin
-    escalations (see `boss_decide`) have no scope of their own. They are made up on the spot
-    from a Critic claim, and there are already naturally few of them. So without `scopes`, we
-    just cut them down to `architecture_cap` in their existing order.
-
-    Both caps come from the run's own state
-    (`state["max_architecture_pending_questions"]` and
-    `state["max_data_contract_pending_questions"]`). We do not read them from `settings`
-    directly here. See `agents.state.initial_state` for where a caller — the frontend's
-    upload form, a script, or a test — can override them. Otherwise they fall back to
-    `settings`'s own defaults.
-
-    This removes duplicates by exact text first, keeping the first-seen order. Two identical
-    question strings can occur — for example, `boss_decide` quoting the same Critic claim
-    text twice, or the classify stage drafting the same wording twice. These must never reach
-    `ask_human` as two separate pending questions. This node's own resume payload, and the
-    frontend's one-widget-per-question display, both key off the question text. So a real
-    duplicate would either silently collapse into one answer, or crash the frontend outright,
-    since Streamlit requires unique widget keys."""
+    """Deduplicates the questions then ranked by `_QUESTIONS_PRIORITIES`"""
     questions = list(dict.fromkeys(questions))
     if scopes is None:
         return questions[:architecture_cap]
@@ -138,15 +106,12 @@ def _top_questions(
 
 
 def checkpointer_dsn() -> str:
-    """`AsyncPostgresSaver` needs psycopg's DSN format, not SQLAlchemy's `+asyncpg` one. It is
-    still the same `technical_meeting_rag` database either way. No new infrastructure is
-    needed."""
+    """Postgres reference"""
     return settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
 
 
 def _is_inside_code_fence(content: str, index: int) -> bool:
-    """Returns `True` if `index` falls inside a ` ``` `-fenced block. An odd number of fence
-    markers before `index` means we are currently between an opening fence and a closing one."""
+    """Returns `True` if `index` falls inside a ` ``` `-fenced block"""
     return content.count("```", 0, index) % 2 == 1
 
 

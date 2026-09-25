@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 760" role="img"
+     aria-label="Ciclo de agentes de LangGraph: carga Bronze, genera y clasifica preguntas, si falta algo por responder un humano contesta, el Actor redacta el ADR, el Critic lo revisa, y si queda una afirmación sin verificar se vuelve a preguntar al humano una vez; si no, se publica en Silver y Gold.">
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0b0b0b; }
+    .title    { font-size: 22px; font-weight: 700; text-anchor: middle; }
+    .subtitle { font-size: 13px; fill: #52514e; text-anchor: middle; }
+    .box-title    { font-size: 16px; font-weight: 700; text-anchor: middle; }
+    .box-subtitle { font-size: 12px; fill: #52514e; text-anchor: middle; }
+    .arrow-label  { font-size: 12px; fill: #52514e; text-anchor: middle; }
+    .loop-label   { font-size: 12px; fill: #b34d18; text-anchor: middle; font-weight: 600; }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#898781"/>
+    </marker>
+    <marker id="arrowLoop" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#eb6834"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="780" height="760" fill="#fcfcfb"/>
+
+  <text class="title" x="390" y="34">Ciclo de agentes (LangGraph)</text>
+  <text class="subtitle" x="390" y="56">El bucle humano-en-el-medio, del borrador al ADR publicado</text>
+
+  <!-- 1. Cargar Bronze -->
+  <rect x="110" y="76" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="260" y="102">Cargar Bronze</text>
+  <text class="box-subtitle" x="260" y="121">lee las transcripciones de ese día</text>
+
+  <line x1="260" y1="140" x2="260" y2="174" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 2. Generar preguntas -->
+  <rect x="110" y="176" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="260" y="202">Generar preguntas</text>
+  <text class="box-subtitle" x="260" y="221">arquitectura + contratos, y clasifica</text>
+
+  <line x1="260" y1="240" x2="260" y2="274" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 3. checkpoint: preguntas sin responder -->
+  <rect x="110" y="276" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="box-title" x="260" y="302">¿Preguntas sin responder?</text>
+  <text class="box-subtitle" x="260" y="321">revisa lo que falta por clarificar</text>
+
+  <!-- Humano responde -->
+  <rect x="490" y="276" width="220" height="64" rx="12" fill="#eb6834" fill-opacity="0.10" stroke="#eb6834" stroke-width="1.5"/>
+  <text class="box-title" x="600" y="302">Humano responde</text>
+  <text class="box-subtitle" x="600" y="321">contesta lo pendiente</text>
+
+  <line x1="412" y1="308" x2="488" y2="308" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+  <text class="arrow-label" x="450" y="296">sí</text>
+
+  <line x1="235" y1="340" x2="235" y2="374" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+  <text class="arrow-label" x="252" y="360">no</text>
+
+  <path d="M 600,340 C 600,362 300,362 285,374" fill="none" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 4. Redactar ADR -->
+  <rect x="110" y="376" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="260" y="402">Redactar ADR</text>
+  <text class="box-subtitle" x="260" y="421">el Actor (LLM) escribe el documento</text>
+
+  <line x1="260" y1="440" x2="260" y2="474" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 5. Revisar ADR -->
+  <rect x="110" y="476" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5"/>
+  <text class="box-title" x="260" y="502">Revisar ADR</text>
+  <text class="box-subtitle" x="260" y="521">el Critic (LLM) valida cada afirmación</text>
+
+  <line x1="260" y1="540" x2="260" y2="574" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- 6. checkpoint: afirmación sin verificar -->
+  <rect x="110" y="576" width="300" height="64" rx="12" fill="#fcfcfb" stroke="#c3c2b7" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="box-title" x="260" y="602">¿Afirmación sin verificar?</text>
+  <text class="box-subtitle" x="260" y="621">el Boss decide: preguntar o marcar</text>
+
+  <line x1="235" y1="640" x2="235" y2="674" stroke="#898781" stroke-width="2" marker-end="url(#arrow)"/>
+  <text class="arrow-label" x="320" y="660">no / ya revisado</text>
+
+  <!-- loop back to Humano responde -->
+  <path d="M 412,608 C 660,608 735,460 712,322" fill="none" stroke="#eb6834" stroke-width="2"
+        stroke-dasharray="7 5" marker-end="url(#arrowLoop)"/>
+  <text class="loop-label" x="540" y="452">sí, primera vez</text>
+  <text class="loop-label" x="540" y="468">(se escala)</text>
+
+  <!-- 7. Publicar -->
+  <rect x="110" y="676" width="300" height="64" rx="12" fill="#1baf7a" fill-opacity="0.10" stroke="#1baf7a" stroke-width="1.5"/>
+  <text class="box-title" x="260" y="702">Publicar</text>
+  <text class="box-subtitle" x="260" y="721">guarda en Silver y extrae hechos a Gold</text>
+</svg>

@@ -5,7 +5,7 @@ plus its already-resolved clarifications. There are three cases, in order of inc
 difficulty:
 
   - `01_twitter_real_time_delivery` — uses the real
-    `real_time_delivery_architecture_at_twitter.en.vtt` transcript, with a 36-question
+    `real_time_delivery_architecture_at_twitter` transcript, with a 36-question
     factual verification pass that describes how the CURRENT system works. None of the
     clarifications confirm a lifecycle status for any component. So the strictest
     expectation is that the ADR/Affected-Components/Data-Contract sections collapse to
@@ -59,7 +59,6 @@ from pydantic import BaseModel
 from agents.stages.adr_generation.prompts import QaPair, build_adr_generation_prompt
 from agents.template import load_json_response
 from app.config import settings
-from ingestion.bronze_documents_chunker import parse_vtt
 from llm import router
 
 from agents.stages.adr_generation.testing.conftest import record_result
@@ -176,11 +175,7 @@ def _check_excluded_components_not_marked_affected(document: str, excluded_compo
 
 
 def _load_case(case_dir: Path) -> tuple[str, list[QaPair], dict, str]:
-    transcript_path = case_dir / "transcript.vtt"
-    if transcript_path.exists():
-        transcript = parse_vtt(transcript_path)
-    else:
-        transcript = (case_dir / "transcript.txt").read_text(encoding="utf-8")
+    transcript = (case_dir / "transcript.txt").read_text(encoding="utf-8")
 
     clarifications: list[QaPair] = json.loads((case_dir / "clarifications.json").read_text(encoding="utf-8"))
     metadata = json.loads((case_dir / "metadata.json").read_text(encoding="utf-8"))

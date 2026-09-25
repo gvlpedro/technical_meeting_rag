@@ -7,12 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from db.models import BronzeDocument
-from ingestion.bronze_documents_chunker import (
-    chunk_text,
-    extract_pdf_text,
-    parse_ingestion_date,
-    parse_vtt_text,
-)
+from ingestion.bronze_documents_chunker import chunk_text, parse_ingestion_date
 from ingestion.embedder import embed
 
 
@@ -31,11 +26,9 @@ async def ingest_uploaded_files(
     files: list[tuple[str, bytes]], ingestion_date: str, tenant: str, db: AsyncSession, *, uploaded_by: str = ""
 ) -> IngestResult:
     """Ingest files uploaded straight from the frontend's "Input transcription" tab. This
-    never touches disk — `files` is `[(filename, raw_bytes), ...]`. A `.vtt` file goes
-    through `parse_vtt_text`. A `.pdf`
-    file goes through `extract_pdf_text`. A `.txt` or `.md` file is decoded as plain text
-    directly, since it needs no cue-timing or metadata stripping. Any other file type is
-    rejected with a `ValueError` that names the file.
+    never touches disk — `files` is `[(filename, raw_bytes), ...]`. A `.txt` or `.md` file
+    is decoded as plain text directly. Any other file type is rejected with a `ValueError`
+    that names the file.
 
     `uploaded_by` is the logged-in username that submitted this batch. It is stamped on
     every `BronzeDocument` row written here. See that column's own docstring in
@@ -52,17 +45,9 @@ async def ingest_uploaded_files(
 
     for filename, content in files:
         suffix = Path(filename).suffix.lower()
-        if suffix == ".vtt":
-            text = parse_vtt_text(content.decode("utf-8"))
-        elif suffix == ".pdf":
-            text = extract_pdf_text(content)
-        elif suffix in (".txt", ".md"):
-            # This is already plain text. Unlike .vtt, it needs no cue-timing or metadata stripping.
-            text = content.decode("utf-8")
-        else:
-            raise ValueError(
-                f"Unsupported file type for {filename!r} — only .txt, .vtt, .md, and .pdf are accepted"
-            )
+        if suffix not in (".txt", ".md"):
+            raise ValueError(f"Unsupported file type for {filename!r} — only .txt and .md are accepted")
+        text = content.decode("utf-8")
 
         chunks = chunk_text(text, settings.chunk_size_tokens, settings.chunk_overlap_tokens)
         if not chunks:
