@@ -689,7 +689,10 @@ async def _persist_components(
             continue
 
         directions = contract_directions.get(component["name"], {"input": set(), "output": set()})
-        # `doc/cicle_evolution.md`
+        # `doc/cicle_evolution.md` "Regla especial", condition 2: a contract this component was
+        # ALREADY associated with (same id, its own input/output list unchanged) can itself
+        # change underneath it this same ADR — that affects the component just as much as its
+        # own payload changing would, so it gets the same "unchanged" -> "modified" correction.
         status = component["status"]
         if status == "unchanged" and (directions["input"] | directions["output"]) & changed_contract_ids:
             status = "modified"

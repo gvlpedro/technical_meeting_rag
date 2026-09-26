@@ -644,10 +644,22 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     history = [(m.role, m.content) for m in request.history]
     contextualized_question = _contextualize_question(request.question, request.history)
 
+    # Checked first, and only against `request.question` (never `contextualized_question`, same
+    # reasoning as the evolution check right below): a question pinned to one explicit version
+    # number is unambiguous on its own and must never depend on what an earlier turn said.
     specific_version_response = await _answer_specific_version_question(db, tenant, request, history)
     if specific_version_response is not None:
         return specific_version_response
 
+    # Deliberately `request.question` here, never `contextualized_question`: both checks below
+    # must react only to what THIS turn actually asks. `contextualized_question` prefixes prior
+    # turns (including the assistant's own past answers) onto the text, so a marker word like
+    # "historically" or "timeline" appearing in an EARLIER reply would otherwise flip
+    # `is_evolution_question` to True for an unrelated follow-up, and `find_entity_by_name_in_text`
+    # (longest-alias-wins) could then match some OTHER entity named in that stale history instead
+    # of the one this question actually names — a real, reproduced bug, not a hypothetical one.
+    # `contextualized_question` still feeds the embedding/lexical retrieval below, where
+    # resolving a pronoun-style follow-up ("and who approved it?") is exactly the point.
     if gold.is_evolution_question(request.question):
         match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
         if match is not None:

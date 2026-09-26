@@ -612,7 +612,10 @@ def _linkify_adr_mentions(text: str) -> str:
 def _render_relationship_diagram(diagram: str, sources: list[dict]) -> None:
     """Renders `ChatResponse.diagram` (the cited component(s) plus their direct neighbors —
     `gold.build_relationship_diagram`) boxed under the answer, with a small caption underneath
-    linking to the ADR(s) the cited component(s) actually came from """
+    linking to the ADR(s) the cited component(s) actually came from — same
+    `?view_adr=...&view_adr_version=...` new-tab scheme as `_linkify_adr_mentions` and
+    `_architecture_history_tab`'s own "View ADR" button. Never a neighbor's ADR: `sources` only
+    ever names the entities the answer actually cited (`diagram_sources`)."""
     with st.container(border=True):
         st.mermaid_chart(diagram)
         links = []
