@@ -75,14 +75,16 @@ hardcodeado. Cada login se asocia a su propio **tenant**, que es lo que realment
 datos: un fichero que sube `pepe`, o un ADR que publica `pepe`, es invisible para `peter`, y
 viceversa.
 
-| Usuario  | Contraseña | Tenant  |
-| -------- | ---------- | ------- |
-| `pepe`   | `1234`     | `lidr`  |
-| `peter`  | `123`      | `lotus` |
-| `martin` | `123`      | `lotus` |
+| Usuario  | Contraseña | Tenant  | proósito                               |
+| -------- | ---------- | ------- |----------------------------------------|
+| `pepe`   | `1234`     | `lidr`  | Trabajar en un tenant vacío            |
+| `peter`  | `123`      | `lotus` | Se trabaja con una arquitectura simple |
+| `martin` | `123`      | `lotus` | Se trabaja con arquitectura simple (comparte tenant con `peter`) |
+| `mike`   | `444`      | `ibm`   | Se trabaja con un arquitectura compleja |
 
 `martin` comparte tenant con `peter` (`lotus`), así que los dos ven y editan exactamente los
-mismos datos — a diferencia de `pepe`, que está aislado en un tenant separado.
+mismos datos — a diferencia de `pepe` y `mike`, cada uno aislado en su propio tenant separado
+(`lidr` y `ibm` respectivamente).
 
 Un único comando arranca todo — Postgres, el backend y el frontend, todo en Docker:
 

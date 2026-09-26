@@ -2448,6 +2448,18 @@ wheels = [
 ]
 
 [[package]]
+name = "streamlit-mermaid-interactive"
+version = "0.1.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/27/3668571de823b95405c28ab56881b5a427215c85b462035b7111a70ea11a/streamlit_mermaid_interactive-0.1.12.tar.gz", hash = "sha256:c1367b1c50f2aedc3cb48dd592026817d0d2a0b325f864c9832e0c524b14173b", size = 888749, upload-time = "2025-11-26T20:54:07.932Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/7f/c4294f862bf9865c04ffdf623170c67c2096bea4efc8518132d3e7cb639b/streamlit_mermaid_interactive-0.1.12-py3-none-any.whl", hash = "sha256:60aa439d1acacbfdc128735abf47cd1b839f60117e0c54f08438478fe3c95c94", size = 890969, upload-time = "2025-11-26T20:54:06.838Z" },
+]
+
+[[package]]
 name = "structlog"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2493,6 +2505,7 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "streamlit" },
+    { name = "streamlit-mermaid-interactive" },
     { name = "structlog" },
     { name = "tiktoken" },
     { name = "torch", version = "2.14.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
@@ -2530,6 +2543,7 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "streamlit", specifier = ">=1.63.0" },
+    { name = "streamlit-mermaid-interactive", specifier = ">=0.1.12" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "tiktoken", specifier = ">=0.7.0" },
     { name = "torch", specifier = ">=2.2", index = "https://download.pytorch.org/whl/cpu" },

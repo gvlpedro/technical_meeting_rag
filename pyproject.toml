@@ -23,6 +23,7 @@ dependencies = [
     "sentence-transformers>=3.0",
     "sqlalchemy[asyncio]>=2.0",
     "streamlit>=1.63.0",
+    "streamlit-mermaid-interactive>=0.1.12",
     "structlog>=24.0",
     "tiktoken>=0.7.0",
     "torch>=2.2",

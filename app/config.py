@@ -64,6 +64,7 @@ class Settings(BaseSettings):
         FrontendUser(username="pepe", password="1234", tenant="lidr"),
         FrontendUser(username="peter", password="123", tenant="lotus"),
         FrontendUser(username="martin", password="123", tenant="lotus"),
+        FrontendUser(username="mike", password="444", tenant="ibm"),
     ]
 
 

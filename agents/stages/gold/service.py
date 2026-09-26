@@ -937,9 +937,11 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
     component Gold currently has on record across every ADR, with any `removed` component
     dropped.
 
-    This backs the frontend's "Architecture history" tab. Each node's label carries a small
-    italic subtitle naming the `(source_component, source_adr_version)` that last touched it.
-    This returns `""` if Gold has no live component yet.
+    This backs the frontend's "Architecture history" tab. Each node's label names the
+    component's own current Gold `version` (e.g. "Backend v4" — how many real changes this
+    entity has recorded, `.tmp/... cicle_evolution.md`'s version, never the ADR's own), plus a
+    small italic subtitle naming the `(source_component, source_adr_version)` that last touched
+    it. This returns `""` if Gold has no live component yet.
 
     Navigating to a node's ADR is handled by plain "View ADR" links in the table that
     `frontend/app.py`'s `_architecture_history_tab` renders below the diagram. This is
@@ -993,7 +995,7 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
     ]
     for c in live:
         adr_ref = f"{transcription_base_name(c.source_component)} v{c.source_adr_version}"
-        lines.append(f'    {node_id[c.entity_id]}["`{c.canonical_name}\n*{adr_ref}*`"]')
+        lines.append(f'    {node_id[c.entity_id]}["`{c.canonical_name} v{c.version}\n*{adr_ref}*`"]')
     for c in live:
         dependency_ids = ComponentPayload.model_validate(c.payload).dependency_ids
         for dependency_id in dependency_ids:
@@ -1001,6 +1003,59 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
                 lines.append(f"    {node_id[c.entity_id]} --> {node_id[dependency_id]}")
     lines.append(f"    class {','.join(node_id.values())} goldNode")
     return "\n".join(lines)
+
+
+async def current_architecture_diagram_interactive(
+    session: AsyncSession, *, tenant: str = "default"
+) -> tuple[str, dict[str, str]]:
+    """Builds a Mermaid `flowchart LR` of Gold's own current component state for
+    `streamlit_mermaid_interactive` (a third-party Streamlit component, not `st.mermaid_chart`)
+    to render with real click events.
+
+    This is NOT the same rendering path as `current_architecture_diagram`'s own hand-built SVG
+    predecessor, nor is it the `click <id> href ...` directive confirmed to break
+    `st.mermaid_chart` (see that function's docstring for the reproduced root cause: Mermaid's
+    click-binding step needs the SVG attached to the live document, but `st.mermaid_chart`
+    renders off-screen before converting to a `blob:` image). `streamlit_mermaid_interactive`
+    renders straight into the page's live DOM and attaches its own JS click listeners directly to
+    each node — it never uses Mermaid's `click` directive at all — so it does not hit that bug.
+    The plain SVG diagram this replaced was a defensive workaround for the same bug, not a design
+    preference; once a click-capable Mermaid renderer exists, Mermaid's own automatic layout is
+    simpler and better-looking than a hand-rolled one, so `_svg_layered_positions` and its rect/
+    line drawing are gone entirely — Mermaid lays the graph out itself.
+
+    Returns `(mermaid_code, entity_name_mapping)`. `entity_name_mapping` maps a node's exact
+    visible label text to a compact `"{source_component}::{source_adr_version}"` string, because
+    `streamlit_mermaid_interactive` identifies the clicked node by its rendered text content, not
+    by Mermaid's own internal node id — the caller reads this back from the component's
+    `entity_clicked` result and splits it to build the same `?view_adr=...&view_adr_version=...`
+    navigation the rest of this app already uses. Each label is deliberately a single line (no
+    `current_architecture_diagram`-style italic ADR-ref subtitle): a multi-line Mermaid markdown-
+    string label's exact rendered `textContent` is not something this project can verify without
+    a real browser, so the label kept here is exactly the string used as the mapping key, with
+    nothing left to guess. Returns `("", {})` if Gold has no live component yet."""
+    components = await current_gold_state(session, "component", tenant=tenant)
+    live = [c for c in components if c.operation != "removed"]
+    if not live:
+        return "", {}
+
+    by_id = {c.entity_id: c for c in live}
+    node_id = {c.entity_id: f"n{i}" for i, c in enumerate(live)}
+    lines = [
+        "flowchart LR",
+        "    classDef goldNode fill:#f1f3f5,stroke:#8b5cf6,color:#16181d,stroke-width:1px",
+    ]
+    mapping: dict[str, str] = {}
+    for c in live:
+        label = f"{c.canonical_name} v{c.version}"
+        lines.append(f'    {node_id[c.entity_id]}["`{label}`"]')
+        mapping[label] = f"{c.source_component}::{c.source_adr_version}"
+    for c in live:
+        for dependency_id in ComponentPayload.model_validate(c.payload).dependency_ids:
+            if dependency_id in by_id and dependency_id != c.entity_id:
+                lines.append(f"    {node_id[c.entity_id]} --> {node_id[dependency_id]}")
+    lines.append(f"    class {','.join(node_id.values())} goldNode")
+    return "\n".join(lines), mapping
 
 
 async def build_relationship_diagram(
@@ -1775,6 +1830,7 @@ __all__ = [
     "content_hash",
     "contracts_with_real_changes",
     "current_architecture_diagram",
+    "current_architecture_diagram_interactive",
     "current_gold_state",
     "current_gold_state_as_of",
     "embed_question",

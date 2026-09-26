@@ -30,6 +30,7 @@ from agents.stages.gold.service import (
     already_extracted,
     contracts_with_real_changes,
     current_architecture_diagram,
+    current_architecture_diagram_interactive,
     current_gold_state,
     embed_question,
     ensure_alias,
@@ -809,8 +810,11 @@ async def test_current_architecture_diagram_draws_a_node_per_live_component():
         # function's own docstring for why. Those HTML tags broke node visibility under
         # Streamlit's strict security mode.
         assert "<br/>" not in diagram and "<sub>" not in diagram
-        assert '["`Payment Gateway\n*meeting v1*`"]' in diagram
-        assert '["`Checkout Service\n*meeting v2*`"]' in diagram
+        # "Payment Gateway v1"/"Checkout Service v1" is each entity's own Gold version (both
+        # are persisted only once in this test) — distinct from "*meeting v1*"/"*meeting v2*",
+        # the ADR's own source_adr_version, which the italic subtitle still names.
+        assert '["`Payment Gateway v1\n*meeting v1*`"]' in diagram
+        assert '["`Checkout Service v1\n*meeting v2*`"]' in diagram
         assert "-->" in diagram  # Checkout Service depends on Payment Gateway
         # There is no `click ... href` directive here. We confirmed, with a real headless-Chrome
         # run against `st.mermaid_chart` and not just mermaid-cli, that this directive makes
@@ -856,6 +860,71 @@ async def test_current_architecture_diagram_drops_a_removed_component():
         assert diagram == ""
     finally:
         await _cleanup_entity("component", entity_id)
+
+
+async def test_current_architecture_diagram_interactive_draws_a_node_per_live_component():
+    tenant = f"test-arch-interactive-{uuid4().hex[:8]}"
+    checkout_id, payment_id = str(uuid4()), str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=payment_id,
+                canonical_name="Payment Gateway",
+                operation="new",
+                narrative="Processes card payments.",
+                payload={"dependency_ids": [], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=1,
+                ingestion_date=date(2026, 6, 1),
+                tenant=tenant,
+            )
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=checkout_id,
+                canonical_name="Checkout Service",
+                operation="modified",
+                narrative="Calls the payment gateway.",
+                payload={"dependency_ids": [payment_id], "contract_ids": []},
+                source_component="meeting.en.vtt",
+                source_adr_version=2,
+                ingestion_date=date(2026, 6, 2),
+                tenant=tenant,
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            diagram, mapping = await current_architecture_diagram_interactive(session, tenant=tenant)
+
+        assert diagram.startswith("flowchart LR")
+        assert "classDef goldNode" in diagram
+        # Single-line backtick labels only — no italic ADR-ref subtitle, since a multi-line
+        # label's exact rendered textContent (what the component reads back on click) can't be
+        # verified without a real browser. See the function's own docstring.
+        assert '["`Payment Gateway v1`"]' in diagram
+        assert '["`Checkout Service v1`"]' in diagram
+        assert "-->" in diagram  # Checkout Service depends on Payment Gateway
+        assert "click" not in diagram
+        assert "class n0,n1 goldNode" in diagram
+        # The mapping is what lets a click on "Checkout Service v1" resolve back to the exact
+        # ADR that produced it.
+        assert mapping == {
+            "Payment Gateway v1": "meeting.en.vtt::1",
+            "Checkout Service v1": "meeting.en.vtt::2",
+        }
+    finally:
+        await _cleanup_entity("component", checkout_id)
+        await _cleanup_entity("component", payment_id)
+
+
+async def test_current_architecture_diagram_interactive_is_empty_when_gold_has_no_live_component():
+    tenant = f"test-arch-interactive-empty-{uuid4().hex[:8]}"
+    async with async_session_factory() as session:
+        diagram, mapping = await current_architecture_diagram_interactive(session, tenant=tenant)
+    assert diagram == ""
+    assert mapping == {}
 
 
 async def test_persist_entity_version_stores_authored_by():

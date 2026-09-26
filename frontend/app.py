@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import requests
 import streamlit as st
+from streamlit_mermaid_interactive import mermaid as st_mermaid_interactive
 
 import api_client
 import theme
@@ -214,7 +215,10 @@ def _render_adr_candidates(username: str, result: dict) -> None:
                     disabled=busy,
                 )
                 if st.button(
-                    "Regenerate ADR", key=f"regenerate::{source}", disabled=busy or not feedback
+                    "Regenerate ADR",
+                    key=f"regenerate::{source}",
+                    type="primary",
+                    disabled=busy or not feedback,
                 ):
                     st.session_state[f"feedback_pending::{source}"] = feedback
                     st.session_state[regen_key] = True
@@ -222,7 +226,9 @@ def _render_adr_candidates(username: str, result: dict) -> None:
 
                 st.markdown("---")
                 ask_more_col, launch_col = st.columns(2)
-                if ask_more_col.button("Ask me more", key=f"ask_more::{source}", disabled=busy):
+                if ask_more_col.button(
+                    "Ask me more", key=f"ask_more::{source}", type="primary", disabled=busy
+                ):
                     st.session_state[ask_more_key] = True
                     st.rerun()
 
@@ -449,26 +455,44 @@ def _input_transcription_tab(username: str) -> None:
         _render_adr_candidates(username, result)
 
 
-def _architecture_history_tab(username: str) -> None:
-    st.subheader("Architecture history")
-    st.caption(
-        "Current architecture, built live from Gold's own component state, and every ADR "
-        "published so far."
-    )
+def _current_architecture_tab(username: str) -> None:
+    st.subheader("Current architecture")
+    st.caption("Built live from Gold's own component state. Click a node to view its ADR.")
 
     history = api_client.architecture_history(username)
 
     if history["diagram"]:
-        st.mermaid_chart(history["diagram"])
-        # Shows the exact Mermaid source behind the diagram above, to tell apart a
-        # generation bug (bad source) from a rendering bug (`st.mermaid_chart` not drawing
-        # good source).
-        with st.expander("View Mermaid source"):
-            st.code(history["diagram"], language="text")
+        # `streamlit_mermaid_interactive` — a real Streamlit custom component (not
+        # `st.mermaid_chart`) that renders Mermaid straight into the page's live DOM and attaches
+        # its own click listeners to each node, so it never hits the `click`-directive rendering
+        # bug documented on `gold.current_architecture_diagram_interactive`. Clicking a node
+        # returns that node's mapped "{source_component}::{source_adr_version}" string in
+        # `entity_clicked`, which is stashed in session_state and rendered inline below, rather
+        # than navigating away — so the diagram stays on screen while browsing several ADRs.
+        click_result = st_mermaid_interactive(
+            history["diagram"],
+            entity_name_mapping=history["diagram_entity_mapping"],
+            key="architecture_history_diagram",
+        )
+        clicked = click_result.get("entity_clicked") if click_result else None
+        if clicked:
+            st.session_state["architecture_history_selected_adr"] = clicked
     else:
         st.info("No components in Gold yet — publish an ADR from Input transcription to see it here.")
 
-    st.write("#### ADRs")
+    selected = st.session_state.get("architecture_history_selected_adr")
+    if selected:
+        source_component, _, version = selected.rpartition("::")
+        with st.expander(f"ADR — {source_component} v{version}", expanded=True):
+            _render_adr_detail(history, source_component, int(version))
+
+
+def _architecture_history_tab(username: str) -> None:
+    st.subheader("Architecture history")
+    st.caption("Every ADR published so far.")
+
+    history = api_client.architecture_history(username)
+
     if not history["adrs"]:
         st.info("No ADRs published yet.")
         return
@@ -509,11 +533,11 @@ def _architecture_history_tab(username: str) -> None:
         )
 
 
-def _adr_viewer_page(username: str, source_component: str, version: int) -> None:
-    """The landing page a "View ADR" link opens in a new tab
-    (`?view_adr=...&view_adr_version=...`, read by `main()`), showing a single read-only ADR
-    looked up from the same `architecture_history` payload the table itself uses."""
-    history = api_client.architecture_history(username)
+def _render_adr_detail(history: dict, source_component: str, version: int) -> None:
+    """Shared body for showing one read-only ADR, looked up from an already-fetched
+    `architecture_history` payload — used both by `_adr_viewer_page` (the new-tab landing page a
+    "View ADR" link opens) and by `_current_architecture_tab`'s inline panel for a diagram node
+    click, so the two never drift apart."""
     match = next(
         (
             adr
@@ -523,7 +547,6 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
         None,
     )
     if match is None:
-        st.caption(f"Architecture history — {source_component} v{version}")
         st.error(f"No ADR found for {source_component!r} version {version}.")
         return
 
@@ -538,6 +561,7 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
             data=match["content"],
             file_name=f"{source_component}-v{version}.md",
             mime="text/markdown",
+            key=f"download-detail-{source_component}-{version}",
         )
 
     # Blue metadata header, then the document, then the soft-yellow Gold cards for this
@@ -557,6 +581,19 @@ def _adr_viewer_page(username: str, source_component: str, version: int) -> None
     st.markdown(match["content"])
     st.markdown("---")
     st.markdown(theme.gold_entity_cards_html(match["gold_entities"]), unsafe_allow_html=True)
+
+
+def _adr_viewer_page(username: str, source_component: str, version: int) -> None:
+    """The landing page a "View ADR" link opens in a new tab
+    (`?view_adr=...&view_adr_version=...`, read by `main()`), showing a single read-only ADR
+    looked up from the same `architecture_history` payload the table itself uses."""
+    history = api_client.architecture_history(username)
+    if not any(
+        adr["source_component"] == source_component and adr["version"] == version
+        for adr in history["adrs"]
+    ):
+        st.caption(f"Architecture history — {source_component} v{version}")
+    _render_adr_detail(history, source_component, version)
 
 
 def _prompt_viewer_page(username: str, prompt_id: int) -> None:
@@ -720,7 +757,7 @@ def _test_monitor_tab(username: str) -> None:
 def _main_app() -> None:
     user = st.session_state.user
 
-    nav_items = ["Input transcription", "Architecture history", "Chat with RAG"]
+    nav_items = ["Input transcription", "Current architecture", "Architecture history", "Chat with RAG"]
     if st.session_state.get("start_test_mode", False):
         nav_items.append("Monitor")
     active_page = st.session_state.setdefault("active_page", nav_items[0])
@@ -750,6 +787,8 @@ def _main_app() -> None:
 
     if active_page == "Input transcription":
         _input_transcription_tab(user["username"])
+    elif active_page == "Current architecture":
+        _current_architecture_tab(user["username"])
     elif active_page == "Architecture history":
         _architecture_history_tab(user["username"])
     elif active_page == "Chat with RAG":

@@ -454,7 +454,13 @@ class ArchitectureHistoryAdr(BaseModel):
 
 
 class ArchitectureHistoryResponse(BaseModel):
+    # `gold.current_architecture_diagram_interactive`'s Mermaid code, rendered by the
+    # `streamlit_mermaid_interactive` frontend component (not `st.mermaid_chart` — see that
+    # function's docstring for why a real click-capable renderer needed a different package).
     diagram: str
+    # Maps a node's exact visible label to a "{source_component}::{source_adr_version}" string,
+    # since the component identifies a clicked node by its rendered text, not a Mermaid node id.
+    diagram_entity_mapping: dict[str, str]
     adrs: list[ArchitectureHistoryAdr]
 
 
@@ -470,7 +476,7 @@ async def architecture_history(
             select(SilverDocument).where(SilverDocument.tenant == tenant).order_by(SilverDocument.id.desc())
         )
     ).scalars().all()
-    diagram = await gold.current_architecture_diagram(db, tenant=tenant)
+    diagram, diagram_entity_mapping = await gold.current_architecture_diagram_interactive(db, tenant=tenant)
     adrs = []
     for doc in docs:
         entities = await gold.gold_entities_for_adr(db, doc.source_component, doc.version, tenant=tenant)
@@ -494,7 +500,9 @@ async def architecture_history(
                 ],
             )
         )
-    return ArchitectureHistoryResponse(diagram=diagram, adrs=adrs)
+    return ArchitectureHistoryResponse(
+        diagram=diagram, diagram_entity_mapping=diagram_entity_mapping, adrs=adrs
+    )
 
 
 # --- Chat with RAG -------------------------------------------------------------------------
