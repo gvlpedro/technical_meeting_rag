@@ -121,6 +121,35 @@ class ExtractedDataContract(BaseModel):
     odcs_spec: str = "{}"
 
 
+class ChatCitation(BaseModel):
+    """One citation in a chat answer — points back to the exact `gold_evolution` row (by
+    entity + version) a claim came from. `_verify_citations` in
+    `agents.stages.gold.service` checks each one against the rows actually retrieved for
+    that answer, so a citation is evidence, never just an LLM's unverified claim."""
+
+    entity_type: GoldEntityType
+    entity_id: str
+    version: int
+
+
+class GroundedAnswer(BaseModel):
+    """`answer_question`/`answer_evolution_question`'s structured output: the plain-text
+    answer plus which retrieved rows it actually drew from. Replaces a bare string return so
+    citations can be checked mechanically instead of trusted at face value."""
+
+    answer: str
+    citations: list[ChatCitation] = []
+
+
+class QuestionExpansion(BaseModel):
+    """`expand_question`'s structured output — 2-3 alternative phrasings of the same
+    question, used to widen retrieval to a synonym the canonical wording never used (e.g.
+    "el módulo de pagos" vs. the canonical "Payments Gateway"). Never includes the original
+    question itself — the caller already has that and decides how to combine them."""
+
+    reformulations: list[str] = []
+
+
 class GoldExtractionResult(BaseModel):
     """This is the output shape of `extract_gold_facts_for_source`'s one structured-extraction
     LLM call per source (`gold_process.md` §4). That call is folded into Silver's own graph run,

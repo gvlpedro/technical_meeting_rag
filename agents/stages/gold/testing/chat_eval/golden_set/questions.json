@@ -1,0 +1,30 @@
+[
+  {
+    "id": "payments-gateway-purpose",
+    "question": "What does the Payments Gateway do?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Payments Gateway",
+    "reference": "Payments Gateway is a new component that handles outbound payment charges to external payment providers."
+  },
+  {
+    "id": "checkout-service-dependency",
+    "question": "What does the Checkout Service depend on?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Checkout Service",
+    "reference": "Checkout Service was modified to call Payments Gateway to charge the customer once an order is placed."
+  },
+  {
+    "id": "payment-charged-producer",
+    "question": "Which component produces the PaymentCharged event?",
+    "expected_entity_type": "data_contract",
+    "expected_canonical_name": "PaymentCharged",
+    "reference": "PaymentCharged is a new data contract produced by Payments Gateway and consumed by Checkout Service, emitted once a charge succeeds."
+  },
+  {
+    "id": "fraud-check-responsibility",
+    "question": "What is the Fraud Check Service responsible for?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Fraud Check Service",
+    "reference": "Fraud Check Service is a new component that screens a transaction for fraud before Payments Gateway is allowed to charge it."
+  }
+]

@@ -116,17 +116,7 @@ def _is_inside_code_fence(content: str, index: int) -> bool:
 
 
 def _downgrade_claim(content: str, claim: str) -> str:
-    """Adds `_DOWNGRADE_MARKER` right after the first occurrence of `claim` that is NOT
-    inside a ` ```mermaid ` fence. The ADR's own "previous" and "target architecture"
-    diagrams live in fenced blocks (see `prompts/adr_generation/generator.jinja`'s OUTPUT
-    STRUCTURE). The Critic's claim text is a word-for-word quote from anywhere in the
-    document, including diagram node labels — `prompts/adr_critic/critic.jinja`'s own quoting
-    rule does not exempt them. Splicing `**[unknown — flagged by review]**` into a Mermaid
-    label breaks its syntax. Mermaid does not know what to do with a stray `**`, so the
-    rendered diagram fails outright instead of just looking annotated. If `claim` only ever
-    occurs inside a fence, this function returns `content` unchanged instead of corrupting
-    the diagram. In that case there is no prose sentence to annotate, but the diagram must
-    still render."""
+    """Marks the first claim outside Mermaid fences, leaving Mermaid diagrams unchanged."""
     if not claim:
         return content
     marked = claim + _DOWNGRADE_MARKER
@@ -159,34 +149,7 @@ async def load_bronze(state: SilverState) -> dict:
 
 
 async def generate_architecture_questions(state: SilverState) -> dict:
-    """Generates architecture questions and mentions.
-
-    `architecture_diagram` (this stage's own KNOWN_ARCHITECTURE input) is built from two
-    sources, combined:
-
-    1. Gold's own tenant-wide, cross-source current state (`gold.current_architecture_diagram`)
-       — every component ANY source has ever established, still live. This is what lets this
-       stage correctly classify a component a DIFFERENT source already introduced as
-       `unchanged`/`modified` here, instead of `new`. Before this existed, a component already
-       published by source A had no way to be recognized while processing source B, because
-       the per-source lookup below only ever sees THIS source's own prior versions. A real,
-       observed case: a transcript describing new PostgreSQL persistence for an
-       already-published `backend` called it "the newly introduced backend" — sloppy but
-       explicit wording that, with no cross-source knowledge to contradict it, got taken at
-       face value and wrongly classified `backend` as `new` instead of `modified`, even though
-       four new data contracts were being added to it. **COMPONENT STATUS**'s own `new` rule
-       already says "and it does not correspond to an existing component in
-       `KNOWN_ARCHITECTURE`" — that condition only works if `KNOWN_ARCHITECTURE` actually
-       contains every component Gold already knows about, not just this one source's own.
-    2. Each distinct source's own previous ADR, if one exists (Silver's own version history,
-       via `agents.stages.architecture_questions.service.previous_architecture_context`) — this
-       adds the per-component status TABLE Gold's diagram alone does not carry, plus detail for
-       a source still mid-batch (not yet in Gold, since Gold is only written after this whole
-       batch's clarification loop finishes).
-
-    A tenant with no live Gold components yet, and a source with no prior ADR, both contribute
-    nothing to their own part — combined, that is exactly "no prior architecture known" from
-    the prompt's point of view."""
+    """Generates architecture questions using the known current architecture and previous ADRs."""
     known_architecture_parts = []
     async with async_session_factory() as session:
         gold_diagram = strip_diagram_colors(await gold.current_architecture_diagram(session, tenant=state["tenant"]))
@@ -206,14 +169,7 @@ async def generate_architecture_questions(state: SilverState) -> dict:
         state["ingestion_date"], state["bronze_documents"], architecture_diagram=known_architecture
     )
     # A name the LLM put in both lists is really a data contract wearing a component's
-    # clothes, not two separate entities. "Topic" or "Queue" is a valid component type
-    # (architecture_questions.jinja PHASE 3), and a data contract is often named after the
-    # topic or queue it travels over. So the two lists can genuinely collide on the same
-    # name, even with the prompt's own "don't double-list" instruction — that instruction is
-    # still just prompt-following, not something we enforce. We prefer the data contract
-    # classification here mechanically, not by asking the LLM to try harder. This way, every
-    # downstream consumer (grounding checks, Gold extraction, the ADR itself) sees one
-    # consistent classification, instead of each one deciding on its own.
+    # and a data contract is often named after the topic or queue it travels over.
     contract_names = {c.name.lower() for c in result.mentioned_data_contracts}
     components = [c for c in result.mentioned_components if c.name.lower() not in contract_names]
     return {
@@ -224,29 +180,13 @@ async def generate_architecture_questions(state: SilverState) -> dict:
 
 
 def _slugify(name: str) -> str:
-    """Lowercases the name and collapses runs of non-alphanumeric characters into one
-    underscore. This matches the `contract.<slug>.schema` id convention that
-    `prompts/data_contract_questions/questions.jinja`'s PHASE 14 already defines. This way, a
-    fallback question's `id` reads like one the LLM drafted, not like a made-up marker."""
+    """Lowercases the name and collapses runs of non-alphanumeric characters"""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "contract"
 
 
 def _ensure_schema_questions(questions: list[dict], mentioned_data_contracts: list[dict]) -> list[dict]:
     """This is a mechanical backstop for `prompts/data_contract_questions/questions.jinja`'s
-    own FINAL SELF-CHECK, which says schema fields must be known or questioned for every
-    contract in IDENTIFIED_DATA_CONTRACTS. That self-check only works if the LLM follows the
-    prompt. Nothing downstream catches a contract where the LLM drafted OTHER questions
-    (version, ownership, SLA, and so on) but never actually asked what its schema contains. A
-    data contract with no fields on record can never get a real ODCS spec at Gold-extraction
-    time — `gold_extraction.jinja`'s `odcs_spec` would just stay `"{}"`. So every identified
-    contract MUST have a schema question drafted for it. This is a real requirement, not a
-    nice-to-have, which is why we enforce it here instead of leaving it to the prompt alone.
-
-    This only adds a schema question if none already exists for that contract. A match is
-    found by `target` plus the word "schema" appearing somewhere in the drafted `id`, the
-    PHASE 14 convention. `classify_questions` still decides whether the transcript already
-    answers this question, the same as any other question. This function only stops the
-    question from being silently skipped in the first place."""
+    own FINAL SELF-CHECK"""
     targets_with_schema_question = {
         q["target"] for q in questions if q.get("scope") == "data_contract" and "schema" in q.get("id", "")
     }
@@ -272,14 +212,7 @@ def _ensure_schema_questions(questions: list[dict], mentioned_data_contracts: li
 
 def _drop_new_contract_version_questions(questions: list[dict], mentioned_data_contracts: list[dict]) -> list[dict]:
     """This is a mechanical backstop for `prompts/data_contract_questions/questions.jinja`'s
-    own PHASE 3 rule: a brand-new contract's version is always `1.0.0`, a fixed convention, not
-    something anyone states in a meeting and not something worth asking about.
-    `prompts/adr_generation/generator.jinja` already treats it the same way when it writes the
-    ADR. That rule only holds if the LLM follows the prompt — nothing stops it from drafting a
-    version question for a `new` contract anyway, the same reason `_ensure_schema_questions`
-    above exists as a backstop instead of trusting the prompt alone. This drops any drafted
-    question whose id names a `.version`-shaped field (the PHASE 14 convention) for a contract
-    whose `action` (from the architecture stage) is `new`."""
+    own PHASE 3 rule: a brand-new contract's version is always `1.0.0`"""
     new_contract_names = {c["name"] for c in mentioned_data_contracts if c.get("action") == "new"}
     return [
         q for q in questions if not (q.get("target") in new_contract_names and "version" in q.get("id", ""))
@@ -305,13 +238,7 @@ def _canonical_classification(
     by_classification_id: dict[str, QuestionClassification],
     seen: frozenset[str],
 ) -> QuestionClassification:
-    """Follows one question's `duplicate_of` chain back to the question that actually carries
-    the real status and answer. `duplicate_of` marks a question the classifier judged as
-    asking for the same information as another one in this same batch, in different words —
-    see `prompts/classification/classifier.jinja`'s DUPLICATE QUESTIONS section. Stops and
-    returns this question's own classification unchanged if `duplicate_of` is empty, points at
-    itself, points at an id outside this batch, or would revisit an id already seen (a
-    malformed loop the classifier should not produce, but must not hang on if it does)."""
+    """classify questions."""
     classification = by_classification_id[classification_id]
     target_id = classification.duplicate_of
     if target_id is None or target_id == classification_id or target_id in seen or target_id not in by_classification_id:
@@ -320,20 +247,7 @@ def _canonical_classification(
 
 
 async def classify_questions(state: SilverState) -> dict:
-    """This is the single decision that gates every question this graph run will ever show a
-    human. `answered` silently drops a question. `needs_clarification` keeps it. We use
-    `temperature=0` here because this call's own randomness, not the drafted questions'
-    quality, was the real root cause of a reported bug. A healthy, well-drafted question set
-    was collapsing to 1-2 surfaced questions from one run to the next. This happened because
-    a non-zero-temperature classify call sometimes over-inferred "answered" from prose that
-    sounded confident but did not actually commit to anything. `reasoning_effort="none"` goes
-    alongside it, for the same reasoning-locked-model workaround that
-    `generate_architecture_questions_for_batch` already explains in its own docstring.
-
-    This same call also finds semantic duplicates among the drafted questions — two questions
-    worded differently that ask for the same information (see `prompts/classification/
-    classifier.jinja`'s DUPLICATE QUESTIONS section) — and folds each duplicate into the
-    question it duplicates, via `_canonical_classification` below."""
+    """This is the single decision that gates every question """
     questions = state["generated_questions"]
     messages = build_classification_prompt(questions, state["transcript_text"])
     response = await router.complete(
@@ -341,9 +255,6 @@ async def classify_questions(state: SilverState) -> dict:
     )
     result = ClassificationResult.model_validate(load_json_response(response.choices[0].message.content))
 
-    # We match this back to the drafted question by `id`, not by the resent text. An id the
-    # classifier made up, one that was not among the questions it was given, gets dropped
-    # instead of crashing the node on a malformed response.
     by_id = {q["id"]: q for q in questions}
     by_classification_id = {c.id: c for c in result.classifications}
     clarifications: list[ClarificationItem] = []
@@ -351,12 +262,7 @@ async def classify_questions(state: SilverState) -> dict:
         question = by_id.get(c.id)
         if question is None:
             continue
-        # A duplicate question is folded into the one it duplicates: same question text, same
-        # status, same answer. `_top_questions` below already collapses exact-text duplicates
-        # into one pending question, and `ask_human` already fills every clarification that
-        # shares that exact text when the human answers it once — so a duplicate needs no
-        # separate handling past this point. `canonical` is `c` itself when this question is
-        # not a duplicate of anything.
+        # A duplicate question is folded into the one it duplicates
         canonical = _canonical_classification(c.id, by_classification_id, frozenset())
         canonical_question = by_id.get(canonical.id, question)
         clarifications.append(
@@ -390,11 +296,7 @@ def route_after_classify(state: SilverState) -> Literal["ask_human", "synthesize
 
 
 def ask_human(state: SilverState) -> dict:
-    """This sends one `interrupt()` carrying every pending question together. We reuse it for
-    both the classify-stage gap-filling (`interrupt_origin == "classify"`) and a Boss
-    escalation over a contradiction (`interrupt_origin == "boss"`). It is the same mechanism
-    and the same Postgres-backed checkpointer. There is no separate pause path for the second
-    case."""
+    """This sends one `interrupt()` carrying every pending question together"""
     payload = {
         "ingestion_date": state["ingestion_date"],
         "pending_questions": state["pending_questions"],
@@ -417,10 +319,7 @@ def ask_human(state: SilverState) -> dict:
                     item["answer"] = answer
                     item["status"] = status
         else:
-            # This is a Boss-origin escalation question (see boss_decide). It is made up on
-            # the spot from a Critic claim, so it never went through generate_questions and
-            # has no real id, scope, or target of its own. We fill in placeholders that still
-            # say what it is about, so this item's shape matches every other one.
+            # This is a Boss-origin escalation question (see boss_decide)
             updated.append(
                 {
                     "id": f"boss-escalation:{len(updated)}",
@@ -437,26 +336,7 @@ def ask_human(state: SilverState) -> dict:
 
 
 async def synthesize_document(state: SilverState) -> dict:
-    """This is the Actor. It makes one LLM call per distinct source, writing the final ADR
-    directly, following `prompts/adr_generation/generator.jinja`'s own structure
-    (`doc/silver_process.md` §3 node 6). It takes a flat question/answer list, not the
-    graph's own richer `ClarificationItem` shape — see `agents.stages.adr_generation.prompts.QaPair`. So `id`,
-    `scope`, `target`, and `requirement` are dropped here. The ADR prompt only ever reads the
-    question text and its answer.
-
-    §2 "Previous Architecture" is grounded in Gold's own current state
-    (`gold.current_architecture_diagram`), not in Silver's per-source document history. Gold
-    is the reconciled, cross-source, entity-resolved record of what has actually been
-    published so far. So an ADR for source A correctly shows components that a DIFFERENT
-    source's earlier ADR already established, not just source A's own history. This is
-    computed once per run, not once per source in `sources`: Gold's architecture is one
-    tenant-wide state, not a per-source one, so every source in this batch sees the exact
-    same "previous" snapshot. We call `strip_diagram_colors` because Gold's own diagram
-    carries its `goldNode` display styling. §2 must always be a plain, colorless snapshot,
-    the same rule that `previous_target_architecture_diagram` and
-    `own_previous_architecture_diagram` already applied when this read from Silver instead.
-    This is empty only when Gold has no live component for this tenant yet, meaning a true
-    first-ever run."""
+    """ADR generator"""
     sources = state["redraft_only"] or distinct_sources(state["bronze_documents"])
     qa_pairs = [{"question": c["question"], "answer": c["answer"]} for c in state["clarifications"]]
 
@@ -473,34 +353,9 @@ async def synthesize_document(state: SilverState) -> dict:
                 mentioned_components=state["mentioned_components"],
                 mentioned_data_contracts=state["mentioned_data_contracts"],
             )
-            # We use temperature=0 for the same reason `classify_questions` needs it: we saw
-            # a real run-to-run inconsistency here, where the same case's structural
-            # checklist passed and then failed across two identical `agents.stages.adr_generation.testing` runs,
-            # with nothing about the input having changed. `reasoning_effort="none"` is the
-            # matching workaround a reasoning-locked model needs alongside temperature=0 —
-            # see `generate_architecture_questions_for_batch`'s own docstring.
             response = await router.complete(messages, temperature=0, reasoning_effort="none")
             content = response.choices[0].message.content
-            # This is a mechanical retry on two known failure modes: a template leak (see
-            # `adr_has_placeholder_leak`) and a silently-dropped `[SUGGEST INFO]` answer (see
-            # `adr_drops_suggest_info_content` — confirmed real: the exact same transcript and
-            # clarifications produced a correct suggestion, WITH a diagram edge, on one run and
-            # dropped it entirely, leaving two components disconnected in the diagram, on
-            # others). It follows the same shallow-retry approach that
-            # `generate_architecture_questions_for_batch` already uses for ITS stage's own
-            # observed failure: temperature=0 makes a clean run reliably reproducible, but it
-            # also reliably reproduces a bad one.
-            #
-            # The two failure modes retry differently. A placeholder leak has no specific gap to
-            # name, so it gets a blind resample at a higher temperature, same as before. A
-            # dropped `[SUGGEST INFO]` answer DOES have a specific, nameable gap — real testing
-            # (both against the golden transcripts above and a real user's own reported case)
-            # showed a blind resample sometimes needs 3-4 attempts to recover, a real chance of
-            # exhausting `SHALLOW_RETRY_ATTEMPTS` before it does — while naming the exact problem
-            # in a follow-up turn (`SUGGEST_INFO_CORRECTION_MESSAGE`), the same correction a human
-            # reviewer would give, converged in a single retry in that same testing. This is not
-            # a general "retry on any failure" policy — each check stays narrow to the one real
-            # failure it was built to catch.
+
             for _ in range(SHALLOW_RETRY_ATTEMPTS):
                 dropped_suggestion = adr_drops_suggest_info_content(content, qa_pairs)
                 if not adr_has_placeholder_leak(content) and not dropped_suggestion:
@@ -524,10 +379,7 @@ async def synthesize_document(state: SilverState) -> dict:
 
 
 async def critic_document(state: SilverState) -> dict:
-    """This node is mandatory. It always runs, with no confidence threshold that skips it. It
-    also produces this source's `completeness_score` and `unresolved_points` (see
-    `prompts/adr_critic/critic.jinja`'s COMPLETENESS SCORING section) from the same read. We
-    need no second LLM call just to grade the document separately from reviewing its claims."""
+    """Step to evaluate `completeness_score` and `unresolved_points`"""
     critiques = dict(state["critiques"])
     adr_scores = dict(state["adr_scores"])
     adr_unresolved_points = dict(state["adr_unresolved_points"])
@@ -551,9 +403,9 @@ async def critic_document(state: SilverState) -> dict:
 
 
 def boss_decide(state: SilverState) -> dict:
-    """This is deterministic. It makes no LLM call. It applies a policy over the Critic's
-    output, rather than giving a second opinion. It escalates a real contradiction once, and
-    downgrades everything else."""
+    """No LLM call. Downgrades every low-severity claim from the Critic directly in the
+    document; for a material claim, escalates to the human once — if it's still unresolved on
+    retry, downgrades it too instead of asking again, so no source loops forever."""
     documents = dict(state["documents"])
     boss_verdicts = dict(state["boss_verdicts"])
     revision_attempted = dict(state["revision_attempted"])
@@ -619,27 +471,11 @@ async def _persist_document_version(
     mentioned_data_contract_names: list[dict],
     tenant: str,
 ) -> int:
-    """Writes one `SilverDocument` row, deciding the version from the content alone, never
-    from what the LLM says about itself. This compares the new ADR's hash against the latest
-    existing row for this `source_component`. An identical hash overwrites that same row in
-    place — this is an idempotent re-run, with no new version. A different hash inserts a new
-    row at `latest_version + 1`, leaving the older version's row untouched. Both rows stay
-    queryable. This returns the version actually written, so `chunk_and_embed` does not have
-    to work it out again.
+    """Writes one `SilverDocument` row, deciding the version from the content
 
-    `mentioned_component_names` and `mentioned_data_contract_names` get refreshed on every
-    write, including on the same-hash overwrite branch. A re-run can genuinely draft a
-    different, or differently grounded, mention list, even when the synthesized ADR text
-    itself hashes the same. `_row_fields` is the single place where all three branches
-    (insert-first, overwrite, insert-next-version) read shared column values from. This way,
-    adding a column later is a one-line change here, instead of a hand-edit repeated across
-    three constructor calls.
+    `mentioned_component_names` and `mentioned_data_contract_names` get refreshed
 
-    `authored_by` is read straight out of `content`'s own `**Authors:**` line
-    (`agents.shared.extract_authors_line`), never as a separate parameter. This gives this
-    function exactly one source of truth for who authored a version, matching whatever the
-    document itself says. This is true even on the overwrite branch: an identical-hash re-run
-    still refreshes it, for the same reason as the mention lists above."""
+    `authored_by` """
     new_hash = gold.content_hash(content)
     authored_by = extract_authors_line(content)
     latest = (
@@ -678,49 +514,28 @@ async def _persist_document_version(
 
 
 def _write_adr_audit_file(ingestion_date_str: str, source_component: str, content: str) -> None:
-    """Writes `output/ingestion_date=<date>/adr/<transcription>.md`. This is a human-
-    readable audit copy of the ADR that `write_document` just saved, following the same
-    convention that `agents.shared._write_json_audit_file` already uses for the two
-    question-generation stages' own audit files (`doc/silver_process.md` §1). This always
-    shows this run's latest content, and it has no version history on disk. Only
-    `silver_documents` keeps version history. This file exists for a human to read, not for
-    anything downstream to read."""
+    """Writes `output/ingestion_date=<date>/adr/<transcription>.md`"""
     adr_dir = Path(settings.output_dir) / f"ingestion_date={ingestion_date_str}" / "adr"
     adr_dir.mkdir(parents=True, exist_ok=True)
     (adr_dir / f"{transcription_base_name(source_component)}.md").write_text(content, encoding="utf-8")
 
 
 async def write_document(state: SilverState) -> dict:
-    """Saves each synthesized ADR at its own `(source_component, version)` pair — see
-    `_persist_document_version` for how it decides between overwriting and starting a new
-    version. It also writes each ADR to disk (`_write_adr_audit_file`) for a person to check
-    by hand, alongside the Postgres write. This only happens when `state["persist"]` is true.
-    The frontend's initial upload runs with it false, so this ADR, and everything downstream
-    of it — see `route_after_write_document` — stays a draft until a human clicks "Publish."
-    Publishing later calls `_persist_document_version` itself (`finalize_document`), so
-    nothing here needs a second, deferred write path.
+    """Persists each synthesized ADR using its `(source_component, version)` pair and also
+    writes an audit copy to disk. This only happens when `state["persist"]` is true.
+    Drafts are not persisted until the user publishes them.
 
-    This always adds this run's clarifications to `silver_clarifications`, one row per
-    (source, question), inserted fresh every run rather than updated in place. This way it
-    builds up a history instead of only keeping the latest state. This happens regardless of
-    `persist`. This is the question-and-answer audit trail that
-    `agents.shared.qa_pairs_for_source` reads back for `regenerate_document` and
-    `ask_more_questions`, which must keep working on a still-unpublished draft.
+    Clarifications are always stored in `silver_clarifications` as a new row per
+    (source, question), preserving the full Q&A history. This history is used when
+    regenerating documents or asking additional questions.
 
-    `mentioned_components` and `mentioned_data_contracts` are drafted once over the whole
-    batch's pooled transcript (`generate_architecture_questions`), not once per source. This
-    function checks each mention against this specific source's own content
-    (`mentions_grounded_in_source`) before saving it. That way, a future Gold extraction pass
-    reads a per-ADR grounded list, instead of working it out again from the finished
-    Markdown.
+    Mentioned components and data contracts are generated once for the whole batch.
+    Before saving them, this function keeps only the mentions grounded in the current
+    source, so Gold can use the resulting per-ADR lists directly.
 
-    This stamps `state["username"]` and this source's own `source_component` onto every
-    document here, using `insert_authors_line`/`insert_source_line`, AFTER `critic_document`
-    and `boss_decide` have already run — this is the last node before Gold. So the Critic
-    never sees either line, and cannot flag either as an unsupported claim. This returns the
-    stamped `documents` dict regardless of `persist`, so the frontend's draft preview shows
-    the same `**Authors:**`/`**Source:**` lines that the eventually published version will
-    have."""
+    Finally, the function adds the author and source information to each document after
+    the Critic and decision steps have finished. The stamped documents are returned even
+    for drafts, so the frontend preview matches the eventually published ADR."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     documents = {
         source: insert_source_line(insert_authors_line(content, state["username"]), source)
@@ -758,21 +573,13 @@ async def write_document(state: SilverState) -> dict:
 
 
 def route_after_write_document(state: SilverState) -> Literal["chunk_and_embed", "skip_to_end"]:
-    """Gold (`chunk_and_embed` onward) only ever runs for a run that is actually saving its
-    own document — see `SilverState.persist`'s own docstring. A frontend draft ends right
-    here, with nothing written to Silver or Gold beyond the `silver_clarifications` audit
-    trail that `write_document` always writes."""
+    """A frontend draft ends right here"""
     return "chunk_and_embed" if state["persist"] else "skip_to_end"
 
 
 async def chunk_and_embed(state: SilverState) -> dict:
     """This makes one embedding per ADR, with no token-splitting: an ADR is retrieved as a
-    whole, never as a fragment (`doc/silver_process.md` §3 node 10). This updates exactly the
-    `(source_component, version)` pair that `write_document` just wrote, leaving every other
-    version's chunk row (older versions, other sources, other dates) untouched. This is the
-    opposite of the old approach, which deleted everything by `ingestion_date` in one go —
-    that old approach would have wiped out the version history that this node now exists to
-    keep. `END`."""
+    whole, never as a fragment"""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     async with async_session_factory() as session:
         for source, content in state["documents"].items():
@@ -801,41 +608,11 @@ async def chunk_and_embed(state: SilverState) -> dict:
     return {}
 
 
-# --- Gold (.tmp/gold_process_v5.md §1-2) ----------------------------------------
-
-
 async def extract_gold_facts(state: SilverState) -> dict:
     """This makes one structured-extraction LLM call per source that meets two conditions:
-    it has a document written this run (`state["documents"]` — every source, not just
-    `active_sources`, which only holds the redraft target once a Boss escalation narrows it
-    down), and its `boss_verdicts` value is `"ok"`. This is skipped entirely for a source
-    still mid-redraft. We never extract from an unapproved draft, though by the time this
-    node runs, every source in `state["documents"]` should already be approved — this check
-    is just a safety net. It is also skipped for a source whose exact
-    `(source_component, version)` Gold has already processed (`gold.already_extracted`), so a
-    re-run of this graph for an unchanged transcript spends no extra LLM call here either.
-
-    This reads only `state["documents"][source]`, the final, clarified, Boss-approved ADR,
-    and nothing else. Gold used to also take this source's grounded `mentioned_components`
-    and `mentioned_data_contracts` (drafted by `generate_architecture_questions`, BEFORE any
-    clarification happened) as a fixed list that extraction could not go beyond. That meant a
-    component introduced only through a clarification answer, one never named in that
-    pre-clarification list, could never reach Gold, even though the final ADR plainly
-    described it. Now Gold finds every component and contract straight from the ADR text
-    itself. By the time this node runs, the ADR is already the validated, enriched source of
-    truth, so it needs no earlier list to check against (see
-    `build_gold_extraction_prompt`'s own docstring)."""
+    it has a document written this run (`state["documents"]` and its `boss_verdicts` value is `"ok"`"""
     gold_extractions = dict(state["gold_extractions"])
     async with async_session_factory() as session:
-        # This loops over every source that had a document written this run, not just
-        # `active_sources`. `active_sources` shrinks to just the redrafted source once a
-        # Boss escalation happens (see `boss_decide`), while `write_document` and
-        # `chunk_and_embed` already saved or embedded every OTHER already-approved source in
-        # the same batch. Looping over `active_sources` here silently dropped those other
-        # sources' Gold extraction for this run — this bug was found in review. Those
-        # sources would then stay un-extracted until an unrelated future content change
-        # bumped their version again, or until someone ran `scripts/backfill_gold.py` by
-        # hand.
         for source in state["documents"]:
             if state["boss_verdicts"].get(source) != "ok":
                 continue
@@ -852,19 +629,7 @@ async def extract_gold_facts(state: SilverState) -> dict:
 async def resolve_gold_identity(state: SilverState) -> dict:
     """No LLM call happens here. This tries an exact match on `gold_aliases.alias` first,
     then a `pg_trgm` fuzzy match, and finally mints a new `entity_id` (`gold.resolve_entity_id`)
-    if neither match works. It does this for every name this pass's extractions touch: each
-    component's or contract's own name, plus every raw name in its `dependency_names` or
-    `contract_names`, plus a contract's own `producer`/`consumer` names. Those cross-references
-    need resolving too, so that `persist_gold_evolution` can build `payload.dependency_ids`,
-    `payload.contract_ids`, and a contract's own `payload.producer_id`/`consumer_id` from
-    `entity_id`s, never from raw names (`ComponentPayload`/`DataContractPayload`, per v6 §5). A
-    contract's producer and consumer are themselves components — `resolve_and_alias` is called
-    with `entity_type="component"` for them, the same as for `dependency_names`.
-
-    This builds one `name -> entity_id` map per source, instead of resolving names inline
-    inside `persist_gold_evolution`. This keeps identity resolution and versioning as two
-    separate concerns, matching the split that `gold_process.md` §3 already makes between §3
-    (identity) and §5 (versioning)."""
+    if neither match works. It does this for every name this pass's extractions touch"""
     entity_id_maps = dict(state["gold_entity_ids"])
 
     async with async_session_factory() as session:
@@ -872,13 +637,6 @@ async def resolve_gold_identity(state: SilverState) -> dict:
             version = state["document_versions"][source]
             name_to_id: dict[str, str] = dict(entity_id_maps.get(source, {}))
 
-            # A name referenced only as someone else's dependency/contract must be excluded
-            # here too when that same name is ALSO its own top-level entry with status/action
-            # "unknown" — otherwise this mints an alias + entity_id for it anyway (via the
-            # reference), while `_persist_components`/`_persist_contracts` still correctly
-            # refuse to write it a `gold_evolution` row (same "unknown" skip). That mismatch
-            # leaves a dangling alias pointing at an entity Gold has no history for, and a
-            # `dependency_ids`/`contract_ids` payload elsewhere silently references it.
             unknown_component_names = {c["name"] for c in extraction["components"] if c["status"] == "unknown"}
             unknown_contract_names = {c["name"] for c in extraction["contracts"] if c["action"] == "unknown"}
 
@@ -927,17 +685,7 @@ async def _persist_components(
     for component in extraction["components"]:
         if component["status"] == "unknown":
             continue
-        # The `if n in name_to_id` check below never actually filters anything out today.
-        # This loop and `resolve_gold_identity` both iterate the exact same
-        # `state["gold_extractions"]`, with the exact same `status == "unknown"` skip. So
-        # every dependency_name and contract_name reachable here was already resolved into
-        # name_to_id there. We keep the check as a guard, in case these two loops' coverage
-        # ever drifts apart in a future change — if it ever fires, that drift is the signal
-        # to look into.
-        # These are sorted, not left in whatever order the LLM listed them: `_entity_hash`
-        # makes dict key order consistent, but not list element order. So an unsorted list
-        # here would hash differently between two extractions that are logically identical,
-        # causing a version bump for no real reason.
+
         payload = ComponentPayload(
             dependency_ids=sorted(
                 {name_to_id[n] for n in component.get("dependency_names", []) if n in name_to_id}
@@ -995,15 +743,9 @@ async def _persist_contracts(
 async def _persist_architecture(
     session, extraction: dict, source: str, version: int, ingestion_date, tenant: str, authored_by: str
 ) -> None:
-    """This is scoped per source_component, not to one global "architecture as a whole"
-    entity across every source in the batch. Reconciling multiple sources' architecture views
-    into one entity is cross-source coordination, and `.tmp/gold_process_v5.md` §6 says
-    explicitly to keep that kind of coordination out of a single graph run for this pass.
-    Each source gets its own `architecture:<source_component>` entity_id, versioned on its
-    own. Merging these into one global view is future work."""
+    """This is scoped per source_component"""
     # These are sorted for the same reason as ComponentPayload's dependency_ids and
-    # contract_ids above: order must not affect `_entity_hash`, so what we save should stay
-    # in a stable order too.
+    # contract_ids above: order must not affect `_entity_hash`
     payload = ArchitecturePayload(
         mermaid_diagram=extraction.get("mermaid_diagram", ""),
         components=sorted({c["name"] for c in extraction["components"]}),
@@ -1026,20 +768,7 @@ async def _persist_architecture(
 
 
 async def persist_gold_evolution(state: SilverState) -> dict:
-    """No LLM call happens here. This compares hashes and bumps a version, per entity
-    (`gold.persist_entity_version`). Components and data contracts whose `status` or
-    `action` is `"unknown"` are skipped entirely. They are never written as a
-    `gold_evolution` row (v6 §3: an unresolved classification is a sign that the extraction
-    is under-grounded, not a valid value to version). There is one helper per entity kind —
-    `_persist_components`, `_persist_contracts`, `_persist_architecture` — because each one
-    builds a differently shaped payload. See `_persist_architecture`'s own docstring for why
-    architecture is scoped per source_component rather than globally.
-
-    `authored_by` is read straight out of `state["documents"][source]`'s own `**Authors:**`
-    line, the same `agents.shared.extract_authors_line` call `_persist_document_version`
-    already makes for `silver_documents.authored_by`. This is the exact same content
-    `write_document` already persisted this run, so no extra DB read is needed to get the
-    same value here."""
+    """No LLM call happens here. This compares hashes and bumps a version, per entity"""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     async with async_session_factory() as session:
         for source, extraction in state["gold_extractions"].items():
@@ -1058,27 +787,22 @@ async def persist_gold_evolution(state: SilverState) -> dict:
 
     return {}
 
-
-# --- Graph assembly ------------------------------------------------------------
-
-
-def build_graph(checkpointer) -> CompiledStateGraph:
-    graph = StateGraph(SilverState)
-
+def _add_modes(graph: StateGraph) -> None:
     graph.add_node("load_bronze", load_bronze)
     graph.add_node("generate_architecture_questions", generate_architecture_questions)
     graph.add_node("generate_data_contract_questions", generate_data_contract_questions)
     graph.add_node("classify_questions", classify_questions)
     graph.add_node("ask_human", ask_human)
-    graph.add_node("synthesize_document", synthesize_document)
+    graph.add_node("synthesize_document", synthesize_document) #TODO: change to generate_adr
     graph.add_node("critic_document", critic_document)
     graph.add_node("boss_decide", boss_decide)
-    graph.add_node("write_document", write_document)
-    graph.add_node("chunk_and_embed", chunk_and_embed)
+    graph.add_node("write_document", write_document) #TODO: change to write_silver_document
+    graph.add_node("chunk_and_embed", chunk_and_embed) #TODO: change to chunk_and_embed_silver_document
     graph.add_node("extract_gold_facts", extract_gold_facts)
     graph.add_node("resolve_gold_identity", resolve_gold_identity)
     graph.add_node("persist_gold_evolution", persist_gold_evolution)
 
+def _add_edgestates(graph: StateGraph) -> None:
     graph.add_edge(START, "load_bronze")
     graph.add_edge("load_bronze", "generate_architecture_questions")
     graph.add_edge("generate_architecture_questions", "generate_data_contract_questions")
@@ -1088,10 +812,6 @@ def build_graph(checkpointer) -> CompiledStateGraph:
         route_after_classify,
         {"ask_human": "ask_human", "synthesize_document": "synthesize_document"},
     )
-    # ask_human always continues on to synthesize_document, no matter its origin. A
-    # classify-origin resume has just resolved every pending question, so there is nothing
-    # left to loop back to route_after_classify for. A boss-origin resume redrafts only the
-    # flagged source (`redraft_only`, set by boss_decide before interrupting).
     graph.add_edge("ask_human", "synthesize_document")
     graph.add_edge("synthesize_document", "critic_document")
     graph.add_edge("critic_document", "boss_decide")
@@ -1110,4 +830,9 @@ def build_graph(checkpointer) -> CompiledStateGraph:
     graph.add_edge("resolve_gold_identity", "persist_gold_evolution")
     graph.add_edge("persist_gold_evolution", END)
 
+
+def build_graph(checkpointer) -> CompiledStateGraph:
+    graph = StateGraph(SilverState)
+    _add_modes(graph)
+    _add_edgestates(graph)
     return graph.compile(checkpointer=checkpointer)

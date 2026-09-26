@@ -82,7 +82,14 @@ test-adr-acb: migrate-test
 	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/adr_generation/testing/ -v
 
 test-gold-arch-evolution: migrate-test
-	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/gold/testing/ -v -s
+	# --ignore's chat_eval/ on purpose: that suite is a separate, dedicated target below
+	# (mirroring every other test-*-acb target's own single directory), not bundled in here
+	# just because it happens to nest under the same testing/ parent.
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/gold/testing/ \
+		--ignore=agents/stages/gold/testing/chat_eval -v -s
+
+test-gold-chat-eval: migrate-test
+	DATABASE_URL=$(TEST_DATABASE_URL) PYTHONPATH=. uv run pytest agents/stages/gold/testing/chat_eval/ -v -s
 
 down:
 	docker compose down

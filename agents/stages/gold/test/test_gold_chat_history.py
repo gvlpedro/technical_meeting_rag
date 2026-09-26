@@ -9,6 +9,7 @@ caller that never passes `history` (every call site before this feature) keeps b
 as before.
 """
 
+import json
 from datetime import date
 from types import SimpleNamespace
 
@@ -35,6 +36,14 @@ def _fake_response(content: str) -> SimpleNamespace:
     message = SimpleNamespace(content=content)
     choice = SimpleNamespace(message=message)
     return SimpleNamespace(choices=[choice], model="fake")
+
+
+def _fake_answer(answer: str) -> SimpleNamespace:
+    """`answer_question`/`answer_evolution_question` now expect a `GroundedAnswer`-shaped
+    JSON response (`{"answer": ..., "citations": [...]}`), not bare text — see
+    `.tmp/tasks2.md` task 1. These history tests only care about the prompt SENT to the LLM,
+    not the citations, so an empty citations list is enough."""
+    return _fake_response(json.dumps({"answer": answer, "citations": []}))
 
 
 def _row(canonical_name: str = "Order Service", version: int = 1, operation: str = "new") -> GoldEvolution:
@@ -76,7 +85,7 @@ async def test_answer_question_includes_history_in_the_prompt_sent_to_the_llm(mo
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         captured["content"] = messages[0]["content"]
-        return _fake_response("It was Order Service, introduced to own order placement.")
+        return _fake_answer("It was Order Service, introduced to own order placement.")
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 
@@ -95,7 +104,7 @@ async def test_answer_question_omits_history_block_when_no_history_given(monkeyp
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         captured["content"] = messages[0]["content"]
-        return _fake_response("Order Service owns order placement.")
+        return _fake_answer("Order Service owns order placement.")
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 
@@ -109,7 +118,7 @@ async def test_answer_evolution_question_includes_history_in_the_prompt_sent_to_
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         captured["content"] = messages[0]["content"]
-        return _fake_response("Order Service was introduced, then later updated for idempotency.")
+        return _fake_answer("Order Service was introduced, then later updated for idempotency.")
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 
@@ -125,7 +134,7 @@ async def test_answer_evolution_question_omits_history_block_when_no_history_giv
 
     async def fake_acompletion(*, model, api_key, messages, **kwargs):
         captured["content"] = messages[0]["content"]
-        return _fake_response("Order Service was introduced to own order placement.")
+        return _fake_answer("Order Service was introduced to own order placement.")
 
     monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
 

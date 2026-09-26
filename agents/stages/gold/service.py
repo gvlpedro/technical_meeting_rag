@@ -28,6 +28,18 @@ from ulid import ULID
 
 from agents.shared import extract_authors_line, transcription_base_name
 from agents.stages.gold.prompts import build_gold_extraction_prompt
+from agents.stages.gold.retrieval.citation_verification import _verify_citations
+from agents.stages.gold.retrieval.conversational_memory import MAX_HISTORY_MESSAGES, _format_history_block
+from agents.stages.gold.retrieval.corrective_rag import retrieve_with_correction
+from agents.stages.gold.retrieval.deduplication import _dedupe_ids_by_entity
+from agents.stages.gold.retrieval.hybrid_search import (
+    RRF_K_CONSTANT,
+    _reciprocal_rank_fusion,
+    _top_k_ids_by_lexical_rank,
+    _top_k_ids_by_vector,
+)
+from agents.stages.gold.retrieval.query_expansion import expand_question
+from agents.stages.gold.retrieval.reranking import _rerank_ids
 from agents.stages.gold.schemas import (
     ArchitecturePayload,
     ComponentPayload,
@@ -35,11 +47,11 @@ from agents.stages.gold.schemas import (
     GoldEntityType,
     GoldExtractionResult,
     GoldOperation,
+    GroundedAnswer,
 )
 from agents.template import load_json_response
 from db.models import GoldAlias, GoldEvolution
 from ingestion.embedder import embed
-from ingestion.reranker import score_candidates
 from llm import router
 
 # `resolve_entity_id` uses this same value on either side of an ambiguous match. A lower value
@@ -721,12 +733,10 @@ DEFAULT_MAX_DISTANCE = 0.6
 #    just outside it.
 RECALL_POOL_SIZE = 30
 
-# Reciprocal Rank Fusion's own smoothing constant. 60 is the value the original RRF paper (Cormack
-# et al., 2009) tuned against, and it is what most hybrid-search implementations still default
-# to — a larger value flattens the gap between rank 1 and rank 30, a smaller one makes rank 1
-# dominate almost completely. Nothing about this corpus has been measured against a different
-# value yet, so this stays at the well-established default rather than an invented number.
-RRF_K_CONSTANT = 60
+# `RRF_K_CONSTANT`, `_reciprocal_rank_fusion`, `_top_k_ids_by_vector`, and
+# `_top_k_ids_by_lexical_rank` (hybrid search); `_dedupe_ids_by_entity` (deduplication); and
+# `_rerank_ids` (reranking) now live in `agents/stages/gold/retrieval/`, one file per
+# technique — imported above. This function is their orchestrator, not their implementation.
 
 
 async def embed_question(text: str) -> list[float]:
@@ -735,167 +745,6 @@ async def embed_question(text: str) -> list[float]:
     question at a time."""
     [vector] = await asyncio.to_thread(embed, [text])
     return vector
-
-
-def _reciprocal_rank_fusion(rankings: list[list[int]], k_constant: int = RRF_K_CONSTANT) -> list[int]:
-    """Fuses any number of ranked id lists into one combined ranking. Each id's fused score is
-    the sum, across every input ranking it appears in, of `1 / (k_constant + rank)` (rank
-    counted from 1). An id absent from one of the rankings contributes nothing from it — not a
-    penalty. That is the entire point of fusing instead of intersecting: a row only needs to
-    rank well in ONE of the two signals (semantic OR lexical) to surface near the top, since a
-    row that is the single best lexical match but a mediocre embedding match (an exact proper
-    noun, an acronym) is exactly the case hybrid search exists to rescue.
-
-    Returns ids sorted by fused score, descending. Ties (an id with the same fused score as
-    another, which only realistically happens for two ids appearing in neither ranking) keep
-    Python's stable sort order — the order they were first seen in `rankings`."""
-    scores: dict[int, float] = {}
-    for ranking in rankings:
-        for rank, item_id in enumerate(ranking, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k_constant + rank)
-    return sorted(scores, key=lambda item_id: scores[item_id], reverse=True)
-
-
-async def _top_k_ids_by_vector(
-    session: AsyncSession,
-    vector: list[float],
-    limit: int,
-    source_component: str | None,
-    max_distance: float | None,
-    tenant: str,
-) -> list[int]:
-    distance = GoldEvolution.embedding.cosine_distance(vector)
-    query = select(GoldEvolution.id).where(GoldEvolution.tenant == tenant).order_by(distance).limit(limit)
-    if source_component is not None:
-        query = query.where(GoldEvolution.source_component == source_component)
-    if max_distance is not None:
-        query = query.where(distance <= max_distance)
-    return list((await session.execute(query)).scalars().all())
-
-
-async def _top_k_ids_by_lexical_rank(
-    session: AsyncSession,
-    question_text: str,
-    limit: int,
-    source_component: str | None,
-    tenant: str,
-) -> list[int]:
-    """The lexical half of hybrid search: Postgres full-text search over `search_vector` (see
-    that column's own comment in `db/models.py` and migration `188c1b98dd96`), ranked by
-    `ts_rank`. `plainto_tsquery` treats `question_text` as plain text, not `tsquery` syntax — a
-    question typed by a person is not a search-operator expression, and letting `&`/`|`/`!`
-    characters in a question be interpreted as tsquery operators would be a second, unrelated
-    injection surface. A question that reduces to an empty tsquery (all stopwords, or no
-    recognized lexemes) matches nothing here — RRF then falls back to whatever the vector
-    ranking alone found, which is the correct degrade: no lexical signal is not an error."""
-    tsquery = func.plainto_tsquery("english", question_text)
-    query = (
-        select(GoldEvolution.id)
-        .where(GoldEvolution.tenant == tenant, GoldEvolution.search_vector.op("@@")(tsquery))
-        .order_by(func.ts_rank(GoldEvolution.search_vector, tsquery).desc())
-        .limit(limit)
-    )
-    if source_component is not None:
-        query = query.where(GoldEvolution.source_component == source_component)
-    return list((await session.execute(query)).scalars().all())
-
-
-async def _dedupe_ids_by_entity(session: AsyncSession, ids: list[int], k: int) -> list[int]:
-    """Collapses `ids` — already ranked, best first — down to at most `k` ids, one per distinct
-    `(entity_type, entity_id)`. This runs in two passes, not one, because "keep whichever
-    version ranked best" is the WRONG rule — a real regression this exact rule caused, caught
-    by `agents.stages.gold.testing`'s real-LLM suite: an older version's narrative can rank
-    closer to a question than the entity's own current state does (`top_k_gold_evolution`'s own
-    docstring on `max_distance` already covers this for `latest_versions`' `[superseded]`
-    tag — the same risk applies here). Deduping straight to that better-ranked OLDER version
-    then answers "what changed" from stale state, missing exactly the update the question asked
-    about.
-
-    Pass 1 finds the RANK ORDER of the first `k` distinct entities in `ids` — this decides WHICH
-    entities make the cut, and in what order, exactly as before. Pass 2 then resolves each of
-    those entities to the id of its actual latest version — queried fresh from every version
-    that entity has on record, not limited to whichever versions happened to be in `ids`. A
-    version can be the entity's current state even if it ranked outside `ids` entirely (for
-    example, past `RECALL_POOL_SIZE`), and this must still find it.
-
-    Without deduping at all, several VERSIONS of the SAME entity — whose narratives are often
-    near-identical between consecutive versions — can occupy multiple of the `k` slots a plain
-    top-k would return, crowding out a genuinely different, relevant entity that never gets a
-    chance to surface. See `RECALL_POOL_SIZE`'s own comment and `.tmp/advanced_techniques.md`
-    §2."""
-    if not ids:
-        return []
-    candidate_rows = (
-        await session.execute(
-            select(GoldEvolution.id, GoldEvolution.entity_type, GoldEvolution.entity_id).where(
-                GoldEvolution.id.in_(ids)
-            )
-        )
-    ).all()
-    entity_by_id = {row.id: (row.entity_type, row.entity_id) for row in candidate_rows}
-
-    ordered_entities: list[tuple[str, str]] = []
-    seen_entities: set[tuple[str, str]] = set()
-    for item_id in ids:
-        entity_key = entity_by_id.get(item_id)
-        if entity_key is None or entity_key in seen_entities:
-            continue
-        seen_entities.add(entity_key)
-        ordered_entities.append(entity_key)
-        if len(ordered_entities) == k:
-            break
-    if not ordered_entities:
-        return []
-
-    every_version = (
-        await session.execute(
-            select(GoldEvolution.id, GoldEvolution.entity_type, GoldEvolution.entity_id, GoldEvolution.version).where(
-                or_(
-                    *(
-                        and_(GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id)
-                        for entity_type, entity_id in ordered_entities
-                    )
-                )
-            )
-        )
-    ).all()
-    latest_by_entity: dict[tuple[str, str], tuple[int, int]] = {}  # entity -> (version, id)
-    for row in every_version:
-        entity_key = (row.entity_type, row.entity_id)
-        current_best = latest_by_entity.get(entity_key)
-        if current_best is None or row.version > current_best[0]:
-            latest_by_entity[entity_key] = (row.version, row.id)
-
-    return [latest_by_entity[entity_key][1] for entity_key in ordered_entities]
-
-
-async def _rerank_ids(session: AsyncSession, question_text: str, ids: list[int], k: int) -> list[int]:
-    """Repunctuates `ids` — already ranked and deduped, but not yet cut to `k` — with a real
-    local cross-encoder (`ingestion.reranker.score_candidates`), then keeps the best `k`. Unlike
-    `_reciprocal_rank_fusion`, this does not combine rankings: it produces one new ranking,
-    grounded in `(question_text, narrative)` pairs actually read together, and replaces
-    whatever order `ids` arrived in.
-
-    This queries `narrative` fresh for exactly the ids being reranked, not the full
-    `GoldEvolution` row — a cross-encoder only ever reads the narrative text, and fetching less
-    than the whole row keeps this step cheap relative to the model call itself, which already
-    dominates its cost."""
-    if not ids:
-        return []
-    rows = (
-        await session.execute(select(GoldEvolution.id, GoldEvolution.narrative).where(GoldEvolution.id.in_(ids)))
-    ).all()
-    narrative_by_id = {row.id: row.narrative for row in rows}
-    # An id from `ids` with no matching row here would mean it vanished between two queries in
-    # the same call — should not happen, but skipping it is safer than crashing the whole
-    # rerank over one stale id.
-    present_ids = [item_id for item_id in ids if item_id in narrative_by_id]
-    if not present_ids:
-        return []
-
-    scores = await asyncio.to_thread(score_candidates, question_text, [narrative_by_id[i] for i in present_ids])
-    ranked = sorted(zip(present_ids, scores), key=lambda pair: pair[1], reverse=True)
-    return [item_id for item_id, _ in ranked[:k]]
 
 
 async def top_k_gold_evolution(
@@ -910,6 +759,7 @@ async def top_k_gold_evolution(
     question_text: str | None = None,
     dedupe: bool = True,
     rerank: bool = False,
+    expand: bool = False,
 ) -> list[GoldEvolution]:
     """This runs top-k search over ALL versions of `gold_evolution`, not just the latest version
     per entity. Getting the latest version per entity is `current_gold_state`'s job instead.
@@ -949,13 +799,32 @@ async def top_k_gold_evolution(
     separately-computed vectors — this can promote a candidate a plain vector/hybrid ranking
     left just outside `k`, at the cost of one extra model call per candidate. `rerank=True`
     requires `question_text`, in every mode, including `mode="vector"` — the cross-encoder
-    always needs the original question text, never `vector`'s embedding of it."""
+    always needs the original question text, never `vector`'s embedding of it.
+
+    `expand=True` (opt-in, off by default) asks `expand_question` for a few reformulations of
+    `question_text`, searches with each of them too (embedding and, in `mode="hybrid"`, the
+    lexical search as well), and fuses every one of those extra rankings into the same
+    `_reciprocal_rank_fusion` pool this function already uses for hybrid search — see
+    `retrieval/query_expansion.py` and `.tmp/advanced_techniques.md` §4. This is the one gap
+    hybrid search alone cannot close: a synonym that shares no word at all with the canonical
+    name ("el módulo de pagos" vs. "Payments Gateway") never matches lexically, and may not
+    embed close enough either — a reformulation that happens to land closer to the canonical
+    wording rescues it. `expand=True` requires `question_text`, in every mode, for the same
+    reason `rerank=True` does."""
     if rerank and not question_text:
         raise ValueError("rerank=True requires question_text (the cross-encoder needs the raw question)")
+    if expand and not question_text:
+        raise ValueError("expand=True requires question_text (needed to generate reformulations)")
 
-    recall = RECALL_POOL_SIZE if (dedupe or rerank) else k
+    # Hybrid search and query expansion both fuse more than one ranking together, so both need
+    # the same wide recall depth as dedup/rerank — a shallow `k`-sized fetch from any one of
+    # them would starve the fusion of candidates the OTHER rankings might have promoted.
+    fuse_deep = mode == "hybrid" or expand
+    recall = RECALL_POOL_SIZE if (dedupe or rerank or fuse_deep) else k
+
+    rankings: list[list[int]] = []
     if mode == "vector":
-        ids = await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant)
+        rankings.append(await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant))
     elif mode == "hybrid":
         if not question_text:
             raise ValueError("mode='hybrid' requires question_text (the lexical ranking needs the raw question)")
@@ -965,11 +834,21 @@ async def top_k_gold_evolution(
         # app, not just a theoretical concern: two coroutines sharing `session` inside
         # `gather` both took the connection into an "in progress" state at once, and closing
         # the session afterward hit that half-finished state.
-        vector_ids = await _top_k_ids_by_vector(session, vector, RECALL_POOL_SIZE, source_component, max_distance, tenant)
-        lexical_ids = await _top_k_ids_by_lexical_rank(session, question_text, RECALL_POOL_SIZE, source_component, tenant)
-        ids = _reciprocal_rank_fusion([vector_ids, lexical_ids])
+        rankings.append(await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant))
+        rankings.append(await _top_k_ids_by_lexical_rank(session, question_text, recall, source_component, tenant))
     else:
         raise ValueError(f"unknown top_k_gold_evolution mode: {mode!r}")
+
+    if expand:
+        for variant_text in await expand_question(question_text):
+            variant_vector = await embed_question(variant_text)
+            rankings.append(
+                await _top_k_ids_by_vector(session, variant_vector, recall, source_component, max_distance, tenant)
+            )
+            if mode == "hybrid":
+                rankings.append(await _top_k_ids_by_lexical_rank(session, variant_text, recall, source_component, tenant))
+
+    ids = rankings[0] if len(rankings) == 1 else _reciprocal_rank_fusion(rankings)
 
     # `rerank=True` needs the deduped pool BEFORE it is cut to `k` — reranking a list already
     # cut to `k` could never promote a candidate ranked just outside it. So dedup is asked for
@@ -1077,23 +956,8 @@ def _payload_detail(row: GoldEvolution, names: dict[tuple[str, str], str]) -> st
     return ""
 
 
-# `answer_question`/`answer_evolution_question` only ever render this many of the most recent
-# `history` messages, even if a caller passes more. This bounds prompt size and cost for a
-# long-running chat session — resolving a follow-up question only ever needs a few turns of
-# context, never the whole conversation since login. See `.tmp/advanced_techniques.md` §8.
-MAX_HISTORY_MESSAGES = 6
-
-
-def _format_history_block(history: list[tuple[str, str]] | None) -> str:
-    """Renders the last `MAX_HISTORY_MESSAGES` of `history` — a list of `(role, content)` pairs,
-    `role` one of `"user"`/`"assistant"`, oldest first, matching `frontend/app.py`'s own
-    `chat_history` shape — as one labeled block for a prompt. Returns `""` when there is no
-    history, so a caller can always concatenate this in without an `if` of its own."""
-    if not history:
-        return ""
-    trimmed = history[-MAX_HISTORY_MESSAGES:]
-    lines = "\n".join(f"{role.capitalize()}: {content}" for role, content in trimmed)
-    return f"Previous conversation (most recent last):\n{lines}\n\n"
+# `MAX_HISTORY_MESSAGES`/`_format_history_block` (conversational memory) and `_verify_citations`
+# (citation verification) now live in `agents/stages/gold/retrieval/`, imported above.
 
 
 async def answer_question(
@@ -1102,11 +966,16 @@ async def answer_question(
     rows: list[GoldEvolution],
     latest: dict[tuple[str, str], int] | None = None,
     history: list[tuple[str, str]] | None = None,
-) -> str:
-    """Drafts a plain-text answer to `question` from the retrieved rows. This is the
-    RAG-consumer step that top-k retrieval alone does not cover. It returns plain text, with no
-    `response_format`. This follows the same convention that `agents.stages.adr_generation.testing`'s own Actor call
-    uses for its final ADR document: this prompt writes an answer directly, not structured JSON.
+) -> GroundedAnswer:
+    """Drafts a structured answer to `question` from the retrieved rows — plain-text `answer`
+    plus `citations` naming exactly which rows it drew from. This is the RAG-consumer step
+    that top-k retrieval alone does not cover.
+
+    Every citation is checked against `rows` by `_verify_citations` before this returns — the
+    model can cite a fact, but it cannot make that citation stick unless it names a row that
+    was genuinely retrieved. This is why the context below includes each row's raw
+    `entity_id`: without it, the model would have nothing correct to cite even when it wanted
+    to.
 
     `latest` comes from `latest_versions` and is optional. It tags each row as `[latest version]`
     or `[superseded — latest is version N]`, in the context the LLM sees. This stops a question
@@ -1130,7 +999,7 @@ async def answer_question(
     may only be used to resolve what the question REFERS to, never as a source of facts on its
     own; every fact in the answer must still come from `rows`."""
     if not rows:
-        return "No relevant Gold facts were found for this question."
+        return GroundedAnswer(answer="No relevant Gold facts were found for this question.")
 
     component_payloads = [
         ComponentPayload.model_validate(row.payload or {}) for row in rows if row.entity_type == "component"
@@ -1141,7 +1010,7 @@ async def answer_question(
         session, rows[0].tenant, {"component": component_ids, "data_contract": contract_ids}
     )
     context = "\n\n".join(
-        f"- [{row.entity_type}] {row.canonical_name} (version {row.version}, "
+        f"- [{row.entity_type}:{row.entity_id}] {row.canonical_name} (version {row.version}, "
         f"operation={row.operation}, {row.ingestion_date.isoformat()}, by "
         f"{row.authored_by or 'an unknown author'}, from ADR {row.source_component} "
         f"v{row.source_adr_version}){_version_tag(row, latest)}: {row.narrative}"
@@ -1171,17 +1040,23 @@ async def answer_question(
                 "back verbatim, source_component and version both, whenever the question asks "
                 "which ADR/document a fact comes from, so the reader can look that exact ADR up "
                 "in the Architecture history table. If a previous conversation is given below, use it "
-                "given below, use it "
                 "ONLY to resolve what the question refers to (a pronoun, \"it\", \"that "
                 "component\") — never as a source of facts on its own; every fact in your "
                 "answer must still come from the retrieved facts.\n\n"
+                "Return a JSON object with two fields: \"answer\" (the text answer, as "
+                "described above) and \"citations\" (a list of every fact you actually used, "
+                "each as {\"entity_type\": ..., \"entity_id\": ..., \"version\": ...} — copy "
+                "these three values verbatim from the \"[entity_type:entity_id]\" tag and "
+                "\"version\" of each fact you cite, never invent or guess one). A fact you did "
+                "not end up using in the answer does not belong in citations.\n\n"
                 f"{_format_history_block(history)}"
                 f"Retrieved facts:\n{context}\n\nQuestion: {question}"
             ),
         }
     ]
-    response = await router.complete(messages, temperature=0, reasoning_effort="none")
-    return response.choices[0].message.content.strip()
+    response = await router.complete(messages, response_format=GroundedAnswer, temperature=0, reasoning_effort="none")
+    result = GroundedAnswer.model_validate(load_json_response(response.choices[0].message.content))
+    return GroundedAnswer(answer=result.answer, citations=_verify_citations(result.citations, rows))
 
 
 # --- Entity evolution timeline. This is a third read path, next to `current_gold_state`
@@ -1303,27 +1178,29 @@ async def find_entity_by_name_in_text(
 def _evolution_step_line(row: GoldEvolution) -> str:
     author = row.authored_by or "an unknown author"
     return (
-        f"- Version {row.version}, {row.ingestion_date.isoformat()}, by {author}, from ADR "
-        f"{row.source_component} v{row.source_adr_version} "
+        f"- [{row.entity_type}:{row.entity_id}] Version {row.version}, {row.ingestion_date.isoformat()}, "
+        f"by {author}, from ADR {row.source_component} v{row.source_adr_version} "
         f"(operation={row.operation}): {row.narrative}"
     )
 
 
 async def answer_evolution_question(
     question: str, canonical_name: str, rows: list[GoldEvolution], history: list[tuple[str, str]] | None = None
-) -> str:
-    """Drafts a plain-text answer to a "how has X evolved over time" question, from EVERY
-    version `entity_history` returned for one entity, oldest first. This is deliberately a
-    separate function from `answer_question`, not a shared one with an extra flag: that
-    function answers from a top-k, possibly cross-entity, possibly incomplete row set, and
-    tells the LLM to prefer the [latest version] tag for current-state questions. This
-    function's whole point is the opposite — narrate the complete, ordered sequence of
-    changes, not settle on one current answer.
+) -> GroundedAnswer:
+    """Drafts a structured answer to a "how has X evolved over time" question, from EVERY
+    version `entity_history` returned for one entity, oldest first — plain-text `answer` plus
+    `citations` naming exactly which version(s) it drew from, checked against `rows` by
+    `_verify_citations` the same way `answer_question` does. This is deliberately a separate
+    function from `answer_question`, not a shared one with an extra flag: that function answers
+    from a top-k, possibly cross-entity, possibly incomplete row set, and tells the LLM to
+    prefer the [latest version] tag for current-state questions. This function's whole point is
+    the opposite — narrate the complete, ordered sequence of changes, not settle on one current
+    answer.
 
-    Each step's line names its version, event-time date (`ingestion_date`, when the change was
-    asserted, not `changed_at`), author (`authored_by`, empty for a CLI/script/test run with no
-    real user — see `GoldEvolution.authored_by`'s own column comment), the exact ADR it came
-    from (`source_component`/`source_adr_version`), operation, and narrative.
+    Each step's line names its entity, version, event-time date (`ingestion_date`, when the
+    change was asserted, not `changed_at`), author (`authored_by`, empty for a CLI/script/test
+    run with no real user — see `GoldEvolution.authored_by`'s own column comment), the exact
+    ADR it came from (`source_component`/`source_adr_version`), operation, and narrative.
     The prompt asks for a chronological prose account: who introduced the entity, when, and
     why, then each later step and its own reason, in the style of "X introduced this on Y for
     Z, then evolved on V because...". `rows` empty means the entity was never found; the caller
@@ -1338,7 +1215,7 @@ async def answer_evolution_question(
     the conversation's own phrasing (e.g. "it" instead of repeating the full entity name every
     sentence) — never as a source of facts; every fact must still come from `rows`."""
     if not rows:
-        return f"No recorded history was found for {canonical_name!r}."
+        return GroundedAnswer(answer=f"No recorded history was found for {canonical_name!r}.")
     timeline = "\n".join(_evolution_step_line(row) for row in rows)
     messages = [
         {
@@ -1357,14 +1234,21 @@ async def answer_evolution_question(
                 "history table. If a previous conversation is given below, use it only to phrase the "
                 "answer naturally as part of that conversation — never as a source of facts on "
                 "its own; every fact must still come from the timeline.\n\n"
+                "Return a JSON object with two fields: \"answer\" (the text answer, as "
+                "described above) and \"citations\" (a list of every step you actually used, "
+                "each as {\"entity_type\": ..., \"entity_id\": ..., \"version\": ...} — copy "
+                "these three values verbatim from the \"[entity_type:entity_id]\" tag and "
+                "\"Version\" of each step you cite, never invent or guess one). A step you did "
+                "not end up using in the answer does not belong in citations.\n\n"
                 f"{_format_history_block(history)}"
                 f"Entity: {canonical_name}\n\nTimeline (oldest first):\n{timeline}\n\n"
                 f"Question: {question}"
             ),
         }
     ]
-    response = await router.complete(messages, temperature=0, reasoning_effort="none")
-    return response.choices[0].message.content.strip()
+    response = await router.complete(messages, response_format=GroundedAnswer, temperature=0, reasoning_effort="none")
+    result = GroundedAnswer.model_validate(load_json_response(response.choices[0].message.content))
+    return GroundedAnswer(answer=result.answer, citations=_verify_citations(result.citations, rows))
 
 
 __all__ = [
@@ -1386,6 +1270,7 @@ __all__ = [
     "embed_question",
     "ensure_alias",
     "entity_history",
+    "expand_question",
     "extract_and_persist_gold_facts",
     "extract_gold_facts_for_source",
     "find_entity_by_name_in_text",
@@ -1397,5 +1282,6 @@ __all__ = [
     "resolve_and_alias",
     "resolve_entity_id",
     "resolve_entity_id_for_lookup",
+    "retrieve_with_correction",
     "top_k_gold_evolution",
 ]

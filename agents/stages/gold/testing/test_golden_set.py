@@ -276,7 +276,7 @@ async def _score_qa_item(session, item: dict) -> dict:
     rows = await top_k_gold_evolution(
         session, vector, k=8, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=item["question"]
     )
-    answer = await answer_question(session, item["question"], rows)
+    answer = (await answer_question(session, item["question"], rows)).answer
     expected = item["expected_entity"]
 
     return {
@@ -453,7 +453,7 @@ async def _check_legacy_monolith_retrieval() -> tuple[list[str], str]:
             )
             return [violation], ""
 
-        answer = await answer_question(session, question, rows)
+        answer = (await answer_question(session, question, rows)).answer
 
     if any(keyword in answer.lower() for keyword in ("removed", "retired", "decommissioned")):
         return [], answer
@@ -534,7 +534,7 @@ async def _check_summary_judgment() -> tuple[str, dict]:
         rows = await top_k_gold_evolution(
             session, vector, k=15, source_component=SOURCE_COMPONENT, mode="hybrid", question_text=question
         )
-        answer = await answer_question(session, question, rows)
+        answer = (await answer_question(session, question, rows)).answer
 
     judgment = await _critique_summary(answer)
     return answer, judgment

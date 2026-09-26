@@ -1,246 +1,258 @@
 # technical_meeting_rag
 
-Technical meetings about a system's architecture are scattered across many separate conversations, each told from a different angle — a backend engineer describing a service, a data engineer describing a pipeline, a frontend engineer describing a view — and each capturing only a partial, informal snapshot of the truth at that moment.
+Las reuniones técnicas sobre la arquitectura de un sistema están dispersas en muchas conversaciones separadas, cada una contada desde un ángulo distinto — un ingeniero backend describiendo un servicio, un ingeniero de datos describiendo un pipeline, un ingeniero frontend describiendo una vista — y cada una capturando solo una instantánea parcial e informal de la verdad en ese momento.
 
-This project builds a **Medallion RAG Architecture** that ingests transcripts and a more clarified version as queryable knowledge base.
+Este proyecto construye una **Medallion RAG Architecture** que ingiere transcripciones y una versión más clarificada de estas como base de conocimiento consultable.
 
-# Objective
+# Objetivo
 
-For every architecture component mentioned across meetings, clarify **what it is**, whether it is **new**, an **evolution** of something already known, or **unchanged**, and produce two things Gold makes: an **Architecture Decision Record (ADR)** per evolution — capturing the context that motivated it, the alternatives considered, the trade-offs accepted, and the decision itself — and a **versioned record of each component**, instead of a flat, undated summary of what was said.
+Para cada componente de arquitectura mencionado en las reuniones, clarificar **qué es**, si es **nuevo**, una **evolución** de algo ya conocido, o si permanece **sin cambios**, y producir las dos cosas que Gold genera: un **Architecture Decision Record (ADR)** por cada evolución — capturando el contexto que la motivó, las alternativas consideradas, los trade-offs aceptados, y la decisión en sí — y un **registro versionado de cada componente**, en vez de un resumen plano y sin fecha de lo que se dijo.
 
-# Problems to resolve
+# Problemas a resolver
 
-* **Fragmented knowledge:** the same architecture gets described across dozens of separate meetings, with no single place that reflects the current, agreed-upon picture.
-* **Ambiguity:** statements made in a meeting are often underspecified and cannot be trusted as a final definition of a component without further clarification.
-* **Contradictions:** different meetings — or different people in the same meeting — describe the same component inconsistently, and nothing flags the conflict.
-* **Architecture evolution over time:** components are described at different points in time; without ordering that timeline, it is unclear which description is still valid.
-* **Implemented vs. planned confusion:** meetings mix what already exists with what is only intended, and that distinction is easy to lose once everything is summarized together.
-* **Undocumented boundaries between teams:** the contracts and dependencies between profiles (e.g. what Data Engineering expects from Software Engineering) are usually implicit, never written down anywhere.
-* **Restricted visibility:** some information is only meant to be seen by certain profiles due to organizational or permission boundaries, and a single flattened summary would leak or ignore that distinction.
-* **Lack of traceability:** once a meeting is summarized by hand, it is normally impossible to trace a statement back to who said it, when, and in which conversation.
-* **Manual alignment does not scale:** reconciling all of the above by hand, meeting after meeting, does not scale as the organization and its architecture grow.
+* **Conocimiento fragmentado:** la misma arquitectura se describe en docenas de reuniones separadas, sin un único lugar que refleje la imagen actual y acordada.
+* **Ambigüedad:** las afirmaciones hechas en una reunión suelen estar poco especificadas y no se pueden dar por definición final de un componente sin clarificación adicional.
+* **Contradicciones:** distintas reuniones — o distintas personas en la misma reunión — describen el mismo componente de forma inconsistente, y nada señala el conflicto.
+* **Evolución de la arquitectura en el tiempo:** los componentes se describen en momentos distintos; sin ordenar esa línea temporal, no queda claro qué descripción sigue siendo válida.
+* **Confusión entre lo implementado y lo planeado:** las reuniones mezclan lo que ya existe con lo que solo está previsto, y esa distinción es fácil de perder una vez que todo se resume junto.
+* **Límites no documentados entre equipos:** los contratos y dependencias entre perfiles (p. ej. lo que Data Engineering espera de Software Engineering) suelen ser implícitos, nunca escritos en ningún sitio.
+* **Visibilidad restringida:** parte de la información solo debería ser visible para ciertos perfiles por límites organizativos o de permisos, y un resumen plano y único filtraría o ignoraría esa distinción.
+* **Falta de trazabilidad:** una vez que una reunión se resume a mano, normalmente es imposible rastrear una afirmación hasta quién la dijo, cuándo, y en qué conversación.
+* **La alineación manual no escala:** conciliar todo lo anterior a mano, reunión tras reunión, no escala a medida que crece la organización y su arquitectura.
 
-# Clarification process: Agent & Human-in-the-loop collaboration
+# Proceso de clarificación: colaboración entre agentes y humano-en-el-medio
 
-The project refine the final understanding of the organization asking to clarify following points:
+El proyecto refina la comprensión final de la organización pidiendo clarificar los siguientes puntos:
 
-1. **Clarify ambiguities:** Ask for items that are not clear enough and require additional information to properly define each component.
-2. **Clarify contradictions:** Ask for items that are inconsistent between different tellings of the same component and require clarification or resolution.
-3. **Clarify architecture evolution:** Clarify the timeline, components are described in different moments so project must order the evolution.
-4. **Clarify subsystems:** Some components are described as part of a bigger system, so project must ask the boundaries and dependencies between them.
-5. **Clarify implemented vs. planned:** Ask if components and capabilities that already exist and those that have not been implemented yet.
+1. **Clarificar ambigüedades:** Preguntar por elementos que no están lo bastante claros y necesitan información adicional para definir correctamente cada componente.
+2. **Clarificar contradicciones:** Preguntar por elementos inconsistentes entre distintas versiones del mismo componente que necesitan clarificación o resolución.
+3. **Clarificar la evolución de la arquitectura:** Clarificar la línea temporal, ya que los componentes se describen en momentos distintos, así que el proyecto debe ordenar la evolución.
+4. **Clarificar subsistemas:** Algunos componentes se describen como parte de un sistema más grande, así que el proyecto debe preguntar por los límites y dependencias entre ellos.
+5. **Clarificar lo implementado frente a lo planeado:** Preguntar si los componentes y capacidades ya existen o todavía no se han implementado.
 
-The goal is not simply to summarize a meeting, but to produce a **consistent, clarified record of the organization's architecture**, while explicitly identifying gaps, boundaries, dependencies, and inconsistencies.
+El objetivo no es simplemente resumir una reunión, sino producir un **registro consistente y clarificado de la arquitectura de la organización**, identificando explícitamente huecos, límites, dependencias e inconsistencias.
 
-Check document [doc/silver_process.md](.tmp/silver_process.md) for more details.
+Consulta el documento [doc/silver_process.md](doc/silver_process.md) para más detalle.
 
-## Workflow
+## Flujo de trabajo
 
-Input transcription > Clarification (LLM / Human) > Publish > Enrich RAG 
+Input transcription > Clarification (LLM / Human) > Publish > Enrich RAG
 
-Although the workflow shows how user understands the flow, internally data follows a layered approach in PostgreSQL due to raw transcriptions are processed to store the raw data and then we clarify the information in a silver layer and finally we cover a synthesis of the architecture in gold layer.
+Aunque el flujo de trabajo muestra cómo lo entiende el usuario, internamente los datos siguen un enfoque por capas en PostgreSQL: las transcripciones en bruto se procesan para guardar el dato original, después clarificamos la información en una capa silver, y finalmente cubrimos una síntesis de la arquitectura en la capa gold.
 
 ```
                     ┌──────────────────────┐
                     │      RAW / Bronze    │
                     │                      │
-Documents ─────────►│ original content     │
-                    │ metadata             │
+Documentos ─────────►│ contenido original   │
+                    │ metadatos             │
                     └──────────┬───────────┘
                                │
-                               │ clarification agent process
+                               │ proceso del agente de clarificación
                                ▼
                     ┌───────────────────────────┐
-                    │ SILVER / Clarified input  │
+                    │ SILVER / Input clarificado│
                     │                           │
-                    │ Summary chunking          │
-                    │ metadata enritchment      │
-                    │ generated data contracts  │
+                    │ Chunking de resumen        │
+                    │ enriquecimiento metadatos  │
+                    │ contratos de datos generados│
                     └──────────┬────────────────┘
                                │
-                               │ semantic refinement
+                               │ refinamiento semántico
                                ▼
                     ┌────────────────────────────────────┐
-                    │ GOLD / ADR: versioned components   │
+                    │ GOLD / ADR: componentes versionados│
                     │                                    │
-                    │ Structure-aware chunking           │
-                    │ Versions                           │
-                    │ metadata enritchment               │
-                    │ Component graph                    │
+                    │ Chunking consciente de estructura  │
+                    │ Versiones                           │
+                    │ enriquecimiento de metadatos       │
+                    │ Grafo de componentes                │
                     └────────────────────────────────────┘
 ```
 
-## Expected questions to resolve
+## Preguntas esperadas a resolver
 
-* When the component X was introduced in the company?
-* Show me the general architecture diagram
-* Who is responsible for the component X?
-* Add a new component Y with [X, Z] dependencies and following model [...]
-* Let me know the list of persons talking about the component X
-* Let me know the details of the component X, including its dependencies and boundaries
+* ¿Cuándo se introdujo el componente X en la empresa?
+* Muéstrame el diagrama de arquitectura general
+* ¿Quién es responsable del componente X?
+* Añade un nuevo componente Y con dependencias [X, Z] y el siguiente modelo [...]
+* Dime la lista de personas que han hablado del componente X
+* Dime los detalles del componente X, incluyendo sus dependencias y límites
 
 ## Guardrails
 
-Identify items that are hidden due to permissions or organizational boundaries, where some components are visible to certain profiles but not to others.
+Identificar elementos ocultos por permisos o límites organizativos, donde algunos componentes son visibles para ciertos perfiles pero no para otros.
 
-## Samples
+## Ejemplos
 
-* Synthetic transcriptions: Specific descriptions for managing unit tests and verify expected behavior from different descriptions.
+* Transcripciones sintéticas: descripciones específicas para gestionar tests unitarios y verificar el comportamiento esperado a partir de distintas descripciones.
 
-## User interface
+## Interfaz de usuario
 
-Once user authenticates in a session (isolating information) to show different tabs:
+Una vez el usuario se autentica en una sesión (aislando su información), se muestran distintas pestañas:
 
-* Input transcription: Type a prompt or upload transcriptions and pdfs for the same meeting, to be processed and clarified.
-* Architecture history: Browse every ADR published so far, and the current architecture diagram built live from Gold's own components.
-* Chat with RAG: Once an ADR is published the user can ask questions about architecture and all the timeline of components.
-* Test  monitor (only when confiration enables start_test_mode setting): Monitor the list of tests and token consumption for all application.
+* Input transcription: escribe un prompt o sube transcripciones y PDFs de una misma reunión, para que se procesen y clarifiquen.
+* Architecture history: navega por cada ADR publicado hasta ahora, y el diagrama de arquitectura actual construido en vivo a partir de los propios componentes de Gold.
+* Chat with RAG: una vez se publica un ADR, el usuario puede preguntar sobre la arquitectura y toda la línea temporal de los componentes.
+* Test monitor (solo cuando la configuración activa start_test_mode): monitoriza la lista de tests y el consumo de tokens de toda la aplicación.
 
-# Glosary of terms
+# Glosario de términos
 
-* **Component** — Any part of the organization's architecture that gets discussed in a
-  meeting: a service, a system, a pipeline, a queue. Tracking what is known about each one,
-  meeting after meeting, is the whole point of this project.
+* **Component** — Cualquier parte de la arquitectura de la organización que se trata en una
+  reunión: un servicio, un sistema, un pipeline, una cola. Rastrear lo que se sabe de cada uno,
+  reunión tras reunión, es el objetivo central de este proyecto.
 
-* **Data Contract** — The agreed interface between two components: who produces a piece of
-  data, who consumes it, and what shape it has. Meetings usually describe these only
-  implicitly ("Team A sends order events to Team B"); this project makes them explicit and
-  keeps them versioned.
+* **Data Contract** — La interfaz acordada entre dos componentes: quién produce un dato,
+  quién lo consume, y qué forma tiene. Las reuniones suelen describirlos solo de forma
+  implícita ("el equipo A envía eventos de pedido al equipo B"); este proyecto los hace
+  explícitos y los mantiene versionados.
 
-* **Architecture Decision Record (ADR)** — The written record of one decision about a
-  component: what changed, why, what alternatives were considered, and what trade-offs were
-  accepted. One is produced whenever a component's story evolves.
+* **Architecture Decision Record (ADR)** — El registro escrito de una decisión sobre un
+  componente: qué cambió, por qué, qué alternativas se consideraron, y qué trade-offs se
+  aceptaron. Se produce uno cada vez que la historia de un componente evoluciona.
 
-* **Entity** — The general name for anything this project keeps a history for: a component,
-  a data contract, or the architecture as a whole. Every entity has its own identity and its
-  own version history, independent of the others.
+* **Entity** — El nombre general para cualquier cosa de la que este proyecto guarda
+  historial: un componente, un data contract, o la arquitectura en su conjunto. Cada entidad
+  tiene su propia identidad y su propio historial de versiones, independiente de las demás.
 
-* **Evolution** — What happened to an entity between one meeting and the next: it is
-  brand **new**, it **changed** (an evolution of something already known), it was
-  **removed**, or it stayed **unchanged**. Every evolution is kept on record — nothing is
-  ever silently overwritten.
+* **Evolution** — Lo que le pasó a una entidad entre una reunión y la siguiente: es
+  completamente **nueva**, **cambió** (una evolución de algo ya conocido), se **eliminó**, o
+  permaneció **sin cambios**. Cada evolución queda registrada — nada se sobrescribe nunca en
+  silencio.
 
-* **Clarification** — A question raised about something a meeting left ambiguous,
-  contradictory, or unresolved, together with the answer that resolves it — whether that
-  answer comes from a later meeting or from a person asked directly.
+* **Clarification** — Una pregunta planteada sobre algo que una reunión dejó ambiguo,
+  contradictorio o sin resolver, junto con la respuesta que lo resuelve — venga esa respuesta
+  de una reunión posterior o de una persona a la que se le pregunta directamente.
 
-* **Bronze / Silver / Gold** — The three stages a piece of information passes through:
-  Bronze is a meeting exactly as it was said; Silver is that meeting once its ambiguities
-  are clarified and turned into an ADR document; Gold is the versioned picture of each
-  entity, built up from every Silver ADR over time.
+* **Bronze / Silver / Gold** — Las tres etapas por las que pasa un dato: Bronze es una
+  reunión exactamente tal y como se dijo; Silver es esa reunión una vez que sus ambigüedades
+  se clarifican y se convierte en un documento ADR; Gold es la imagen versionada de cada
+  entidad, construida a partir de todos los ADR de Silver a lo largo del tiempo.
 
-# Architecture
+# Arquitectura
 
-A single FastAPI application backed by Postgres (`pgvector` for embeddings) and a LangGraph agent
-that carries a transcript batch through the full Bronze → Silver → Gold pipeline in one run;
-Streamlit is the UI layer (see `## User interface` above and `frontend/`), calling the backend
-through `app/routers/frontend.py`. There is no real user system behind login — see
-GETTING_STARTED.md's "Frontend usage" section for the two example accounts and their tenants.
+Una única aplicación FastAPI respaldada por Postgres (`pgvector` para embeddings) y un agente
+de LangGraph que lleva un batch de transcripciones a través de todo el pipeline Bronze → Silver
+→ Gold en una sola ejecución; Streamlit es la capa de interfaz (ver `## Interfaz de usuario`
+arriba y `frontend/`), que llama al backend a través de `app/routers/frontend.py`. No hay un
+sistema de usuarios real detrás del login — ver la sección "Frontend usage" de
+[GETTING_STARTED.md](GETTING_STARTED.md) para las dos cuentas de ejemplo y sus tenants.
 
-### System diagram
+### Diagrama del sistema
 
 ![Arquitectura general: el usuario sube un transcript o pregunta al Frontend, que llama al Backend, que orquesta LangGraph. LangGraph llama al LLM y escribe en Postgres siguiendo el patrón medallion: Bronze, luego Silver, luego Gold. El Chat lee directamente de Gold.](doc/dataviz_architecture_general.svg)
 
-### Agent graph
+### Grafo de agentes
 
 ![Ciclo de agentes de LangGraph: carga Bronze, genera y clasifica preguntas, si falta algo por responder un humano contesta, el Actor redacta el ADR, el Critic lo revisa, y si queda una afirmación sin verificar se vuelve a preguntar al humano una vez; si no, se publica en Silver y Gold.](doc/dataviz_langgraph_cycle.svg)
 
-### Layers
+### Capas
 
-One LangGraph run carries a transcript batch through all three layers — Gold is not a separate
-pipeline, it is the last three nodes of the same graph run that wrote Silver.
+Una ejecución de LangGraph lleva un batch de transcripciones a través de las tres capas — Gold
+no es un pipeline separado, son los últimos tres nodos de la misma ejecución del grafo que
+escribió Silver.
 
-| Layer | Owns | Table(s) | Module |
+| Capa | Gestiona | Tabla(s) | Módulo |
 | --- | --- | --- | --- |
-| Bronze | Raw ingestion, no interpretation | `bronze_documents` | `ingestion/service.py` |
-| Silver | Actor–Critic–Boss clarification loop, versioned ADR per source | `silver_documents`, `silver_clarifications`, `silver_chunks` | `agents/graph.py` |
-| Gold | Cross-meeting entity identity & evolution ledger | `gold_evolution`, `gold_aliases` | `agents/stages/gold/service.py` |
+| Bronze | Ingesta en bruto, sin interpretación | `bronze_documents` | `ingestion/service.py` |
+| Silver | Bucle de clarificación Actor–Critic–Boss, ADR versionado por fuente | `silver_documents`, `silver_clarifications`, `silver_chunks` | `agents/graph.py` |
+| Gold | Identidad de entidad entre reuniones y libro de evolución | `gold_evolution`, `gold_aliases` | `agents/stages/gold/service.py` |
 
-### Key technical decisions
+### Decisiones técnicas clave
 
-Engineering decisions made for this project itself — not to be confused with the ADRs the
-pipeline produces *about the meetings it ingests*.
+Decisiones de ingeniería tomadas para este propio proyecto — que no hay que confundir con los
+ADR que el pipeline produce *sobre las reuniones que ingiere*.
 
-**Coding standard:** every comment and docstring in this repo's Python code follows
-**SE100 — Simple English** (short, clear sentences and common words, no idioms or jargon). See
-`doc/coding_standards.md` for the full rule and examples.
+**Estándar de código:** cada comentario y docstring del código Python de este repositorio sigue
+**SE100 — Simple English** (frases cortas y claras, palabras comunes, sin modismos ni jerga).
+Ver `doc/coding_standards.md` para la regla completa y ejemplos.
 
-* **RAG, not CAG.** The corpus grows unbounded as new meetings are ingested over time, and access
-  to a component's description must be restricted per profile/permission boundary (see
-  `## Guardrails` above). Stuffing the whole corpus into a cached context defeats both: it doesn't
-  scale past a context window, and it can't withhold a chunk from a query it shouldn't answer.
-  Retrieval-per-query is what makes both the growth and the access boundary tractable.
+* **RAG, no CAG.** El corpus crece sin límite a medida que se ingieren nuevas reuniones con el
+  tiempo, y el acceso a la descripción de un componente debe restringirse por perfil/límite de
+  permisos (ver `## Guardrails` arriba). Meter todo el corpus en un contexto cacheado rompe
+  ambas cosas: no escala más allá de una ventana de contexto, y no puede ocultar un chunk a una
+  consulta que no debería poder responderlo. La recuperación por consulta (retrieval-per-query)
+  es lo que hace manejables tanto el crecimiento como el límite de acceso.
 
-* **Medallion layering (Bronze → Silver → Gold), all three implemented.** Bronze never interprets;
-  Silver runs the clarification loop and produces one versioned ADR per transcript; Gold resolves
-  every mentioned component/data-contract to a stable identity across meetings and keeps an
-  append-only evolution ledger per entity — implemented in `agents/gold_service.py` and the last
-  three nodes of `agents/graph.py`.
+* **Capas medallion (Bronze → Silver → Gold), las tres implementadas.** Bronze nunca
+  interpreta; Silver ejecuta el bucle de clarificación y produce un ADR versionado por
+  transcripción; Gold resuelve cada componente/data-contract mencionado a una identidad
+  estable entre reuniones y mantiene un libro de evolución de solo-añadir por entidad —
+  implementado en `agents/stages/gold/service.py` y los últimos tres nodos de `agents/graph.py`.
 
-* **Actor–Critic–Boss as one LangGraph run, not three services.** `synthesize_document` (Actor)
-  drafts the ADR, `critic_document` (Critic) always runs and flags claims by severity, and
-  `boss_decide` (Boss, no LLM call — a deterministic policy) either downgrades low-severity claims
-  in place or escalates a material one to a human. Keeping this as one graph run means the
-  redraft loop shares state (`revision_attempted`) directly instead of coordinating it across
-  service boundaries, and `revision_attempted` caps escalation at one retry per source so the loop
-  can't spin forever on a claim the human's answer didn't actually resolve.
+* **Actor–Critic–Boss como una sola ejecución de LangGraph, no tres servicios.**
+  `synthesize_document` (Actor) redacta el ADR, `critic_document` (Critic) se ejecuta siempre y
+  marca afirmaciones por severidad, y `boss_decide` (Boss, sin llamada a LLM — una política
+  determinista) o bien degrada in situ las afirmaciones de baja severidad o escala una material
+  a un humano. Mantener esto como una sola ejecución de grafo significa que el bucle de
+  redacción comparte estado (`revision_attempted`) directamente en vez de coordinarlo entre
+  límites de servicio, y `revision_attempted` limita la escalada a un solo reintento por fuente
+  para que el bucle no pueda girar indefinidamente sobre una afirmación que la respuesta del
+  humano no resolvió de verdad.
 
-* **Question generation is two sequential LLM stages, not one.** The first call reads the
-  transcript and asks one question per component actually named, while only *identifying* (never
-  fully specifying) every data contract in play (`prompts/architecture_questions/combined.jinja`). The
-  second takes exactly those identified contracts and drafts the full ODCS-completeness question
-  set for each one (`prompts/data_contract_questions/questions.jinja`). Splitting them fixed an observed
-  failure mode where a single combined pass regularly under-covered data contracts — see
+* **La generación de preguntas son dos etapas de LLM secuenciales, no una.** La primera
+  llamada lee la transcripción y hace una pregunta por cada componente realmente nombrado,
+  mientras solo *identifica* (nunca especifica del todo) cada data contract en juego
+  (`prompts/architecture_questions/combined.jinja`). La segunda coge exactamente esos
+  contratos identificados y redacta el conjunto completo de preguntas de completitud ODCS para
+  cada uno (`prompts/data_contract_questions/questions.jinja`). Separarlas arregló un fallo
+  observado en el que una única pasada combinada solía cubrir mal los data contracts — ver
   `doc/cost_analysis.md`.
 
-* **Clarification is LLM-first; a human is only asked what the LLM couldn't resolve.** One
-  classification call sorts every drafted question into `answered` / `unknown` /
-  `needs_clarification`; only the last group reaches a human, batched into a single LangGraph
-  `interrupt()`. The same `ask_human` node is reused for both the classify-stage gap-filling and a
-  Boss escalation — one interrupt mechanism, one Postgres-backed checkpointer, no second pause
-  path for the second case.
+* **La clarificación es LLM-first; a un humano solo se le pregunta lo que el LLM no pudo
+  resolver.** Una llamada de clasificación ordena cada pregunta redactada en `answered` /
+  `unknown` / `needs_clarification`; solo el último grupo llega a un humano, agrupado en un
+  único `interrupt()` de LangGraph. El mismo nodo `ask_human` se reutiliza tanto para rellenar
+  huecos en la etapa de clasificación como para una escalada del Boss — un único mecanismo de
+  interrupción, un único checkpointer respaldado por Postgres, sin una segunda vía de pausa
+  para el segundo caso.
 
-* **Gold identity resolution is deterministic, not an LLM call.** A mentioned name is resolved via
-  exact match on `gold_aliases.alias`, then `pg_trgm` fuzzy match, and only then does it mint a new
-  `entity_id`. This keeps identity resolution auditable (every alias variant a component was ever
-  called is a row you can inspect) and cheap — no LLM round-trip just to decide whether "the auth
-  service" and "Auth Service" are the same entity.
+* **La resolución de identidad en Gold es determinista, no una llamada a LLM.** Un nombre
+  mencionado se resuelve por coincidencia exacta en `gold_aliases.alias`, luego por
+  coincidencia difusa con `pg_trgm`, y solo entonces se acuña un nuevo `entity_id`. Esto
+  mantiene la resolución de identidad auditable (cada variante de alias con la que se llamó a
+  un componente es una fila que puedes inspeccionar) y barata — sin ida y vuelta al LLM solo
+  para decidir si "the auth service" y "Auth Service" son la misma entidad.
 
-* **Gold versioning is hash-compare-then-bump per entity, not per document.** `SilverDocument`
-  versions the whole ADR; `GoldEvolution` versions each component, data contract, and
-  architecture-per-source independently via `entity_hash`. A change to one component's narrative
-  doesn't bump every other entity mentioned in the same document, so "how has X evolved" is a
-  query against X's own version history, never a diff across unrelated entities.
+* **El versionado de Gold es comparar-hash-y-versionar por entidad, no por documento.**
+  `SilverDocument` versiona el ADR completo; `GoldEvolution` versiona cada componente, data
+  contract, y arquitectura-por-fuente de forma independiente vía `entity_hash`. Un cambio en
+  la narrativa de un componente no hace subir de versión a las demás entidades mencionadas en
+  el mismo documento, así que "cómo ha evolucionado X" es una consulta contra el propio
+  historial de versiones de X, nunca un diff entre entidades no relacionadas.
 
-* **No foreign keys between layers.** `source_component`/`source_adr_version`/`ingestion_date` are
-  flat columns copied forward at write time (Bronze → Silver → Gold), the same convention
-  throughout. This trades referential-integrity enforcement for join-free traceability queries and
-  event-time correctness (`ingestion_date` stays the meeting date, not a processing timestamp),
-  which matters more here since nothing in this pipeline ever deletes or re-parents a row.
+* **Sin claves foráneas entre capas.** `source_component`/`source_adr_version`/
+  `ingestion_date` son columnas planas copiadas hacia delante en el momento de escritura
+  (Bronze → Silver → Gold), la misma convención en todas partes. Esto cambia la aplicación de
+  integridad referencial por consultas de trazabilidad sin joins y corrección de event-time
+  (`ingestion_date` sigue siendo la fecha de la reunión, no un timestamp de procesamiento), lo
+  cual importa más aquí porque nada en este pipeline borra ni reasigna el padre de una fila
+  jamás.
 
-* **LiteLLM router with OpenAI → Anthropic fallback** (`llm/router.py`), so a single provider
-  outage doesn't stop ingestion or clarification.
+* **Router de LiteLLM con fallback de OpenAI → Anthropic** (`llm/router.py`), para que la
+  caída de un único proveedor no detenga la ingesta ni la clarificación.
 
-# Key Metrics
+# Métricas clave
 
-Quality gates defined for the RAG pipeline (Phase 6 of `.tmp/tasks.md` — not yet implemented;
-tracked here so the target is explicit before the tests are written):
+Quality gates definidos para el pipeline RAG (Fase 6 de `.tmp/tasks.md` — todavía no
+implementados; se registran aquí para que el objetivo quede explícito antes de escribir los
+tests):
 
-| Metric                                       | What it catches                                                                    | Threshold |
-| --------------------------------------------- | ----------------------------------------------------------------------------------- | --------- |
-| Top-k / distance-metric / filter correctness  | Off-by-one top-k, wrong similarity ordering, a profile/session filter letting the wrong chunks through | Exact match against hand-computed expectations |
-| ANN index recall@k vs. brute-force            | An under-tuned pgvector index (HNSW/IVFFlat) silently dropping the one chunk that mattered | ≥ 0.95 |
-| RAGAS faithfulness                            | The answer contains a claim the retrieved chunks don't support (hallucination)     | Documented per-metric minimum, gates merges (`eval/thresholds.yaml`) |
-| RAGAS context precision                       | Retrieved chunks are mostly irrelevant padding                                     | ″ |
-| RAGAS context recall                          | Retrieved chunks miss something the reference answer needed                        | ″ |
-| Guardrail leakage                             | A profile-restricted chunk reaches an answer generated for a different profile, even paraphrased | Zero tolerance — any leak is a fail, not a threshold |
+| Métrica | Qué detecta | Umbral |
+| --- | --- | --- |
+| Corrección de top-k / métrica de distancia / filtro | Un top-k desalineado en uno, un orden de similitud incorrecto, un filtro de perfil/sesión dejando pasar los chunks equivocados | Coincidencia exacta contra expectativas calculadas a mano |
+| Recall@k del índice ANN frente a fuerza bruta | Un índice pgvector mal ajustado (HNSW/IVFFlat) descartando en silencio el único chunk que importaba | ≥ 0.95 |
+| RAGAS faithfulness | La respuesta contiene una afirmación que los chunks recuperados no respaldan (alucinación) | Mínimo documentado por métrica, bloquea merges (`eval/thresholds.yaml`) |
+| RAGAS context precision | Los chunks recuperados son en su mayoría relleno irrelevante | ″ |
+| RAGAS context recall | A los chunks recuperados les falta algo que la respuesta de referencia necesitaba | ″ |
+| Fuga de guardrail | Un chunk restringido por perfil llega a una respuesta generada para otro perfil, incluso parafraseado | Tolerancia cero — cualquier fuga es un fallo, no un umbral |
 
 
-# Integration
+# Integración
 
-MCP for each output for internal agents
+MCP para cada salida, para agentes internos
 
-# Next steps
+# Próximos pasos
 
-* Two users are only included, this should evolve to manage multiple users and multi tenant architecture.
-* Resolve Anthropic API limits ""You have reached your specified API usage limits. You will regain access" ¿?
+* Solo hay dos usuarios incluidos; esto debería evolucionar para gestionar múltiples usuarios y una arquitectura multi-tenant.
+* Resolver los límites de la API de Anthropic ""You have reached your specified API usage limits. You will regain access" ¿?

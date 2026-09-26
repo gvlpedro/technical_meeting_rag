@@ -47,7 +47,7 @@ from agents.stages.data_contract_questions.service import generate_data_contract
 from agents.state import initial_state
 from agents.template import load_json_response
 from app.config import settings
-from db.models import LlmCost, SilverChunk, SilverDocument
+from db.models import GoldEvolution, LlmCost, SilverChunk, SilverDocument
 from db.session import get_session
 from ingestion.embedder import embed
 from ingestion.service import NoTranscriptsFoundError, ingest_uploaded_files
@@ -514,6 +514,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     retrieved: list[dict]
+    citations: list[dict] = []
 
 
 def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
@@ -556,7 +557,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
         if match is not None:
             entity_type, entity_id, matched_alias = match
             rows = await gold.entity_history(db, entity_type, entity_id, tenant=tenant)
-            answer = await gold.answer_evolution_question(request.question, matched_alias, rows, history=history)
+            result = await gold.answer_evolution_question(request.question, matched_alias, rows, history=history)
             retrieved = [
                 {
                     "entity_type": row.entity_type,
@@ -568,18 +569,40 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
                 }
                 for row in rows
             ]
-            return ChatResponse(answer=answer, retrieved=retrieved)
+            return ChatResponse(
+                answer=result.answer,
+                retrieved=retrieved,
+                citations=[c.model_dump() for c in result.citations],
+            )
 
     vector = await gold.embed_question(contextualized_question)
-    rows = await gold.top_k_gold_evolution(
-        db, vector, k=request.k, tenant=tenant, mode="hybrid", question_text=contextualized_question
-    )
+
+    async def _retrieve(max_distance: float | None) -> list[GoldEvolution]:
+        # `rerank`/`expand` both cost one extra model call per question, so both stay off here
+        # by default, the same way `rerank` already did before `expand` existed — `--rerank`/
+        # `--expand` on `scripts/chat_gold.py` are where either gets exercised experimentally.
+        return await gold.top_k_gold_evolution(
+            db,
+            vector,
+            k=request.k,
+            tenant=tenant,
+            mode="hybrid",
+            question_text=contextualized_question,
+            max_distance=max_distance,
+        )
+
+    # Corrective RAG: a strict first pass (`DEFAULT_MAX_DISTANCE`) avoids answering from the
+    # least-bad candidate when nothing is actually relevant; if that pass finds nothing, one
+    # relaxed retry (no distance filter) catches a real answer that only just missed the
+    # strict cutoff, before this gives up honestly. See
+    # `agents/stages/gold/retrieval/corrective_rag.py`.
+    rows = await gold.retrieve_with_correction(_retrieve, gold.DEFAULT_MAX_DISTANCE)
 
     if not rows:
         return ChatResponse(answer="No Gold facts were relevant to this question.", retrieved=[])
 
     latest = await gold.latest_versions(db, rows)
-    answer = await gold.answer_question(db, request.question, rows, latest, history=history)
+    result = await gold.answer_question(db, request.question, rows, latest, history=history)
     retrieved = [
         {
             "entity_type": row.entity_type,
@@ -589,7 +612,11 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
         }
         for row in rows
     ]
-    return ChatResponse(answer=answer, retrieved=retrieved)
+    return ChatResponse(
+        answer=result.answer,
+        retrieved=retrieved,
+        citations=[c.model_dump() for c in result.citations],
+    )
 
 
 # --- Test monitor --------------------------------------------------------------------------

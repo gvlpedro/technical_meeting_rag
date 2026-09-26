@@ -1,124 +1,128 @@
-# Getting Started
+# Primeros pasos
 
-## Start project
+## USO POR LÍNEA DE COMANDOS
 
 ```bash
 make up
 ```
 
-## Tests
+### Tests
 
-The fast suite (mocked LLM calls, safe to run anytime):
+La suite rápida (llamadas al LLM mockeadas, segura para ejecutar en cualquier momento):
 
 ```bash
 make test
 ```
 
-## Useful commands
+### Comandos por fase
 
-Generate architecture questions for sessions on date 2024-05-15 in Silver (interactive mode) :
+Generar preguntas de arquitectura para las sesiones de la fecha 2024-05-15 en Silver (modo interactivo):
 ```bash
 make questions-arch DATE=20260515
 ```
 
-Generate data contract questions for sessions on date 2024-05-15 in Silver (interactive mode) :
+Generar preguntas de data contracts para las sesiones de la fecha 2024-05-15 en Silver (modo interactivo):
 ```bash
 make questions-data-contracts DATE=20260515
 ```
 
-Complete classification process (question generation / human answers / ADR generarions) for sessions on date 2024-05-15 in Silver :
+Proceso completo de clasificación (generación de preguntas / respuestas humanas / generación de ADR) para las sesiones de la fecha 2024-05-15 en Silver:
 ```bash
 make clarify DATE=20260515 INTERACTIVE=1
 ```
 
-Chat with the agent (interactive mode) :
+Chatear con el agente (modo interactivo):
 ```bash
 make chat
 ```
 
-## ACTOR CRITIC BOSS TESTS
+### TESTS DE ACTOR-CRITIC-BOSS
 
-Make sure the schema is up to date first:
+Asegúrate primero de que el esquema está actualizado:
 ```bash
 make migrate
 ```
 
-Testing actor-critic-boss for architecture questions
+Test de actor-critic-boss para preguntas de arquitectura
 ```bash
 make test-adr-acb
 ```
 
-Testing actor-critic-boss for data contract questions
+Test de actor-critic-boss para preguntas de data contracts
 ```bash
 make test-data-contract-acb
 ```
 
-Testing actor-critic-boss for data contract questions
+Test de actor-critic-boss para preguntas de data contracts
 ```bash
 make test-data-contract-acb
 ```
 
-Automated E2E test — ingests 5 sequential real transcripts (~10 min)
+Test E2E automatizado — ingiere 5 transcripciones reales secuenciales (~10 min)
 ```bash
 make test-gold-arch-evolution
 ```
 
-## Frontend usage
+## USO DEL FRONTEND
 
-The Streamlit frontend (`frontend/`) is the "User interface" described in the root
-README — one tab each for uploading/clarifying a transcript, browsing the architecture
-history and every published ADR, chatting with Gold, and (only when `start_test_mode` is
-on) monitoring test results and LLM cost.
+El frontend de Streamlit (`frontend/`) es la "Interfaz de usuario" descrita en el README raíz
+— una pestaña para cada cosa: subir/clarificar una transcripción, navegar el historial de
+arquitectura y cada ADR publicado, chatear con Gold, y (solo cuando `start_test_mode` está
+activo) monitorizar resultados de tests y coste de LLM.
 
-There is no real user system — `app/config.py`'s `frontend_users` is a fixed, hardcoded
-roster. Each login maps to its own **tenant**, which is what actually isolates data: a file
-`pepe` uploads, or an ADR `pepe` publishes, is invisible to `peter`, and vice versa.
+No hay un sistema de usuarios real — `frontend_users` en `app/config.py` es un listado fijo y
+hardcodeado. Cada login se asocia a su propio **tenant**, que es lo que realmente aísla los
+datos: un fichero que sube `pepe`, o un ADR que publica `pepe`, es invisible para `peter`, y
+viceversa.
 
-| Username | Password | Tenant  |
-| -------- | -------- | ------- |
-| `pepe`   | `1234`   | `lidr`  |
-| `peter`  | `123`    | `lotus` |
-| `martin` | `123`    | `lotus` |
+| Usuario  | Contraseña | Tenant  |
+| -------- | ---------- | ------- |
+| `pepe`   | `1234`     | `lidr`  |
+| `peter`  | `123`      | `lotus` |
+| `martin` | `123`      | `lotus` |
 
-`martin` shares `peter`'s tenant (`lotus`), so the two see and edit the exact same data — unlike
-`pepe`, who is isolated in a separate tenant.
+`martin` comparte tenant con `peter` (`lotus`), así que los dos ven y editan exactamente los
+mismos datos — a diferencia de `pepe`, que está aislado en un tenant separado.
 
-One command starts everything — Postgres, the backend, and the frontend, all in Docker:
+Un único comando arranca todo — Postgres, el backend y el frontend, todo en Docker:
 
 ```bash
 make up
 ```
 
-Open **http://localhost:8522** once it's up (the frontend waits on the backend's own
-healthcheck before starting, so give it a few seconds on a cold `make up`).
+Abre **http://localhost:8522** una vez esté arriba (el frontend espera al healthcheck del
+propio backend antes de arrancar, así que dale unos segundos en un `make up` en frío).
 
-For local frontend development instead — live reload on every save, without rebuilding a
-Docker image each time — run the backend on its own and the frontend separately:
+Para desarrollo local del frontend — recarga en vivo en cada guardado, sin reconstruir una
+imagen Docker cada vez — ejecuta el backend por su cuenta y el frontend por separado:
 
 ```bash
-make up          # or: uv run uvicorn app.main:app --reload   (backend without docker)
-make frontend    # Streamlit on http://localhost:8501, live-reloading from your working copy
+make up          # o: uv run uvicorn app.main:app --reload   (backend sin docker)
+make frontend    # Streamlit en http://localhost:8501, con recarga en vivo desde tu copia de trabajo
 ```
 
-If the backend runs somewhere other than `http://localhost:8010`, point the local frontend
-at it with `BACKEND_URL`:
+Si el backend corre en un sitio distinto a `http://localhost:8010`, apunta el frontend local
+hacia él con `BACKEND_URL`:
 
 ```bash
 BACKEND_URL=http://localhost:8010 make frontend
 ```
 
-Log in as `pepe`/`1234` or `peter`/`123`, then:
+Inicia sesión como `pepe`/`1234` o `peter`/`123`, y luego:
 
-1. **Input transcription** — type something directly into the "Prompt" box, upload a `.txt`,
-   `.vtt`, `.md`, or `.pdf` for one meeting, or both, then click "Process and clarify" (enabled
-   once either has content). If the clarification loop needs a human answer, the tab shows the pending
-   questions right there — answer them and submit to finish the run. Once you're happy with the
-   generated ADR, click "Publish" — its facts are in Gold and retrievable from Chat immediately.
-2. **Architecture history** — every ADR published so far, in a table (click "View ADR" to open
-   one in a new tab), plus a live Mermaid diagram of the current architecture built straight
-   from Gold's own components — each node names the ADR that last touched it.
-3. **Chat with RAG** — ask about the architecture. Retrieves from every fact published so far,
-   scoped to your own tenant.
-4. **Test monitor** (only visible when `start_test_mode: true` in `app/config.py`, the
-   default) — the four `testing_*/output/result.json` files, plus every real LLM call's
-   token/cost usage (`output/llm_usage.jsonl`), broken down by tenant.
+1. **Input transcription** — escribe algo directamente en la caja de "Prompt", sube un `.txt`
+   o `.md` para una reunión, o ambas cosas, y pulsa "Process and clarify" (se activa en cuanto
+   una de las dos tiene contenido). Si el bucle de clarificación necesita una respuesta
+   humana, la pestaña muestra ahí mismo las preguntas pendientes — respóndelas y envíalas para
+   terminar la ejecución. Una vez estés conforme con el ADR generado, pulsa "Publish" — sus
+   hechos quedan en Gold y son recuperables desde el Chat inmediatamente.
+2. **Architecture history** — cada ADR publicado hasta ahora, en una tabla (pulsa "View ADR"
+   para abrir uno en una pestaña nueva), más un diagrama Mermaid en vivo de la arquitectura
+   actual construido directamente a partir de los propios componentes de Gold — cada nodo
+   nombra el ADR que lo tocó por última vez.
+3. **Chat with RAG** — pregunta sobre la arquitectura. Recupera de cada hecho publicado hasta
+   ahora, limitado a tu propio tenant.
+4. **Test monitor** (solo visible cuando `start_test_mode: true` en `app/config.py`, el valor
+   por defecto) — los cuatro ficheros `testing_*/output/result.json`, más el uso de
+   tokens/coste de cada llamada real al LLM (tabla `llm_costs` en Postgres), desglosado por
+   tenant.

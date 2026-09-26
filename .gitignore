@@ -11,3 +11,4 @@ __pycache__/
 /agents/stages/adr_generation/testing/output/
 /agents/stages/classification/testing/output/
 /agents/stages/gold/testing/output/
+/agents/stages/gold/testing/chat_eval/output/

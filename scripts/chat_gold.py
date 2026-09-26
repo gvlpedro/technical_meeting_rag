@@ -36,9 +36,13 @@ the deduped candidates with a real local cross-encoder before cutting to `k` —
 `top_k_gold_evolution`'s own docstring and `.tmp/advanced_techniques.md` §3. This flag is what
 actually makes `rerank` reachable from this CLI at all: `top_k_gold_evolution`'s own
 `rerank` parameter has no effect unless some real caller passes `rerank=True`, and before
-this flag existed, nothing in this codebase ever did.
+this flag existed, nothing in this codebase ever did. Fourth, `--expand` (opt-in, off by
+default) asks a cheap LLM call for a few reformulations of the question and searches with
+those too — see `agents/stages/gold/retrieval/query_expansion.py` and
+`.tmp/advanced_techniques.md` §4. Same reachability story as `--rerank`: `top_k_gold_evolution`'s
+`expand` parameter does nothing unless a caller passes `expand=True`.
 
-Fourth, this REPL keeps a running `history` of `(role, content)` turns across the session and
+Fifth, this REPL keeps a running `history` of `(role, content)` turns across the session and
 threads it through both retrieval and generation the same way `app/routers/frontend.py::chat`
 does: a contextualized question (recent history + the current question) drives entity
 matching/embedding/lexical search, so a follow-up like "and who approved it?" still resolves
@@ -50,6 +54,7 @@ Usage:
     uv run python3 scripts/chat_gold.py
     uv run python3 scripts/chat_gold.py --k 10 --max-distance 0.7
     uv run python3 scripts/chat_gold.py --rerank
+    uv run python3 scripts/chat_gold.py --expand
 """
 
 import argparse
@@ -91,6 +96,7 @@ async def _answer(
     max_distance: float | None,
     tenant: str,
     rerank: bool,
+    expand: bool,
     history: list[tuple[str, str]],
 ) -> str:
     contextualized_question = _contextualize(question, history)
@@ -100,7 +106,8 @@ async def _answer(
         if match is not None:
             entity_type, entity_id, matched_alias = match
             rows = await entity_history(session, entity_type, entity_id, tenant=tenant)
-            return await answer_evolution_question(question, matched_alias, rows, history=history)
+            result = await answer_evolution_question(question, matched_alias, rows, history=history)
+            return result.answer
 
     vector = await embed_question(contextualized_question)
     rows = await top_k_gold_evolution(
@@ -112,15 +119,19 @@ async def _answer(
         mode="hybrid",
         question_text=contextualized_question,
         rerank=rerank,
+        expand=expand,
     )
     latest = await latest_versions(session, rows)
-    return await answer_question(session, question, rows, latest, history=history)
+    result = await answer_question(session, question, rows, latest, history=history)
+    return result.answer
 
 
-async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -> None:
+async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool, expand: bool) -> None:
     print(f"Gold RAG chat (tenant={tenant!r}) — ask about the architecture's evolution. Ctrl+D or 'exit' to quit.\n")
     if rerank:
         print("(reranking enabled — each answer costs one extra local cross-encoder pass)\n")
+    if expand:
+        print("(query expansion enabled — each answer costs one extra LLM call for reformulations)\n")
     history: list[tuple[str, str]] = []
     async with async_session_factory() as session:
         while True:
@@ -131,7 +142,7 @@ async def _chat(k: int, max_distance: float | None, tenant: str, rerank: bool) -
                 return
             if not question or question.lower() in {"exit", "quit"}:
                 return
-            answer = await _answer(session, question, k, max_distance, tenant, rerank, history)
+            answer = await _answer(session, question, k, max_distance, tenant, rerank, expand, history)
             print(f"\n{answer}\n")
             history.append(("user", question))
             history.append(("assistant", answer))
@@ -153,5 +164,13 @@ if __name__ == "__main__":
         help="Repunctuate retrieved rows with a local cross-encoder before answering (off by default; "
         "adds one extra model pass per question).",
     )
+    parser.add_argument(
+        "--expand",
+        action="store_true",
+        help="Search with a few LLM-generated reformulations of the question too, not just the question "
+        "itself (off by default; adds one extra LLM call per question).",
+    )
     args = parser.parse_args()
-    asyncio.run(_chat(args.k, args.max_distance if args.max_distance >= 0 else None, args.tenant, args.rerank))
+    asyncio.run(
+        _chat(args.k, args.max_distance if args.max_distance >= 0 else None, args.tenant, args.rerank, args.expand)
+    )
