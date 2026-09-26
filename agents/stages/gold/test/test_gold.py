@@ -7,6 +7,7 @@ covers the graph-level, faked-LLM path end to end.
 
 import asyncio
 from datetime import date
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,8 @@ from agents.stages.gold.schemas import (
 )
 from agents.stages.gold.service import (
     _dedupe_ids_by_entity,
+    _full_odcs_spec_block,
+    _payload_detail,
     _reciprocal_rank_fusion,
     _rerank_ids,
     already_extracted,
@@ -38,6 +41,7 @@ from agents.stages.gold.service import (
     resolve_entity_id,
     resolve_entity_id_for_lookup,
     top_k_gold_evolution,
+    wants_full_spec,
 )
 from db.models import GoldAlias, GoldEvolution
 from db.session import async_session_factory
@@ -72,11 +76,21 @@ async def _cleanup_entity(entity_type: str, entity_id: str) -> None:
 
 def test_component_payload_round_trips_dependency_and_contract_ids():
     payload = ComponentPayload(dependency_ids=["e1", "e2"], contract_ids=["c1"])
-    assert payload.model_dump() == {"dependency_ids": ["e1", "e2"], "contract_ids": ["c1"]}
+    assert payload.model_dump() == {
+        "dependency_ids": ["e1", "e2"],
+        "contract_ids": ["c1"],
+        "input_contract_ids": [],
+        "output_contract_ids": [],
+    }
 
 
 def test_component_payload_defaults_to_empty_lists():
-    assert ComponentPayload().model_dump() == {"dependency_ids": [], "contract_ids": []}
+    assert ComponentPayload().model_dump() == {
+        "dependency_ids": [],
+        "contract_ids": [],
+        "input_contract_ids": [],
+        "output_contract_ids": [],
+    }
 
 
 def test_data_contract_payload_keeps_odcs_spec_opaque():
@@ -142,6 +156,64 @@ def test_architecture_payload_defaults():
         "components": [],
         "dependencies": [],
     }
+
+
+def test_payload_detail_component_shows_input_and_output_contracts_split():
+    row = SimpleNamespace(
+        entity_type="component",
+        entity_id="checkout-service",
+        payload={
+            "dependency_ids": [], "contract_ids": ["c1", "c2"],
+            "input_contract_ids": ["c1"], "output_contract_ids": ["c2"],
+        },
+    )
+    names = {("data_contract", "c1"): "payment-events", ("data_contract", "c2"): "checkout-events"}
+    assert _payload_detail(row, names) == " (input contracts: payment-events; output contracts: checkout-events)"
+
+
+def test_payload_detail_component_falls_back_to_undifferentiated_contracts_for_pre_migration_rows():
+    """A component persisted before the input/output split existed has `contract_ids` but no
+    (or empty) `input_contract_ids`/`output_contract_ids` — must still show something, not go
+    silent. See `.tmp/improve_timeline_questions_and_linage.md` §2.2, §6."""
+    row = SimpleNamespace(
+        entity_type="component",
+        entity_id="checkout-service",
+        payload={"dependency_ids": [], "contract_ids": ["c1"]},  # no split keys at all, like an old row
+    )
+    names = {("data_contract", "c1"): "checkout-events"}
+    assert _payload_detail(row, names) == " (data contracts: checkout-events)"
+
+
+def test_payload_detail_component_shows_successors():
+    row = SimpleNamespace(
+        entity_type="component", entity_id="payments-gateway",
+        payload={"dependency_ids": [], "contract_ids": []},
+    )
+    successors = {"payments-gateway": ["Checkout Service", "Refund Service"]}
+    assert _payload_detail(row, {}, successors) == " (depended on by: Checkout Service, Refund Service)"
+
+
+def test_wants_full_spec_recognizes_english_and_spanish_markers():
+    assert wants_full_spec("Could you show me the specification for this contract?")
+    assert wants_full_spec("What's the schema of registration-login-purchase?")
+    assert wants_full_spec("¿Cuál es la especificación completa del contrato?")
+    assert not wants_full_spec("What does the Payments Gateway do?")
+
+
+def test_full_odcs_spec_block_renders_the_entire_spec_for_a_data_contract_row():
+    spec = {"apiVersion": "odcs/v3.0.0", "status": "active", "schema": {"properties": {"a": {"type": "string"}}}}
+    row = SimpleNamespace(entity_type="data_contract", payload={"producer": "x", "consumer": "y", "odcs_spec": spec})
+    block = _full_odcs_spec_block(row)
+    assert "Full specification:" in block
+    assert '"apiVersion": "odcs/v3.0.0"' in block
+
+
+def test_full_odcs_spec_block_is_empty_for_a_component_or_an_unpopulated_spec():
+    component_row = SimpleNamespace(entity_type="component", payload={"dependency_ids": [], "contract_ids": []})
+    assert _full_odcs_spec_block(component_row) == ""
+
+    empty_spec_row = SimpleNamespace(entity_type="data_contract", payload={"producer": "x", "consumer": "y"})
+    assert _full_odcs_spec_block(empty_spec_row) == ""
 
 
 async def test_resolve_entity_id_exact_match_returns_existing_entity_id():
@@ -322,12 +394,14 @@ async def test_persist_entity_version_different_hash_bumps_version():
         async with async_session_factory() as session:
             rows = (
                 await session.execute(
-                    select(GoldEvolution).where(
-                        GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id
-                    )
+                    select(GoldEvolution)
+                    .where(GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id)
+                    .order_by(GoldEvolution.version)
                 )
-            ).all()
-        assert len(rows) == 2  # Both versions are kept. The older row stays untouched.
+            ).scalars().all()
+        assert len(rows) == 2  # Both versions are kept, narrative/payload untouched.
+        assert rows[0].valid_to == date(2026, 6, 1)  # Closed the instant v2 (v1's own superseder) was written.
+        assert rows[1].valid_to is None  # v2 is still current.
     finally:
         await _cleanup_entity(entity_type, entity_id)
 

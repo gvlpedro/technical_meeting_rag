@@ -8,6 +8,8 @@ Run:
 See GETTING_STARTED.md's "Frontend usage" section for the two example logins.
 """
 
+import html
+import re
 from datetime import date, datetime
 from urllib.parse import quote
 
@@ -580,6 +582,33 @@ def _prompt_viewer_page(username: str, prompt_id: int) -> None:
     st.text_area("Prompt", match["prompt"], height=600, disabled=True)
 
 
+# Matches the exact "<source_component> vN" wording chat answers already use for a fact's
+# source (`agents/stages/gold/service.py`'s `build_context_lines`/`_evolution_step_line`), the
+# same wording `_architecture_history_tab`'s "View ADR" column already assumes verbatim. The
+# required dotted extension (`.txt`/`.md`, plus `.vtt` for ADRs uploaded before that format was
+# retired) is what keeps this from matching an unrelated "vN" elsewhere in the prose.
+_ADR_MENTION_PATTERN = re.compile(r"\b([\w][\w.\-]*\.(?:txt|md|vtt))\s+v(\d+)\b")
+
+
+def _linkify_adr_mentions(text: str) -> str:
+    """Turns every ADR mention in a chat answer into a link that opens that exact ADR in a new
+    tab — the same `?view_adr=...&view_adr_version=...` scheme `_architecture_history_tab`'s own
+    "View ADR" button uses (see `main()`'s own comment on why that always opens a fresh tab).
+
+    `text` is escaped FIRST, and the `<a>` tags are only ever built from that already-escaped,
+    regex-matched substring — never from the raw LLM output directly — so this stays safe to
+    render with `unsafe_allow_html=True` even if a transcript or answer happened to contain
+    literal HTML."""
+    escaped = html.escape(text)
+
+    def _replace(match: re.Match) -> str:
+        source_component, version = match.group(1), match.group(2)
+        url = f"?view_adr={quote(source_component, safe='')}&view_adr_version={version}"
+        return f'<a href="{url}" target="_blank">{source_component} v{version}</a>'
+
+    return _ADR_MENTION_PATTERN.sub(_replace, escaped)
+
+
 def _chat_tab(username: str) -> None:
     title_col, clear_col = st.columns([5, 1])
     with title_col:
@@ -593,7 +622,7 @@ def _chat_tab(username: str) -> None:
     history = st.session_state.setdefault("chat_history", [])
     for role, text in history:
         with st.chat_message(role):
-            st.write(text)
+            st.markdown(_linkify_adr_mentions(text), unsafe_allow_html=True)
 
     question = st.chat_input("Ask about the architecture's evolution")
     if question:

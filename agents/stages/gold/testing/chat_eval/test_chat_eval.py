@@ -1,12 +1,16 @@
 """Golden-set + RAGAS baseline for Gold's chat retrieval — `.tmp/tasks2.md` task 4,
-`.tmp/advanced_techniques.md` §6.
+`.tmp/advanced_techniques.md` §6, extended by `.tmp/improve_timeline_questions_and_linage.md` §7
+to also cover lineage/timeline questions (input/output contract direction, successors,
+evolution-with-`valid_to`).
 
 This is not a pass/fail gate. It is a measurement: for each question in
-`golden_set/questions.json`, it runs the exact production retrieval path
-(`top_k_gold_evolution(mode="hybrid")` + `answer_question`, the same defaults `/chat` uses —
-`rerank`/`expand` both stay off here too, see `app/routers/frontend.py`'s own comment on why)
-against a small, known, self-seeded corpus (`seed.py`), and records two independent kinds of
-signal per question:
+`golden_set/questions.json`, it runs the exact production retrieval path `app/routers/frontend.py`'s
+`chat` endpoint uses — an evolution-shaped question (`gold.is_evolution_question`, e.g.
+"checkout-service-evolution") goes through `find_entity_by_name_in_text` + `entity_history` +
+`answer_evolution_question`, exactly like `/chat` does; every other question goes through
+`top_k_gold_evolution(mode="hybrid")` + `answer_question` (`rerank`/`expand` both stay off here
+too, see `app/routers/frontend.py`'s own comment on why) — against a small, known, self-seeded
+corpus (`seed.py`), and records two independent kinds of signal per question:
 
   - **Entity-level precision** (not row-level — several `gold_evolution` rows can belong to the
     same entity, see `top_k_gold_evolution`'s own docstring on why dedup exists): did the
@@ -52,6 +56,8 @@ from openai import AsyncOpenAI
 from sqlalchemy import delete
 
 from agents.stages import gold
+from agents.stages.gold.schemas import GroundedAnswer
+from agents.stages.gold.service import _evolution_step_line
 from agents.stages.gold.testing.chat_eval.conftest import record_result
 from agents.stages.gold.testing.chat_eval.seed import seed_corpus
 from app.config import settings
@@ -133,6 +139,34 @@ def _entity_hit(rows, expected_entity_type: str, expected_entity_id: str) -> boo
     return any(row.entity_type == expected_entity_type and row.entity_id == expected_entity_id for row in rows)
 
 
+async def _retrieve_and_answer(session, tenant: str, case: dict, expected_entity_id: str):
+    """Branches exactly the way `app/routers/frontend.py`'s `chat` endpoint does: an
+    evolution-shaped question goes through the full-history path, everything else through
+    ordinary hybrid retrieval. Returns `(rows, result, entity_hit, contexts)` — `contexts` is
+    what actually gets scored by RAGAS below, rendered the same way `answer_question`'s own
+    prompt renders it (`build_context_lines`/`_evolution_step_line`), not bare `row.narrative` —
+    see `build_context_lines`'s own docstring for why that distinction matters for faithfulness
+    and context_recall specifically."""
+    if gold.is_evolution_question(case["question"]):
+        match = await gold.find_entity_by_name_in_text(session, case["question"], tenant=tenant)
+        entity_hit = match is not None and match[1] == expected_entity_id
+        if match is None:
+            return [], GroundedAnswer(answer="No entity found in the question."), entity_hit, []
+        entity_type, entity_id, matched_alias = match
+        rows = await gold.entity_history(session, entity_type, entity_id, tenant=tenant)
+        result = await gold.answer_evolution_question(case["question"], matched_alias, rows)
+        return rows, result, entity_hit, [_evolution_step_line(row) for row in rows]
+
+    vector = await gold.embed_question(case["question"])
+    rows = await gold.top_k_gold_evolution(
+        session, vector, k=_TOP_K, tenant=tenant, mode="hybrid", question_text=case["question"],
+    )
+    entity_hit = _entity_hit(rows, case["expected_entity_type"], expected_entity_id)
+    latest = await gold.latest_versions(session, rows)
+    result = await gold.answer_question(session, case["question"], rows, latest)
+    return rows, result, entity_hit, await gold.build_context_lines(session, rows, latest, case["question"])
+
+
 async def test_chat_eval_baseline():
     tenant = f"chat-eval-{uuid4().hex[:8]}"
     llm, embeddings = _build_ragas_judge()
@@ -146,27 +180,17 @@ async def test_chat_eval_baseline():
             expected_entity_id = entity_ids[case["expected_canonical_name"]]
 
             async with async_session_factory() as session:
-                vector = await gold.embed_question(case["question"])
-                rows = await gold.top_k_gold_evolution(
-                    session,
-                    vector,
-                    k=_TOP_K,
-                    tenant=tenant,
-                    mode="hybrid",
-                    question_text=case["question"],
+                rows, result, entity_hit, contexts = await _retrieve_and_answer(
+                    session, tenant, case, expected_entity_id
                 )
-                entity_hit = _entity_hit(rows, case["expected_entity_type"], expected_entity_id)
                 entity_hits[case["id"]] = entity_hit
-
-                latest = await gold.latest_versions(session, rows)
-                result = await gold.answer_question(session, case["question"], rows, latest)
 
             ragas_scores = await _ragas_scores(
                 llm,
                 embeddings,
                 question=case["question"],
                 answer=result.answer,
-                contexts=[row.narrative for row in rows],
+                contexts=contexts,
                 reference=case["reference"],
             )
 

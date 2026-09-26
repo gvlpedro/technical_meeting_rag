@@ -93,6 +93,54 @@ def parse_odcs_spec(raw: str) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+async def latest_odcs_spec(session: AsyncSession, entity_id: str, tenant: str = "default") -> dict:
+    """The most recently persisted `odcs_spec` for this data contract, or `{}` if it has never
+    been persisted before. A later ADR that marks a contract `unchanged` naturally does not
+    restate its full schema, so `parse_odcs_spec` on that ADR's own extraction comes back `{}` —
+    both real callers (`extract_and_persist_gold_facts` below, `agents.graph._persist_contracts`)
+    call this to carry the previous spec forward instead of persisting an empty one over a real
+    one. See `.tmp/improve_timeline_questions_and_linage.md` §5 — this is the blocking
+    prerequisite for the input/output contract split to show anything meaningful."""
+    latest = (
+        await session.execute(
+            select(GoldEvolution)
+            .where(
+                GoldEvolution.tenant == tenant,
+                GoldEvolution.entity_type == "data_contract",
+                GoldEvolution.entity_id == entity_id,
+            )
+            .order_by(GoldEvolution.version.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if latest is None:
+        return {}
+    return DataContractPayload.model_validate(latest.payload).odcs_spec
+
+
+def classify_contract_directions(
+    contracts: list, name_to_id: dict[str, str]
+) -> dict[str, dict[str, set[str]]]:
+    """Maps each component name to the contract ids it consumes ("input") and produces
+    ("output"), read straight off this same ADR's own contract extraction — no query needed.
+    Shared by both real callers that build `ComponentPayload` (`extract_and_persist_gold_facts`
+    below, `agents.graph._persist_components`), so the split logic cannot drift between them.
+    `contracts` must be a list of plain dicts (one `ExtractedDataContract.model_dump()` per
+    contract, or `extraction["contracts"]`'s own already-dict shape) — never `ExtractedDataContract`
+    instances directly, since this indexes with `contract["field"]`."""
+    directions: dict[str, dict[str, set[str]]] = {}
+    for contract in contracts:
+        if contract["action"] == "unknown" or contract["name"] not in name_to_id:
+            continue
+        contract_id = name_to_id[contract["name"]]
+        consumer, producer = contract.get("consumer"), contract.get("producer")
+        if consumer:
+            directions.setdefault(consumer, {"input": set(), "output": set()})["input"].add(contract_id)
+        if producer:
+            directions.setdefault(producer, {"input": set(), "output": set()})["output"].add(contract_id)
+    return directions
+
+
 def _entity_hash(operation: GoldOperation, narrative: str, payload: dict) -> str:
     """This uses the same hash-compare-then-bump mechanism as `content_hash` and
     `agents.graph._persist_document_version`. It is scoped to one entity's own fields instead of
@@ -407,6 +455,11 @@ async def persist_entity_version(
     if latest is not None and latest.entity_hash == entity_hash:
         return None
 
+    if latest is not None:
+        # Closes the outgoing version's validity window the instant it is superseded — never
+        # touched again afterward. See `GoldEvolution.valid_to`'s own comment in `db/models.py`.
+        latest.valid_to = ingestion_date
+
     version = 1 if latest is None else latest.version + 1
     [embedding] = await asyncio.to_thread(embed, [narrative])
     session.add(
@@ -529,12 +582,18 @@ async def extract_and_persist_gold_facts(
                 session, "component", component_name, name_to_id, source_component, source_adr_version, tenant=tenant
             )
 
+    contract_directions = classify_contract_directions(
+        [c.model_dump() for c in result.contracts], name_to_id
+    )
     for component in result.components:
         if component.status == "unknown":
             continue
+        directions = contract_directions.get(component.name, {"input": set(), "output": set()})
         payload = ComponentPayload(
             dependency_ids=sorted({name_to_id[n] for n in component.dependency_names if n in name_to_id}),
             contract_ids=sorted({name_to_id[n] for n in component.contract_names if n in name_to_id}),
+            input_contract_ids=sorted(directions["input"]),
+            output_contract_ids=sorted(directions["output"]),
         ).model_dump()
         await persist_entity_version(
             session,
@@ -553,12 +612,15 @@ async def extract_and_persist_gold_facts(
     for contract in result.contracts:
         if contract.action == "unknown":
             continue
+        odcs_spec = parse_odcs_spec(contract.odcs_spec)
+        if not odcs_spec:
+            odcs_spec = await latest_odcs_spec(session, name_to_id[contract.name], tenant)
         payload = DataContractPayload(
             producer=contract.producer,
             consumer=contract.consumer,
             producer_id=name_to_id.get(contract.producer, ""),
             consumer_id=name_to_id.get(contract.consumer, ""),
-            odcs_spec=parse_odcs_spec(contract.odcs_spec),
+            odcs_spec=odcs_spec,
         ).model_dump()
         await persist_entity_version(
             session,
@@ -618,6 +680,108 @@ async def current_gold_state(
         query = query.where(GoldEvolution.entity_type == entity_type)
     query = query.order_by(GoldEvolution.entity_type, GoldEvolution.entity_id, GoldEvolution.version.desc())
     return (await session.execute(query)).scalars().all()
+
+
+async def current_gold_state_as_of(
+    session: AsyncSession, as_of: date, entity_type: GoldEntityType | None = None, *, tenant: str = "default"
+) -> Sequence[GoldEvolution]:
+    """Same read path as `current_gold_state`, pinned to whatever was valid on `as_of` instead of
+    always the latest version. `valid_to` (closed by `persist_entity_version` the instant a newer
+    version supersedes a row) makes each entity's version windows non-overlapping, so at most one
+    row per `(entity_type, entity_id)` can match this filter — the trailing `version DESC` is a
+    tie-breaker in principle only, never expected to matter in practice. See
+    `.tmp/improve_timeline_questions_and_linage.md` §2.1."""
+    query = (
+        select(GoldEvolution)
+        .distinct(GoldEvolution.entity_type, GoldEvolution.entity_id)
+        .where(
+            GoldEvolution.tenant == tenant,
+            GoldEvolution.ingestion_date <= as_of,
+            or_(GoldEvolution.valid_to.is_(None), GoldEvolution.valid_to > as_of),
+        )
+    )
+    if entity_type is not None:
+        query = query.where(GoldEvolution.entity_type == entity_type)
+    query = query.order_by(GoldEvolution.entity_type, GoldEvolution.entity_id, GoldEvolution.version.desc())
+    return (await session.execute(query)).scalars().all()
+
+
+async def _entities_as_of(
+    session: AsyncSession,
+    entity_type: GoldEntityType,
+    entity_ids: Sequence[str],
+    tenant: str,
+    as_of: date | None,
+) -> list[GoldEvolution]:
+    """Batched `entity_id -> its row valid at `as_of`` lookup, one query for the whole list —
+    the same `DISTINCT ON` shape as `current_gold_state`/`current_gold_state_as_of`, scoped down
+    to a specific set of ids instead of every entity of that type. `as_of=None` means "the latest
+    version", matching `current_gold_state`'s own default."""
+    if not entity_ids:
+        return []
+    query = select(GoldEvolution).distinct(GoldEvolution.entity_id).where(
+        GoldEvolution.tenant == tenant,
+        GoldEvolution.entity_type == entity_type,
+        GoldEvolution.entity_id.in_(entity_ids),
+    )
+    if as_of is not None:
+        query = query.where(
+            GoldEvolution.ingestion_date <= as_of,
+            or_(GoldEvolution.valid_to.is_(None), GoldEvolution.valid_to > as_of),
+        )
+    query = query.order_by(GoldEvolution.entity_id, GoldEvolution.version.desc())
+    return (await session.execute(query)).scalars().all()
+
+
+async def get_component_contracts(
+    session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
+) -> dict[str, list[DataContractPayload]]:
+    """The full ODCS spec (`DataContractPayload`, not just names) of a component's data
+    contracts, split by direction. Reads each spec fresh from the contract's own row, valid at
+    `as_of` — never a copy stored on the component itself. See
+    `.tmp/improve_timeline_questions_and_linage.md` §3; requires `latest_odcs_spec`'s
+    carry-forward (§5) to actually have a non-empty spec to return for most real contracts."""
+    components = await _entities_as_of(session, "component", [component_id], tenant, as_of)
+    if not components:
+        return {"input": [], "output": []}
+    payload = ComponentPayload.model_validate(components[0].payload)
+    input_rows = await _entities_as_of(session, "data_contract", payload.input_contract_ids, tenant, as_of)
+    output_rows = await _entities_as_of(session, "data_contract", payload.output_contract_ids, tenant, as_of)
+    return {
+        "input": [DataContractPayload.model_validate(r.payload) for r in input_rows],
+        "output": [DataContractPayload.model_validate(r.payload) for r in output_rows],
+    }
+
+
+async def get_predecessors(
+    session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
+) -> list[GoldEvolution]:
+    """Components this one directly depends on (`ComponentPayload.dependency_ids`), resolved to
+    each one's own row valid at `as_of`. A local, direct read — see `get_successors` for the
+    inverse, which is not."""
+    components = await _entities_as_of(session, "component", [component_id], tenant, as_of)
+    if not components:
+        return []
+    payload = ComponentPayload.model_validate(components[0].payload)
+    return await _entities_as_of(session, "component", payload.dependency_ids, tenant, as_of)
+
+
+async def get_successors(
+    session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
+) -> list[GoldEvolution]:
+    """The inverse of `get_predecessors` — every component whose own `dependency_ids` names
+    `component_id`, as of `as_of`. There is no `successor_ids` field anywhere: this is derived
+    purely from `dependency_ids` read across every component, so it can never drift out of sync
+    with it the way a separately maintained inverse column would. See
+    `.tmp/improve_timeline_questions_and_linage.md` §2.4."""
+    candidates = (
+        await current_gold_state_as_of(session, as_of, "component", tenant=tenant)
+        if as_of is not None
+        else await current_gold_state(session, "component", tenant=tenant)
+    )
+    return [
+        row for row in candidates if component_id in ComponentPayload.model_validate(row.payload).dependency_ids
+    ]
 
 
 async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "default") -> str:
@@ -928,21 +1092,42 @@ async def _resolve_entity_names(
     return result
 
 
-def _payload_detail(row: GoldEvolution, names: dict[tuple[str, str], str]) -> str:
+def _payload_detail(
+    row: GoldEvolution, names: dict[tuple[str, str], str], successors: dict[str, list[str]] | None = None
+) -> str:
     """Renders `row.payload`'s structured facts as a short trailing clause for
     `answer_question`'s context line — the detail a "what does X depend on" / "what does this
-    contract cover" question needs, and that `row.narrative` alone does not reliably restate.
-    Returns `""` when the payload has nothing to add (e.g. an architecture-entity row, or a
-    component with no known dependencies/contracts)."""
+    contract cover" / "what depends on X" question needs, and that `row.narrative` alone does
+    not reliably restate. Returns `""` when the payload has nothing to add (e.g. an
+    architecture-entity row, or a component with no known dependencies/contracts/successors).
+
+    `successors`, when given, maps a component's own `entity_id` to the canonical names of
+    every OTHER component that currently depends on it (`get_successors`'s own return, reduced
+    to names by the caller). There is no `successor_ids` field on the payload itself to read
+    here — unlike `dependency_ids` (this component's own local, direct field), successors are
+    computed by the caller by scanning every other component, never stored — see
+    `.tmp/improve_timeline_questions_and_linage.md` §2.4."""
     if row.entity_type == "component":
         payload = ComponentPayload.model_validate(row.payload or {})
         deps = [names[("component", i)] for i in payload.dependency_ids if ("component", i) in names]
-        contracts = [names[("data_contract", i)] for i in payload.contract_ids if ("data_contract", i) in names]
         parts = []
         if deps:
             parts.append(f"depends on: {', '.join(deps)}")
-        if contracts:
-            parts.append(f"data contracts: {', '.join(contracts)}")
+        succ = (successors or {}).get(row.entity_id, [])
+        if succ:
+            parts.append(f"depended on by: {', '.join(succ)}")
+        inputs = [names[("data_contract", i)] for i in payload.input_contract_ids if ("data_contract", i) in names]
+        outputs = [names[("data_contract", i)] for i in payload.output_contract_ids if ("data_contract", i) in names]
+        if inputs:
+            parts.append(f"input contracts: {', '.join(inputs)}")
+        if outputs:
+            parts.append(f"output contracts: {', '.join(outputs)}")
+        if not inputs and not outputs:
+            # Rows persisted before the input/output split (§2.2, §6) only ever have the old,
+            # undifferentiated `contract_ids` — fall back to it so they do not go silent.
+            contracts = [names[("data_contract", i)] for i in payload.contract_ids if ("data_contract", i) in names]
+            if contracts:
+                parts.append(f"data contracts: {', '.join(contracts)}")
         return f" ({'; '.join(parts)})" if parts else ""
     if row.entity_type == "data_contract":
         payload = DataContractPayload.model_validate(row.payload or {})
@@ -958,6 +1143,95 @@ def _payload_detail(row: GoldEvolution, names: dict[tuple[str, str], str]) -> st
 
 # `MAX_HISTORY_MESSAGES`/`_format_history_block` (conversational memory) and `_verify_citations`
 # (citation verification) now live in `agents/stages/gold/retrieval/`, imported above.
+
+# Real bug this closes: `_payload_detail`'s data_contract branch only ever showed schema FIELD
+# NAMES, never the contract's actual specification — so "show me the spec of X" got an honest
+# "the retrieved facts don't provide it" even when `odcs_spec` was fully populated. This gates a
+# much bigger block (the entire spec) behind an explicit ask, so an ordinary question about a
+# contract never pays for it in context tokens it did not request.
+_FULL_SPEC_MARKERS = (
+    "spec",
+    "specification",
+    "schema",
+    "definition",
+    "yaml",
+    "full detail",
+    "especificación",
+    "especificacion",
+    "esquema",
+    "definición",
+    "definicion",
+)
+
+
+def wants_full_spec(question: str) -> bool:
+    """Returns `True` if `question` reads as asking for a data contract's complete
+    specification, in either English or Spanish — see `_FULL_SPEC_MARKERS`. Gates
+    `build_context_lines`'s per-row full-spec block, the same way `is_evolution_question` gates
+    the full-history path."""
+    lowered = question.lower()
+    return any(marker in lowered for marker in _FULL_SPEC_MARKERS)
+
+
+def _full_odcs_spec_block(row: GoldEvolution) -> str:
+    """The entire `odcs_spec` for one data_contract row, pretty-printed. `""` for any other
+    entity_type, or a contract with no spec captured yet (`parse_odcs_spec`'s own `{}`
+    fallback — see `.tmp/improve_timeline_questions_and_linage.md` §5's carry-forward fix for
+    why that should now be rare for a contract with any real history)."""
+    if row.entity_type != "data_contract":
+        return ""
+    payload = DataContractPayload.model_validate(row.payload or {})
+    if not payload.odcs_spec:
+        return ""
+    return f"\n  Full specification: {json.dumps(payload.odcs_spec, indent=2)}"
+
+
+async def build_context_lines(
+    session: AsyncSession,
+    rows: list[GoldEvolution],
+    latest: dict[tuple[str, str], int] | None = None,
+    question: str | None = None,
+) -> list[str]:
+    """One line per retrieved row, exactly as `answer_question` renders it into its prompt —
+    narrative plus the resolved `_payload_detail` clause (dependencies/successors/contracts),
+    plus a data contract's full `odcs_spec` when `question` asks for it (`wants_full_spec`).
+    Pulled out as its own function so a caller other than `answer_question` (namely
+    `agents/stages/gold/testing/chat_eval/test_chat_eval.py`'s RAGAS scoring) can score
+    faithfulness/context_recall against what the model actually saw, not just `row.narrative` —
+    passing bare narratives as RAGAS `contexts` understates faithfulness for any answer that
+    correctly used payload-derived facts (dependencies, contract direction, successors) the
+    judge was never shown. See `.tmp/improve_timeline_questions_and_linage.md` §7.
+
+    `question` is optional (`None` skips the full-spec block entirely) so existing callers that
+    only ever wanted the old behavior do not need to change."""
+    full_spec = question is not None and wants_full_spec(question)
+    component_payloads = [
+        ComponentPayload.model_validate(row.payload or {}) for row in rows if row.entity_type == "component"
+    ]
+    component_ids = {i for p in component_payloads for i in p.dependency_ids}
+    contract_ids = {
+        i for p in component_payloads for i in (p.contract_ids + p.input_contract_ids + p.output_contract_ids)
+    }
+    names = await _resolve_entity_names(
+        session, rows[0].tenant, {"component": component_ids, "data_contract": contract_ids}
+    )
+    # One `get_successors` query per retrieved component — cheap at this scale (`rows` is a
+    # bounded top-k, not the whole tenant). This is the only way to surface successors at all:
+    # unlike `dependency_ids`, there is no stored field to just read off the payload.
+    successors_by_component_id = {
+        row.entity_id: [s.canonical_name for s in await get_successors(session, row.entity_id, tenant=row.tenant)]
+        for row in rows
+        if row.entity_type == "component"
+    }
+    return [
+        f"- [{row.entity_type}:{row.entity_id}] {row.canonical_name} (version {row.version}, "
+        f"operation={row.operation}, {row.ingestion_date.isoformat()}, by "
+        f"{row.authored_by or 'an unknown author'}, from ADR {row.source_component} "
+        f"v{row.source_adr_version}){_version_tag(row, latest)}: {row.narrative}"
+        f"{_payload_detail(row, names, successors_by_component_id)}"
+        f"{_full_odcs_spec_block(row) if full_spec else ''}"
+        for row in rows
+    ]
 
 
 async def answer_question(
@@ -1001,22 +1275,8 @@ async def answer_question(
     if not rows:
         return GroundedAnswer(answer="No relevant Gold facts were found for this question.")
 
-    component_payloads = [
-        ComponentPayload.model_validate(row.payload or {}) for row in rows if row.entity_type == "component"
-    ]
-    component_ids = {i for p in component_payloads for i in p.dependency_ids}
-    contract_ids = {i for p in component_payloads for i in p.contract_ids}
-    names = await _resolve_entity_names(
-        session, rows[0].tenant, {"component": component_ids, "data_contract": contract_ids}
-    )
-    context = "\n\n".join(
-        f"- [{row.entity_type}:{row.entity_id}] {row.canonical_name} (version {row.version}, "
-        f"operation={row.operation}, {row.ingestion_date.isoformat()}, by "
-        f"{row.authored_by or 'an unknown author'}, from ADR {row.source_component} "
-        f"v{row.source_adr_version}){_version_tag(row, latest)}: {row.narrative}"
-        f"{_payload_detail(row, names)}"
-        for row in rows
-    )
+    context_lines = await build_context_lines(session, rows, latest, question)
+    context = "\n\n".join(context_lines)
     messages = [
         {
             "role": "user",
@@ -1177,10 +1437,14 @@ async def find_entity_by_name_in_text(
 
 def _evolution_step_line(row: GoldEvolution) -> str:
     author = row.authored_by or "an unknown author"
+    # `valid_to` (`.tmp/improve_timeline_questions_and_linage.md` §2.1) is what lets an
+    # evolution answer say how long a version actually lasted, not just when it started —
+    # "in effect Jan-Mar 2026" instead of only "asserted on 2026-01-15".
+    validity = "still in effect" if row.valid_to is None else f"in effect until {row.valid_to.isoformat()}"
     return (
         f"- [{row.entity_type}:{row.entity_id}] Version {row.version}, {row.ingestion_date.isoformat()}, "
         f"by {author}, from ADR {row.source_component} v{row.source_adr_version} "
-        f"(operation={row.operation}): {row.narrative}"
+        f"(operation={row.operation}, {validity}): {row.narrative}"
     )
 
 
@@ -1264,9 +1528,12 @@ __all__ = [
     "already_extracted",
     "answer_evolution_question",
     "answer_question",
+    "build_context_lines",
+    "classify_contract_directions",
     "content_hash",
     "current_architecture_diagram",
     "current_gold_state",
+    "current_gold_state_as_of",
     "embed_question",
     "ensure_alias",
     "entity_history",
@@ -1274,8 +1541,12 @@ __all__ = [
     "extract_and_persist_gold_facts",
     "extract_gold_facts_for_source",
     "find_entity_by_name_in_text",
+    "get_component_contracts",
+    "get_predecessors",
+    "get_successors",
     "gold_entities_for_adr",
     "is_evolution_question",
+    "latest_odcs_spec",
     "latest_versions",
     "parse_odcs_spec",
     "persist_entity_version",
@@ -1284,4 +1555,5 @@ __all__ = [
     "resolve_entity_id_for_lookup",
     "retrieve_with_correction",
     "top_k_gold_evolution",
+    "wants_full_spec",
 ]
