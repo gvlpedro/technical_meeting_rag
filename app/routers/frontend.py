@@ -516,6 +516,8 @@ class ChatResponse(BaseModel):
     answer: str
     retrieved: list[dict]
     citations: list[dict] = []
+    diagram: str | None = None
+    diagram_sources: list[dict] = []
 
 
 def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
@@ -530,6 +532,32 @@ def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
     trimmed = history[-gold.MAX_HISTORY_MESSAGES :]
     lines = "\n".join(f"{m.role.capitalize()}: {m.content}" for m in trimmed)
     return f"{lines}\n{question}"
+
+
+async def _diagram_response_fields(db: AsyncSession, tenant: str, rows: list, citations: list) -> dict:
+    """Scopes `build_relationship_diagram` to exactly the component(s) an answer CITED — never a
+    row that was merely retrieved but never actually used — so every one of `chat`'s three
+    response branches can attach the same optional diagram with one call, right before building
+    its own `ChatResponse`. Returns `{}` (no `diagram` key at all) when there is nothing to show,
+    so each call site can just do `ChatResponse(..., **await _diagram_response_fields(...))`
+    without a None-check of its own."""
+    cited_keys = {(c.entity_type, c.entity_id, c.version) for c in citations}
+    cited_rows = [row for row in rows if (row.entity_type, row.entity_id, row.version) in cited_keys]
+    built = await gold.build_relationship_diagram(db, cited_rows, tenant=tenant)
+    if built is None:
+        return {}
+    diagram, focal_rows = built
+    return {
+        "diagram": diagram,
+        "diagram_sources": [
+            {
+                "canonical_name": row.canonical_name,
+                "source_component": row.source_component,
+                "source_adr_version": row.source_adr_version,
+            }
+            for row in focal_rows
+        ],
+    }
 
 
 # Matches a reference to one SPECIFIC numbered version ("version 1", "v4", "v.2") — deliberately
@@ -580,7 +608,12 @@ async def _answer_specific_version_question(
             "operation": target_row.operation,
         }
     ]
-    return ChatResponse(answer=result.answer, retrieved=retrieved, citations=[c.model_dump() for c in result.citations])
+    return ChatResponse(
+        answer=result.answer,
+        retrieved=retrieved,
+        citations=[c.model_dump() for c in result.citations],
+        **await _diagram_response_fields(db, tenant, [target_row], result.citations),
+    )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -597,6 +630,10 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
       similarity search.
     - Every other question uses hybrid retrieval: vector similarity combined with a lexical
       search, so an exact name or acronym is never missed.
+    - Whenever the answer actually cites a component, the response also carries a small Mermaid
+      `diagram` of that component and its direct neighbors (`diagram_sources` names which ADR(s)
+      to link back to) — see `_diagram_response_fields`/`gold.build_relationship_diagram`. `None`
+      when the answer cited no component, or a cited component has no relationships to show.
     - Recent chat history is used only to resolve what a follow-up question refers to — never
       as a source of facts.
     - `tenant` always comes from the logged-in username, never from the request, so one
@@ -607,22 +644,10 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     history = [(m.role, m.content) for m in request.history]
     contextualized_question = _contextualize_question(request.question, request.history)
 
-    # Checked first, and only against `request.question` (never `contextualized_question`, same
-    # reasoning as the evolution check right below): a question pinned to one explicit version
-    # number is unambiguous on its own and must never depend on what an earlier turn said.
     specific_version_response = await _answer_specific_version_question(db, tenant, request, history)
     if specific_version_response is not None:
         return specific_version_response
 
-    # Deliberately `request.question` here, never `contextualized_question`: both checks below
-    # must react only to what THIS turn actually asks. `contextualized_question` prefixes prior
-    # turns (including the assistant's own past answers) onto the text, so a marker word like
-    # "historically" or "timeline" appearing in an EARLIER reply would otherwise flip
-    # `is_evolution_question` to True for an unrelated follow-up, and `find_entity_by_name_in_text`
-    # (longest-alias-wins) could then match some OTHER entity named in that stale history instead
-    # of the one this question actually names — a real, reproduced bug, not a hypothetical one.
-    # `contextualized_question` still feeds the embedding/lexical retrieval below, where
-    # resolving a pronoun-style follow-up ("and who approved it?") is exactly the point.
     if gold.is_evolution_question(request.question):
         match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
         if match is not None:
@@ -644,6 +669,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
                 answer=result.answer,
                 retrieved=retrieved,
                 citations=[c.model_dump() for c in result.citations],
+                **await _diagram_response_fields(db, tenant, rows, result.citations),
             )
 
     vector = await gold.embed_question(contextualized_question)
@@ -687,6 +713,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
         answer=result.answer,
         retrieved=retrieved,
         citations=[c.model_dump() for c in result.citations],
+        **await _diagram_response_fields(db, tenant, rows, result.citations),
     )
 
 

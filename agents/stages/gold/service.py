@@ -18,10 +18,10 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
-from sqlalchemy import Numeric, and_, func, or_, select, text
+from sqlalchemy import Numeric, and_, func, or_, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
@@ -139,6 +139,23 @@ def classify_contract_directions(
         if producer:
             directions.setdefault(producer, {"input": set(), "output": set()})["output"].add(contract_id)
     return directions
+
+
+def contracts_with_real_changes(contracts: list, name_to_id: dict[str, str]) -> set[str]:
+    """The entity ids of every contract in THIS SAME extraction whose own `action` is a real
+    change — anything other than `"unchanged"`/`"unknown"`. Used to correct a component's own
+    `"unchanged"` judgment to `"modified"` when a contract it was ALREADY associated with (same
+    id, still in its `input_contract_ids`/`output_contract_ids` — its own list of ids did not
+    change) itself got a new version underneath it this round. See `doc/cicle_evolution.md`'s
+    "Regla especial", condition 2. Shares the same "plain dicts, not `ExtractedDataContract`
+    instances" contract as `classify_contract_directions`, and both real callers
+    (`extract_and_persist_gold_facts` below, `agents.graph._persist_components`) call this one
+    alongside it, from the exact same `contracts` list."""
+    return {
+        name_to_id[c["name"]]
+        for c in contracts
+        if c["action"] not in ("unchanged", "unknown") and c["name"] in name_to_id
+    }
 
 
 def _entity_hash(operation: GoldOperation, narrative: str, payload: dict) -> str:
@@ -437,8 +454,38 @@ async def persist_entity_version(
     three per-`entity_type` literals. This union still includes `"unknown"` at the type level,
     because Python cannot easily express "minus one value." This function does not itself check
     that `operation` is the right *subset* for the given `entity_type`. That pairing is the
-    caller's responsibility."""
-    entity_hash = _entity_hash(operation, narrative, payload)
+    caller's responsibility.
+
+    See `doc/cicle_evolution.md` for the full evolution rules this enforces. Two of them live
+    here specifically:
+
+    1. **The payload corrects a false "unchanged" for a component.** The LLM's `operation`
+       judgment is about the entity's own NARRATED behavior, not its structured facts. A
+       component's own responsibility text can stay put while its payload
+       (`dependency_ids`/`input_contract_ids`/`output_contract_ids`) genuinely differs from the
+       previous version — for example, it starts producing a brand new data contract. When that
+       happens for `entity_type == "component"`, `operation` is corrected to `"modified"` before
+       persisting, so the stored row never claims "unchanged" while the facts say otherwise. This
+       correction does NOT apply to `data_contract`: `ContractAction` has no generic "modified" —
+       it distinguishes `forward-update` from `break-change`, a semantic judgment about the
+       schema change itself that cannot be inferred from a payload diff alone (see
+       `agents.shared.ContractAction`'s own docstring on this being an unverified LLM call today).
+    2. **A carried-forward narrative neutralizes pure re-wording noise.** Every ADR is a fresh
+       LLM call, so "this is still unchanged" gets re-narrated in different words each time even
+       when nothing real changed — confirmed as a real bug: several contracts in production data
+       picked up 2-3 spurious versions in a row with byte-identical payloads, purely from wording
+       drift. When `operation == "unchanged"` (after rule 1's correction, if any, has already
+       run) AND a prior version exists, `narrative` itself — not just a value used for hashing —
+       is REPLACED with the previous version's own narrative, and it is that replaced value that
+       gets both hashed and (if a version still ends up being inserted, e.g. because the payload
+       changed) stored. This must replace the actual stored value, not only what gets hashed: an
+       earlier version of this fix hashed against the previous narrative but stored the fresh
+       one, which is unsound — it silently made two different rows compare as identical to a
+       THIRD row by two different, inconsistent narrative texts, breaking the very next
+       comparison down the chain. Concretely, this means a component's displayed narrative, once
+       "unchanged" starts repeating, stays pinned to the last version where something genuinely
+       changed — never diluted by a string of "still nothing changed" rewrites — until a real
+       change (payload, or a genuine `"modified"`/`"new"`) writes a fresh one again."""
     latest = (
         await session.execute(
             select(GoldEvolution)
@@ -451,6 +498,19 @@ async def persist_entity_version(
             .limit(1)
         )
     ).scalars().first()
+
+    if operation == "unchanged" and latest is not None and entity_type == "component":
+        payload_changed = json.dumps(payload, sort_keys=True) != json.dumps(latest.payload, sort_keys=True)
+        if payload_changed:
+            operation = "modified"
+
+    if operation == "unchanged" and latest is not None:
+        # Replaces the actual value that gets hashed AND stored — not just a local variable used
+        # for hashing — so the chain stays self-consistent for the NEXT comparison. See the
+        # docstring above for why hashing against one narrative while storing another is unsound.
+        narrative = latest.narrative
+
+    entity_hash = _entity_hash(operation, narrative, payload)
 
     if latest is not None and latest.entity_hash == entity_hash:
         return None
@@ -582,13 +642,18 @@ async def extract_and_persist_gold_facts(
                 session, "component", component_name, name_to_id, source_component, source_adr_version, tenant=tenant
             )
 
-    contract_directions = classify_contract_directions(
-        [c.model_dump() for c in result.contracts], name_to_id
-    )
+    contract_dicts = [c.model_dump() for c in result.contracts]
+    contract_directions = classify_contract_directions(contract_dicts, name_to_id)
+    changed_contract_ids = contracts_with_real_changes(contract_dicts, name_to_id)
     for component in result.components:
         if component.status == "unknown":
             continue
         directions = contract_directions.get(component.name, {"input": set(), "output": set()})
+        # `doc/cicle_evolution.md` "Regla especial", condition 2 — see the identical comment in
+        # `agents.graph._persist_components`, which this mirrors.
+        status = component.status
+        if status == "unchanged" and (directions["input"] | directions["output"]) & changed_contract_ids:
+            status = "modified"
         payload = ComponentPayload(
             dependency_ids=sorted({name_to_id[n] for n in component.dependency_names if n in name_to_id}),
             contract_ids=sorted({name_to_id[n] for n in component.contract_names if n in name_to_id}),
@@ -600,7 +665,7 @@ async def extract_and_persist_gold_facts(
             entity_type="component",
             entity_id=name_to_id[component.name],
             canonical_name=component.name,
-            operation=component.status,
+            operation=status,
             narrative=component.narrative,
             payload=payload,
             source_component=source_component,
@@ -706,19 +771,90 @@ async def current_gold_state_as_of(
     return (await session.execute(query)).scalars().all()
 
 
+async def _batch_cursor(session: AsyncSession, tenant: str, row: GoldEvolution) -> tuple[datetime, int]:
+    """The `(changed_at, id)` of the LAST row inserted in the same extraction batch as `row` —
+    same `(tenant, source_component, source_adr_version)` — not `row`'s own values directly.
+
+    One ADR run persists several entities (components, contracts, the architecture snapshot) as
+    separate, sequential inserts (`agents.graph.persist_gold_evolution`), so a component's own
+    row can have a lower `id` than a contract from that EXACT SAME ADR that conceptually became
+    true at the same moment. Cursoring on the component's own id would wrongly exclude that
+    contract (and any other sibling from the same batch inserted after it) as "not yet known" —
+    confirmed by a real test failure this fixed: a component with zero of its own dependencies,
+    whose only relationship is a sibling from the same ADR that depends on it, showed no
+    relationship at all when cursored on its own id. The batch's own last id is what correctly
+    includes every fact from that same ADR, regardless of which one happened to be written
+    first."""
+    last = (
+        await session.execute(
+            select(GoldEvolution.changed_at, GoldEvolution.id)
+            .where(
+                GoldEvolution.tenant == tenant,
+                GoldEvolution.source_component == row.source_component,
+                GoldEvolution.source_adr_version == row.source_adr_version,
+            )
+            .order_by(GoldEvolution.id.desc())
+            .limit(1)
+        )
+    ).one()
+    return last.changed_at, last.id
+
+
+async def _rows_before(
+    session: AsyncSession,
+    entity_type: GoldEntityType,
+    tenant: str,
+    before: tuple[datetime, int],
+    entity_ids: Sequence[str] | None = None,
+) -> list[GoldEvolution]:
+    """The latest row per entity among rows inserted at or before `before` — a `(changed_at,
+    id)` cursor, ALWAYS compared as that one pair, never `ingestion_date` alone: several
+    versions of the very same entity can legitimately share one `ingestion_date` (several ADRs
+    uploaded the same day), which made `ingestion_date`-only comparisons unable to tell which of
+    two same-day versions came first — a real, reported bug (a v1-pinned diagram still showed a
+    dependency only added in v3, because both shared today's date). `id` alone would already be
+    a perfect, gap-free insertion order; `changed_at` is included anyway because that is the
+    pair this was explicitly asked to use, and comparing both together is exactly as correct as
+    comparing `id` alone — `changed_at` only ever adds a tie-break that `id` had already settled.
+
+    Used only when resolving a SPECIFIC row's own neighbors/successors consistently with that
+    row's own position in the insertion sequence (`build_relationship_diagram`,
+    `build_context_lines`) — never for a caller resolving an arbitrary business date (that stays
+    `current_gold_state_as_of`/`_entities_as_of`'s `as_of`, unrelated and unchanged)."""
+    changed_at, entity_pk = before
+    query = select(GoldEvolution).distinct(GoldEvolution.entity_id).where(
+        GoldEvolution.tenant == tenant,
+        GoldEvolution.entity_type == entity_type,
+        tuple_(GoldEvolution.changed_at, GoldEvolution.id) <= tuple_(changed_at, entity_pk),
+    )
+    if entity_ids is not None:
+        if not entity_ids:
+            return []
+        query = query.where(GoldEvolution.entity_id.in_(entity_ids))
+    query = query.order_by(GoldEvolution.entity_id, GoldEvolution.changed_at.desc(), GoldEvolution.id.desc())
+    return (await session.execute(query)).scalars().all()
+
+
 async def _entities_as_of(
     session: AsyncSession,
     entity_type: GoldEntityType,
     entity_ids: Sequence[str],
     tenant: str,
     as_of: date | None,
+    *,
+    before: tuple[datetime, int] | None = None,
 ) -> list[GoldEvolution]:
     """Batched `entity_id -> its row valid at `as_of`` lookup, one query for the whole list —
     the same `DISTINCT ON` shape as `current_gold_state`/`current_gold_state_as_of`, scoped down
     to a specific set of ids instead of every entity of that type. `as_of=None` means "the latest
-    version", matching `current_gold_state`'s own default."""
+    version", matching `current_gold_state`'s own default.
+
+    `before`, when given, takes over entirely (see `_rows_before`) — a `(changed_at, id)`
+    cursor, for a caller resolving one specific row's own neighbors, not a business date."""
     if not entity_ids:
         return []
+    if before is not None:
+        return await _rows_before(session, entity_type, tenant, before, entity_ids)
     query = select(GoldEvolution).distinct(GoldEvolution.entity_id).where(
         GoldEvolution.tenant == tenant,
         GoldEvolution.entity_type == entity_type,
@@ -767,18 +903,27 @@ async def get_predecessors(
 
 
 async def get_successors(
-    session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
+    session: AsyncSession,
+    component_id: str,
+    tenant: str = "default",
+    as_of: date | None = None,
+    *,
+    before: tuple[datetime, int] | None = None,
 ) -> list[GoldEvolution]:
     """The inverse of `get_predecessors` — every component whose own `dependency_ids` names
-    `component_id`, as of `as_of`. There is no `successor_ids` field anywhere: this is derived
-    purely from `dependency_ids` read across every component, so it can never drift out of sync
-    with it the way a separately maintained inverse column would. See
+    `component_id`, as of `as_of` (a business date) or `before` (a `(changed_at, id)` cursor —
+    see `_rows_before`). There is no `successor_ids` field anywhere: this is derived purely from
+    `dependency_ids` read across every component, so it can never drift out of sync with it the
+    way a separately maintained inverse column would. See
     `.tmp/improve_timeline_questions_and_linage.md` §2.4."""
-    candidates = (
-        await current_gold_state_as_of(session, as_of, "component", tenant=tenant)
-        if as_of is not None
-        else await current_gold_state(session, "component", tenant=tenant)
-    )
+    if before is not None:
+        candidates = await _rows_before(session, "component", tenant, before)
+    else:
+        candidates = (
+            await current_gold_state_as_of(session, as_of, "component", tenant=tenant)
+            if as_of is not None
+            else await current_gold_state(session, "component", tenant=tenant)
+        )
     return [
         row for row in candidates if component_id in ComponentPayload.model_validate(row.payload).dependency_ids
     ]
@@ -856,6 +1001,93 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
                 lines.append(f"    {node_id[c.entity_id]} --> {node_id[dependency_id]}")
     lines.append(f"    class {','.join(node_id.values())} goldNode")
     return "\n".join(lines)
+
+
+async def build_relationship_diagram(
+    session: AsyncSession, rows: list[GoldEvolution], *, tenant: str = "default"
+) -> tuple[str, list[GoldEvolution]] | None:
+    """A small Mermaid `flowchart LR` scoped to just the component(s) a chat answer actually
+    cited (`rows` here — see `chat`'s own filtering by `ChatCitation`), plus each one's direct
+    neighbors: predecessors (`ComponentPayload.dependency_ids`, a local read) and successors
+    (`get_successors`, the derived inverse). This is deliberately NOT
+    `current_architecture_diagram` scoped down — that reads the whole tenant's live state; this
+    is built from the exact rows an answer already resolved, so it can never show a component
+    the answer never actually grounded.
+
+    Returns `None` when there is nothing to show: no component among `rows` (e.g. the answer was
+    only about a data contract), or a component with zero dependencies and zero successors.
+    Otherwise returns `(mermaid_source, focal_rows)` — `focal_rows` is exactly the cited
+    component rows passed in, never a neighbor, so the caller can build "View ADR" links from
+    the entity the answer was actually about.
+
+    A historical focal row (`valid_to is not None` — i.e. superseded, see
+    `_answer_specific_version_question`) has its neighbors resolved with a `(changed_at, id)`
+    cursor (`_rows_before`) pinned to THAT row's own insertion moment, never "whatever is
+    current now". A real, reported bug: pinning an answer to an old version still showed today's
+    full neighbor set (a dependency added long after that version), because `get_successors`
+    used to be called unscoped. `ingestion_date` alone cannot fix this — several versions of the
+    same entity can share one calendar day (several ADRs uploaded together) — only the
+    insertion-order cursor can. A still-current focal row (`valid_to is None`) keeps reading
+    today's true state, exactly as before: it would be its own regression to show a stale
+    neighbor for a component that just happens not to have changed as recently as its neighbors.
+
+    Reuses `current_architecture_diagram`'s exact style conventions (`classDef`, backtick
+    multi-line labels, no `click` directive) — see that function's own docstring for the real
+    `st.mermaid_chart` rendering bug those choices avoid. A second `classDef` (`focalNode`)
+    highlights the cited component(s) so a reader can tell "what this answer is about" from
+    "context neighbor" at a glance."""
+    focal_rows = [row for row in rows if row.entity_type == "component"]
+    if not focal_rows:
+        return None
+
+    focal_ids = {row.entity_id for row in focal_rows}
+    # (from_id, to_id) meaning from_id depends on to_id — the same direction
+    # `current_architecture_diagram`'s `component --> dependency` edges use.
+    edges: list[tuple[str, str]] = []
+    neighbor_rows_by_id: dict[str, GoldEvolution] = {}
+    for row in focal_rows:
+        cursor = await _batch_cursor(session, tenant, row) if row.valid_to is not None else None
+        payload = ComponentPayload.model_validate(row.payload or {})
+        for dependency_id in payload.dependency_ids:
+            edges.append((row.entity_id, dependency_id))
+        to_fetch = [i for i in payload.dependency_ids if i not in focal_ids]
+        if to_fetch:
+            for neighbor in await _entities_as_of(session, "component", to_fetch, tenant, None, before=cursor):
+                neighbor_rows_by_id[neighbor.entity_id] = neighbor
+        for successor in await get_successors(session, row.entity_id, tenant=tenant, before=cursor):
+            edges.append((successor.entity_id, row.entity_id))
+            if successor.entity_id not in focal_ids:
+                neighbor_rows_by_id[successor.entity_id] = successor
+
+    if not edges:
+        return None  # every focal component has zero dependencies and zero successors
+
+    all_rows = {**neighbor_rows_by_id, **{row.entity_id: row for row in focal_rows}}
+
+    node_id = {entity_id: f"n{i}" for i, entity_id in enumerate(all_rows)}
+    lines = [
+        "flowchart LR",
+        "    classDef goldNode fill:#f1f3f5,stroke:#8b5cf6,color:#16181d,stroke-width:1px",
+        "    classDef focalNode fill:#ede9fe,stroke:#7c3aed,color:#16181d,stroke-width:2px",
+    ]
+    for entity_id, row in all_rows.items():
+        lines.append(f'    {node_id[entity_id]}["`{row.canonical_name}`"]')
+    seen_edges: set[tuple[str, str]] = set()
+    for from_id, to_id in edges:
+        if from_id not in node_id or to_id not in node_id or from_id == to_id:
+            continue
+        edge = (node_id[from_id], node_id[to_id])
+        if edge in seen_edges:
+            continue
+        seen_edges.add(edge)
+        lines.append(f"    {edge[0]} --> {edge[1]}")
+    neighbor_node_ids = [node_id[i] for i in all_rows if i not in focal_ids]
+    focal_node_ids = [node_id[i] for i in focal_ids if i in node_id]
+    if neighbor_node_ids:
+        lines.append(f"    class {','.join(neighbor_node_ids)} goldNode")
+    if focal_node_ids:
+        lines.append(f"    class {','.join(focal_node_ids)} focalNode")
+    return "\n".join(lines), focal_rows
 
 
 # --- Top-k retrieval. This is the RAG-consumer read path that `current_gold_state` above does
@@ -1218,11 +1450,20 @@ async def build_context_lines(
     # One `get_successors` query per retrieved component — cheap at this scale (`rows` is a
     # bounded top-k, not the whole tenant). This is the only way to surface successors at all:
     # unlike `dependency_ids`, there is no stored field to just read off the payload.
-    successors_by_component_id = {
-        row.entity_id: [s.canonical_name for s in await get_successors(session, row.entity_id, tenant=row.tenant)]
-        for row in rows
-        if row.entity_type == "component"
-    }
+    #
+    # A historical row (`valid_to is not None` — pinned by `_answer_specific_version_question`)
+    # is cursored to its own extraction batch's end (`_batch_cursor`), never "current": leaving
+    # this unscoped was a real, reported bug — a v1-pinned answer still listed today's full
+    # successor set, including a dependency added long after v1. `ingestion_date` alone cannot
+    # fix this — several versions of the same entity can share one calendar day. A still-current
+    # row (`valid_to is None`, the ordinary top-k case) keeps reading today's true state.
+    successors_by_component_id: dict[str, list[str]] = {}
+    for row in rows:
+        if row.entity_type != "component":
+            continue
+        cursor = await _batch_cursor(session, row.tenant, row) if row.valid_to is not None else None
+        successors = await get_successors(session, row.entity_id, tenant=row.tenant, before=cursor)
+        successors_by_component_id[row.entity_id] = [s.canonical_name for s in successors]
     return [
         f"- [{row.entity_type}:{row.entity_id}] {row.canonical_name} (version {row.version}, "
         f"operation={row.operation}, {row.ingestion_date.isoformat()}, by "
@@ -1529,8 +1770,10 @@ __all__ = [
     "answer_evolution_question",
     "answer_question",
     "build_context_lines",
+    "build_relationship_diagram",
     "classify_contract_directions",
     "content_hash",
+    "contracts_with_real_changes",
     "current_architecture_diagram",
     "current_gold_state",
     "current_gold_state_as_of",

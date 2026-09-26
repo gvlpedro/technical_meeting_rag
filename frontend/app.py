@@ -609,6 +609,24 @@ def _linkify_adr_mentions(text: str) -> str:
     return _ADR_MENTION_PATTERN.sub(_replace, escaped)
 
 
+def _render_relationship_diagram(diagram: str, sources: list[dict]) -> None:
+    """Renders `ChatResponse.diagram` (the cited component(s) plus their direct neighbors —
+    `gold.build_relationship_diagram`) boxed under the answer, with a small caption underneath
+    linking to the ADR(s) the cited component(s) actually came from """
+    with st.container(border=True):
+        st.mermaid_chart(diagram)
+        links = []
+        for source in sources:
+            url = (
+                f"?view_adr={quote(source['source_component'], safe='')}"
+                f"&view_adr_version={source['source_adr_version']}"
+            )
+            label = html.escape(f"{source['canonical_name']} — {source['source_component']} v{source['source_adr_version']}")
+            links.append(f'<a href="{url}" target="_blank">{label}</a>')
+        if links:
+            st.markdown(f"<small>ADR: {' · '.join(links)}</small>", unsafe_allow_html=True)
+
+
 def _chat_tab(username: str) -> None:
     title_col, clear_col = st.columns([5, 1])
     with title_col:
@@ -617,12 +635,16 @@ def _chat_tab(username: str) -> None:
     with clear_col:
         if st.button("Clear chat", use_container_width=True):
             st.session_state.chat_history = []
+            st.session_state.chat_diagrams = {}
             st.rerun()
 
     history = st.session_state.setdefault("chat_history", [])
-    for role, text in history:
+    diagrams = st.session_state.setdefault("chat_diagrams", {})
+    for i, (role, text) in enumerate(history):
         with st.chat_message(role):
             st.markdown(_linkify_adr_mentions(text), unsafe_allow_html=True)
+            if i in diagrams:
+                _render_relationship_diagram(diagrams[i]["diagram"], diagrams[i]["sources"])
 
     question = st.chat_input("Ask about the architecture's evolution")
     if question:
@@ -631,6 +653,8 @@ def _chat_tab(username: str) -> None:
         with st.spinner("Thinking..."):
             result = api_client.chat(username, question, history=prior_turns)
         history.append(("assistant", result["answer"]))
+        if result.get("diagram"):
+            diagrams[len(history) - 1] = {"diagram": result["diagram"], "sources": result.get("diagram_sources", [])}
         st.rerun()
 
 
@@ -654,10 +678,6 @@ def _test_monitor_tab(username: str) -> None:
     costs = data["llm_costs"]
     if costs:
         st.caption(f"{len(costs)} most recent call(s) for this tenant, newest first.")
-        # Hand-rolled `st.columns` rows, not `st.dataframe`, same reason as Architecture
-        # history's table — plus dropping the raw prompt text entirely (instead of
-        # truncating it) is what fixes the unreadable column, with "View prompt" reopening
-        # it untruncated from the same already-fetched payload.
         header_cols = st.columns([1.3, 1.6, 1.4, 0.9, 0.9, 1.6])
         for col, label in zip(header_cols, ["When", "Method", "Model", "Input (€)", "Output (€)", ""]):
             if label:

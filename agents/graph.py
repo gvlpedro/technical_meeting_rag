@@ -683,11 +683,16 @@ async def _persist_components(
     authored_by: str,
 ) -> None:
     contract_directions = gold.classify_contract_directions(extraction["contracts"], name_to_id)
+    changed_contract_ids = gold.contracts_with_real_changes(extraction["contracts"], name_to_id)
     for component in extraction["components"]:
         if component["status"] == "unknown":
             continue
 
         directions = contract_directions.get(component["name"], {"input": set(), "output": set()})
+        # `doc/cicle_evolution.md`
+        status = component["status"]
+        if status == "unchanged" and (directions["input"] | directions["output"]) & changed_contract_ids:
+            status = "modified"
         payload = ComponentPayload(
             dependency_ids=sorted(
                 {name_to_id[n] for n in component.get("dependency_names", []) if n in name_to_id}
@@ -703,7 +708,7 @@ async def _persist_components(
             entity_type="component",
             entity_id=name_to_id[component["name"]],
             canonical_name=component["name"],
-            operation=component["status"],
+            operation=status,
             narrative=component["narrative"],
             payload=payload,
             source_component=source,

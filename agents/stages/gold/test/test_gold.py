@@ -28,6 +28,7 @@ from agents.stages.gold.service import (
     _reciprocal_rank_fusion,
     _rerank_ids,
     already_extracted,
+    contracts_with_real_changes,
     current_architecture_diagram,
     current_gold_state,
     embed_question,
@@ -406,6 +407,154 @@ async def test_persist_entity_version_different_hash_bumps_version():
         await _cleanup_entity(entity_type, entity_id)
 
 
+async def test_contracts_with_real_changes_excludes_unchanged_and_unknown():
+    name_to_id = {"a": "id-a", "b": "id-b", "c": "id-c"}
+    contracts = [
+        {"name": "a", "action": "new"},
+        {"name": "b", "action": "unchanged"},
+        {"name": "c", "action": "unknown"},
+    ]
+    assert contracts_with_real_changes(contracts, name_to_id) == {"id-a"}
+
+
+async def test_persist_entity_version_unchanged_with_same_payload_is_a_noop_despite_reworded_narrative():
+    """Regression: `doc/cicle_evolution.md` — a real bug where a component/contract picked up a
+    spurious new version every ADR purely because the LLM re-narrates "still unchanged" with
+    different wording each time, even though nothing about it actually changed. The FIRST
+    "new" -> "unchanged" transition still versions (that first confirmation is itself a real,
+    one-time fact worth recording, and `_entity_hash` deliberately includes `operation`) — the
+    bug, and this fix, is specifically about a SECOND, THIRD, ... consecutive "unchanged" on top
+    of an already-"unchanged" version, exactly the `product-catalog` v2->v3->v4 pattern found in
+    real data."""
+    entity_type = "component"
+    entity_id = str(uuid4())
+    payload = {"dependency_ids": [], "contract_ids": [], "input_contract_ids": [], "output_contract_ids": []}
+    try:
+        async with async_session_factory() as session:
+            first = await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="Checkout Service",
+                operation="new", narrative="Checkout Service is new.", payload=payload,
+                source_component="meeting.en.vtt", source_adr_version=1, ingestion_date=date(2026, 6, 1),
+            )
+            await session.commit()
+        assert first == 1
+
+        async with async_session_factory() as session:
+            second = await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="Checkout Service",
+                operation="unchanged", narrative="Checkout Service remains the same.", payload=payload,
+                source_component="meeting.en.vtt", source_adr_version=2, ingestion_date=date(2026, 6, 2),
+            )
+            await session.commit()
+        assert second == 2  # "new" -> "unchanged" is a real, one-time confirmation — still versions.
+
+        async with async_session_factory() as session:
+            third = await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="Checkout Service",
+                operation="unchanged", narrative="Checkout Service remains exactly the same as before.",
+                payload=payload, source_component="meeting.en.vtt", source_adr_version=3,
+                ingestion_date=date(2026, 6, 3),
+            )
+            await session.commit()
+        assert third is None  # "unchanged" repeated, different wording, same payload — no v3.
+
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id
+                    )
+                )
+            ).scalars().all()
+        assert len(rows) == 2
+    finally:
+        await _cleanup_entity(entity_type, entity_id)
+
+
+async def test_persist_entity_version_corrects_unchanged_to_modified_when_a_components_own_payload_changed():
+    entity_type = "component"
+    entity_id = str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="Checkout Service",
+                operation="new", narrative="Checkout Service is new.",
+                payload={"dependency_ids": [], "contract_ids": [], "input_contract_ids": [], "output_contract_ids": []},
+                source_component="meeting.en.vtt", source_adr_version=1, ingestion_date=date(2026, 6, 1),
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            second = await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="Checkout Service",
+                operation="unchanged",  # the LLM's own judgment — wrong, per the payload below
+                narrative="Checkout Service remains the same.",
+                payload={
+                    "dependency_ids": [], "contract_ids": ["c1"], "input_contract_ids": ["c1"],
+                    "output_contract_ids": [],
+                },
+                source_component="meeting.en.vtt", source_adr_version=2, ingestion_date=date(2026, 6, 2),
+            )
+            await session.commit()
+        assert second == 2
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id,
+                        GoldEvolution.version == 2,
+                    )
+                )
+            ).scalars().one()
+        assert row.operation == "modified"  # corrected — the payload changed, so "unchanged" was wrong
+    finally:
+        await _cleanup_entity(entity_type, entity_id)
+
+
+async def test_persist_entity_version_never_corrects_a_data_contracts_own_operation():
+    """`doc/cicle_evolution.md` is explicit that this correction is components-only: a data
+    contract's `unchanged` -> real-change judgment (`forward-update` vs `break-change`) needs
+    semantic understanding of the schema diff a payload comparison cannot provide. A changed
+    payload here must still bump the version (this is not a regression of the noise fix — a
+    genuine payload difference is a genuine reason to version), it just must not silently invent
+    a specific action the LLM never asserted."""
+    entity_type = "data_contract"
+    entity_id = str(uuid4())
+    try:
+        async with async_session_factory() as session:
+            await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="checkout-events",
+                operation="new", narrative="checkout-events is new.",
+                payload={"producer": "a", "consumer": "b", "odcs_spec": {}},
+                source_component="meeting.en.vtt", source_adr_version=1, ingestion_date=date(2026, 6, 1),
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            second = await persist_entity_version(
+                session, entity_type=entity_type, entity_id=entity_id, canonical_name="checkout-events",
+                operation="unchanged", narrative="checkout-events remains the same.",
+                payload={"producer": "a", "consumer": "b", "odcs_spec": {"apiVersion": "v2"}},
+                source_component="meeting.en.vtt", source_adr_version=2, ingestion_date=date(2026, 6, 2),
+            )
+            await session.commit()
+        assert second == 2  # payload changed, so it still versions...
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.entity_type == entity_type, GoldEvolution.entity_id == entity_id,
+                        GoldEvolution.version == 2,
+                    )
+                )
+            ).scalars().one()
+        assert row.operation == "unchanged"  # ...but `operation` is left exactly as the LLM asserted it
+    finally:
+        await _cleanup_entity(entity_type, entity_id)
+
+
 async def test_already_extracted_true_after_a_write_false_before():
     entity_type = "component"
     entity_id = str(uuid4())
@@ -501,6 +650,88 @@ async def test_extract_and_persist_gold_facts_serializes_concurrent_calls_for_th
         ).scalars().all()
     assert len(rows) == 1
     assert rows[0].version == 1
+
+
+async def test_extract_and_persist_corrects_unchanged_to_modified_when_its_own_contract_is_new(monkeypatch):
+    """End-to-end regression, through the real call site (not a direct `persist_entity_version`
+    call): `doc/cicle_evolution.md` "Regla especial", condition 2 — a component the LLM marks
+    "unchanged" is corrected to "modified" when a data contract that names it as producer or
+    consumer is itself extracted as genuinely new/changed in this SAME round, even though the
+    component's own narrative and its own list of contract ids says nothing new."""
+    tenant = f"test-evolution-{uuid4().hex[:8]}"
+    source_component = f"evolution-{uuid4().hex[:8]}.en.vtt"
+
+    async def fake_extract_v1(adr_content: str) -> GoldExtractionResult:
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(name="Checkout Service", status="new", narrative="Checkout Service is new.")
+            ],
+            contracts=[],
+            architecture_change="changed",
+            architecture_narrative="Checkout Service was introduced.",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v1)
+    try:
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr content v1", source_component, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+
+        async def fake_extract_v2(adr_content: str) -> GoldExtractionResult:
+            return GoldExtractionResult(
+                components=[
+                    ExtractedComponent(
+                        name="Checkout Service", status="unchanged",
+                        narrative="Checkout Service remains the same.",
+                    )
+                ],
+                contracts=[
+                    ExtractedDataContract(
+                        name="checkout-completed", action="new",
+                        narrative="checkout-completed is a new event from Checkout Service.",
+                        producer="Checkout Service", consumer="Loyalty Service",
+                    )
+                ],
+                architecture_change="changed",
+                architecture_narrative="checkout-completed was added.",
+            )
+
+        monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v2)
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr content v2", source_component, 2, date(2026, 6, 2), tenant=tenant
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            checkout = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant, GoldEvolution.canonical_name == "Checkout Service"
+                    )
+                )
+            ).scalars().all()
+        by_version = {row.version: row for row in checkout}
+        assert set(by_version) == {1, 2}
+        assert by_version[2].operation == "modified"  # corrected — the LLM said "unchanged"
+
+        async with async_session_factory() as session:
+            contract = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant, GoldEvolution.canonical_name == "checkout-completed"
+                    )
+                )
+            ).scalars().one()
+        output_ids = ComponentPayload.model_validate(by_version[2].payload).output_contract_ids
+        assert output_ids == [contract.entity_id]
+    finally:
+        async with async_session_factory() as session:
+            await session.execute(GoldEvolution.__table__.delete().where(GoldEvolution.tenant == tenant))
+            await session.execute(GoldAlias.__table__.delete().where(GoldAlias.tenant == tenant))
+            await session.commit()
 
 
 async def test_current_gold_state_returns_only_the_latest_version_per_entity():
