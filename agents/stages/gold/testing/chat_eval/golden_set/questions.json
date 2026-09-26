@@ -26,5 +26,33 @@
     "expected_entity_type": "component",
     "expected_canonical_name": "Fraud Check Service",
     "reference": "Fraud Check Service is a new component that screens a transaction for fraud before Payments Gateway is allowed to charge it."
+  },
+  {
+    "id": "checkout-service-input-contracts",
+    "question": "What are the Checkout Service's input data contracts?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Checkout Service",
+    "reference": "Checkout Service consumes PaymentCharged, which is produced by Payments Gateway."
+  },
+  {
+    "id": "payments-gateway-output-contracts",
+    "question": "What data contracts does the Payments Gateway produce?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Payments Gateway",
+    "reference": "Payments Gateway produces PaymentCharged, which is consumed by Checkout Service."
+  },
+  {
+    "id": "payments-gateway-successors",
+    "question": "Which components depend on the Payments Gateway?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Payments Gateway",
+    "reference": "Both Checkout Service and Refund Service depend on Payments Gateway."
+  },
+  {
+    "id": "checkout-service-evolution",
+    "question": "How has the Checkout Service changed over time?",
+    "expected_entity_type": "component",
+    "expected_canonical_name": "Checkout Service",
+    "reference": "Checkout Service was first modified to call Payments Gateway to charge the customer once an order is placed, then modified again to also emit a refund event when a customer requests a refund."
   }
 ]

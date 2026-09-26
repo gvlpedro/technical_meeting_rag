@@ -111,6 +111,13 @@ class GoldEvolution(Base):
     source_adr_version: Mapped[int] = mapped_column(Integer, nullable=False)
     authored_by: Mapped[str] = mapped_column(String, nullable=False, server_default="")
     ingestion_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    # NULL means this is still the current version. `persist_entity_version` closes the
+    # previous row's `valid_to` (to the new row's `ingestion_date`) the instant a newer version
+    # of the same entity is inserted — never touched afterward. This is what lets a caller ask
+    # "what was true on date X" without a maintained cache: `ingestion_date <= X AND (valid_to
+    # IS NULL OR valid_to > X)` picks at most one row per entity, since these windows never
+    # overlap by construction. See `.tmp/improve_timeline_questions_and_linage.md` §2.1.
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True, index=True, default=None)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     search_vector: Mapped[str | None] = mapped_column(
         TSVECTOR,

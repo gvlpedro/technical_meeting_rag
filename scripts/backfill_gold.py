@@ -33,7 +33,15 @@ from db.session import async_session_factory
 
 async def main(source_component: str | None, force: bool) -> None:
     async with async_session_factory() as session:
-        query = select(SilverDocument)
+        # Ordered by ingestion_date, not just left to whatever order Postgres happens to
+        # return rows in: `persist_entity_version` now closes a superseded row's `valid_to` to
+        # whatever `ingestion_date` this loop hands it next, assuming version order tracks date
+        # order. Processing an older meeting after a newer one (e.g. two source_components
+        # backfilled out of chronological order) would otherwise close `valid_to` to a date
+        # earlier than the row's own `ingestion_date` — a broken window for
+        # `current_gold_state_as_of` from then on. See
+        # `.tmp/improve_timeline_questions_and_linage.md` §2.1.
+        query = select(SilverDocument).order_by(SilverDocument.ingestion_date, SilverDocument.version)
         if source_component:
             query = query.where(SilverDocument.source_component == source_component)
         docs = (await session.execute(query)).scalars().all()

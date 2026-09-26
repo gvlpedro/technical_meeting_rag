@@ -12,6 +12,7 @@ Nothing here issues a session token. Instead, the frontend just holds
 
 import asyncio
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -531,12 +532,66 @@ def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
     return f"{lines}\n{question}"
 
 
+# Matches a reference to one SPECIFIC numbered version ("version 1", "v4", "v.2") — deliberately
+# NOT just the bare word "version" (that alone would hijack an ordinary "what version is X on"
+# question, which the normal top-k path with its `[latest version]` tag already answers fine).
+_SPECIFIC_VERSION_PATTERN = re.compile(r"\bv(?:ersion)?\.?\s*(\d+)\b", re.IGNORECASE)
+
+
+async def _answer_specific_version_question(
+    db: AsyncSession, tenant: str, request: ChatRequest, history: list[tuple[str, str]]
+) -> ChatResponse | None:
+    """Handles "what were X's facts in version N" — a real, reported gap: `top_k_gold_evolution`
+    only ever returns the LATEST version per entity (by design, for "current state" questions),
+    so a question pinned to an explicit past version got answered from the wrong version's data
+    with no way to reach the right one, even though `entity_history` already had it. This is
+    also not what `is_evolution_question`'s full-narrative path is for — that narrates the whole
+    timeline; this answers one specific, named snapshot the same way `answer_question` answers
+    any other row, `_payload_detail` (input/output contracts, dependencies) included.
+
+    Returns `None` (never a `ChatResponse`) whenever this isn't actually a pinned-version
+    question — no version number named, or no known entity named — so `chat` falls through to
+    its normal branches exactly as before."""
+    version_match = _SPECIFIC_VERSION_PATTERN.search(request.question)
+    if version_match is None:
+        return None
+    match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
+    if match is None:
+        return None
+
+    entity_type, entity_id, matched_alias = match
+    requested_version = int(version_match.group(1))
+    versions = await gold.entity_history(db, entity_type, entity_id, tenant=tenant)
+    target_row = next((row for row in versions if row.version == requested_version), None)
+    if target_row is None:
+        available = ", ".join(str(row.version) for row in versions) or "none"
+        return ChatResponse(
+            answer=f"{matched_alias} has no version {requested_version}. Versions on record: {available}.",
+            retrieved=[],
+        )
+
+    latest = await gold.latest_versions(db, [target_row])
+    result = await gold.answer_question(db, request.question, [target_row], latest, history=history)
+    retrieved = [
+        {
+            "entity_type": target_row.entity_type,
+            "canonical_name": target_row.canonical_name,
+            "version": target_row.version,
+            "operation": target_row.operation,
+        }
+    ]
+    return ChatResponse(answer=result.answer, retrieved=retrieved, citations=[c.model_dump() for c in result.citations])
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) -> ChatResponse:
     """Answers a chat question from Gold:
 
     - Anything `Publish` has ever persisted for this tenant is queryable right away — no
       separate approval step.
+    - If the question pins one explicit version number ("...in version 1", "v4") to a known
+      entity, it answers from exactly that version's own row — never the latest — see
+      `_answer_specific_version_question`.
     - If the question names a known component/contract and asks about its history, it
       returns that entity's full version history in chronological order, instead of a
       similarity search.
@@ -552,8 +607,24 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     history = [(m.role, m.content) for m in request.history]
     contextualized_question = _contextualize_question(request.question, request.history)
 
-    if gold.is_evolution_question(contextualized_question):
-        match = await gold.find_entity_by_name_in_text(db, contextualized_question, tenant=tenant)
+    # Checked first, and only against `request.question` (never `contextualized_question`, same
+    # reasoning as the evolution check right below): a question pinned to one explicit version
+    # number is unambiguous on its own and must never depend on what an earlier turn said.
+    specific_version_response = await _answer_specific_version_question(db, tenant, request, history)
+    if specific_version_response is not None:
+        return specific_version_response
+
+    # Deliberately `request.question` here, never `contextualized_question`: both checks below
+    # must react only to what THIS turn actually asks. `contextualized_question` prefixes prior
+    # turns (including the assistant's own past answers) onto the text, so a marker word like
+    # "historically" or "timeline" appearing in an EARLIER reply would otherwise flip
+    # `is_evolution_question` to True for an unrelated follow-up, and `find_entity_by_name_in_text`
+    # (longest-alias-wins) could then match some OTHER entity named in that stale history instead
+    # of the one this question actually names — a real, reproduced bug, not a hypothetical one.
+    # `contextualized_question` still feeds the embedding/lexical retrieval below, where
+    # resolving a pronoun-style follow-up ("and who approved it?") is exactly the point.
+    if gold.is_evolution_question(request.question):
+        match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
         if match is not None:
             entity_type, entity_id, matched_alias = match
             rows = await gold.entity_history(db, entity_type, entity_id, tenant=tenant)

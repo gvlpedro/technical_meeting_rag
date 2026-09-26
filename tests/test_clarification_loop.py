@@ -1226,6 +1226,14 @@ async def test_gold_data_contract_resolves_producer_and_consumer_to_component_en
         assert contract.payload["consumer_id"] == loyalty.entity_id
         # Both ids are real, live component entities, not made-up strings.
         assert contract.payload["producer_id"] in {r.entity_id for r in rows if r.entity_type == "component"}
+
+        # `classify_contract_directions` (`.tmp/improve_timeline_questions_and_linage.md` §2.2):
+        # the producer sees it as output, the consumer sees it as input — from this same ADR's
+        # own extraction, no query needed.
+        assert checkout.payload["output_contract_ids"] == [contract.entity_id]
+        assert checkout.payload["input_contract_ids"] == []
+        assert loyalty.payload["input_contract_ids"] == [contract.entity_id]
+        assert loyalty.payload["output_contract_ids"] == []
     finally:
         await _cleanup_date(DATE_GOLD_CONTRACT_PRODUCER_CONSUMER_IDS)
 

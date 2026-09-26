@@ -255,4 +255,4 @@ MCP para cada salida, para agentes internos
 # Próximos pasos
 
 * Solo hay dos usuarios incluidos; esto debería evolucionar para gestionar múltiples usuarios y una arquitectura multi-tenant.
-* Resolver los límites de la API de Anthropic ""You have reached your specified API usage limits. You will regain access" ¿?
+* Reducir costes de las llamadas a LLM poniendo una cache de embeddings y respuestas

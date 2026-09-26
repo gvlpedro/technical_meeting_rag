@@ -682,10 +682,12 @@ async def _persist_components(
     session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date, tenant: str,
     authored_by: str,
 ) -> None:
+    contract_directions = gold.classify_contract_directions(extraction["contracts"], name_to_id)
     for component in extraction["components"]:
         if component["status"] == "unknown":
             continue
 
+        directions = contract_directions.get(component["name"], {"input": set(), "output": set()})
         payload = ComponentPayload(
             dependency_ids=sorted(
                 {name_to_id[n] for n in component.get("dependency_names", []) if n in name_to_id}
@@ -693,6 +695,8 @@ async def _persist_components(
             contract_ids=sorted(
                 {name_to_id[n] for n in component.get("contract_names", []) if n in name_to_id}
             ),
+            input_contract_ids=sorted(directions["input"]),
+            output_contract_ids=sorted(directions["output"]),
         ).model_dump()
         await gold.persist_entity_version(
             session,
@@ -717,12 +721,15 @@ async def _persist_contracts(
     for contract in extraction["contracts"]:
         if contract["action"] == "unknown":
             continue
+        odcs_spec = gold.parse_odcs_spec(contract.get("odcs_spec", ""))
+        if not odcs_spec:
+            odcs_spec = await gold.latest_odcs_spec(session, name_to_id[contract["name"]], tenant)
         payload = DataContractPayload(
             producer=contract["producer"],
             consumer=contract["consumer"],
             producer_id=name_to_id.get(contract["producer"], ""),
             consumer_id=name_to_id.get(contract["consumer"], ""),
-            odcs_spec=gold.parse_odcs_spec(contract.get("odcs_spec", "")),
+            odcs_spec=odcs_spec,
         ).model_dump()
         await gold.persist_entity_version(
             session,

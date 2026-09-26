@@ -36,10 +36,24 @@ class ComponentPayload(BaseModel):
     """This is the `gold_evolution.payload` shape for `entity_type == "component"`. It holds
     only exact, structural data: `entity_id` references, already resolved by
     `resolve_gold_identity`. It never holds raw names. This shape is small and fully typed,
-    unlike `DataContractPayload` below."""
+    unlike `DataContractPayload` below.
+
+    `dependency_ids` doubles as this component's predecessors — components it depends on,
+    written locally from this same ADR's own extraction. There is no `successor_ids` field:
+    successors are the inverse of `dependency_ids` read across every OTHER component, computed
+    on demand by `agents.stages.gold.service.get_successors`, never stored — see
+    `.tmp/improve_timeline_questions_and_linage.md` §2.4 for why a stored inverse would drift.
+
+    `input_contract_ids`/`output_contract_ids` split `contract_ids` by direction (this component
+    as consumer vs. producer), computed the same way `contract_ids` always has been — from this
+    same ADR's own contract extraction, never a query. `contract_ids` itself stays, unsplit, for
+    rows persisted before this split existed (`.tmp/improve_timeline_questions_and_linage.md`
+    §2.2, §6)."""
 
     dependency_ids: list[str] = []
     contract_ids: list[str] = []
+    input_contract_ids: list[str] = []
+    output_contract_ids: list[str] = []
 
 
 class DataContractPayload(BaseModel):
