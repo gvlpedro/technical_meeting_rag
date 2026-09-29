@@ -146,6 +146,10 @@ sistema de usuarios real detrás del login — ver la sección "Frontend usage" 
 
 ![Ciclo de agentes de LangGraph: carga Bronze, genera y clasifica preguntas, si falta algo por responder un humano contesta, el Actor redacta el ADR, el Critic lo revisa, y si queda una afirmación sin verificar se vuelve a preguntar al humano una vez; si no, se publica en Silver y Gold.](doc/dataviz_langgraph_cycle.svg)
 
+Abre [`presentation.html`](presentation.html) directamente en el navegador para una presentación
+de ~3 minutos del proyecto (sin dependencias, sin servidor) — pensada para grabar como vídeo de
+demo, navegable con las flechas del teclado.
+
 ### Capas
 
 Una ejecución de LangGraph lleva un batch de transcripciones a través de las tres capas — Gold

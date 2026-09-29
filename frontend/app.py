@@ -94,6 +94,12 @@ def _login_screen() -> None:
     if submitted:
         try:
             st.session_state.user = api_client.login(username, password)
+            # `chat_history`/`chat_diagrams` live in `st.session_state`, keyed generically (not
+            # per-username) — without this, logging out and back in as a different user on the
+            # same browser tab would still show the previous user's chat messages, since
+            # `st.session_state` survives a plain `del st.session_state.user` / re-login cycle.
+            st.session_state.chat_history = []
+            st.session_state.chat_diagrams = {}
             st.rerun()
         except requests.HTTPError:
             st.error("Invalid username or password.")

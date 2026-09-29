@@ -61,10 +61,10 @@ class Settings(BaseSettings):
     # See the "Frontend usage" section in GETTING_STARTED.md. Each login maps to its own tenant. The tenant
     # is what actually keeps data separate
     frontend_users: list[FrontendUser] = [
-        FrontendUser(username="pepe", password="1234", tenant="lidr"),
         FrontendUser(username="peter", password="123", tenant="lotus"),
         FrontendUser(username="martin", password="123", tenant="lotus"),
         FrontendUser(username="mike", password="444", tenant="ibm"),
+        FrontendUser(username="fer", password="1234", tenant="trial"),
     ]
 
 

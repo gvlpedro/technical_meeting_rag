@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Architecture evolution RAG — Presentación</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root {
+    --bg: #0f1115;
+    --bg-alt: #15181f;
+    --text: #f1f3f5;
+    --text-muted: #9aa1ac;
+    --accent: #8b5cf6;
+    --accent-text: #a99bd1;
+    --card: #1b1f28;
+    --border: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", system-ui, ui-sans-serif, Roboto, Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+  .deck { position: relative; width: 100vw; height: 100vh; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6vh 10vw;
+    opacity: 0;
+    transition: opacity .35s ease;
+  }
+  .slide.active { display: flex; opacity: 1; }
+  .kicker {
+    font-size: clamp(14px, 1.4vw, 18px);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent-text);
+    font-weight: 600;
+    margin-bottom: 18px;
+  }
+  h1 {
+    font-size: clamp(36px, 5.2vw, 72px);
+    line-height: 1.08;
+    margin: 0 0 18px 0;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+  }
+  h1 .accent { color: var(--accent); }
+  h2 {
+    font-size: clamp(24px, 3vw, 40px);
+    font-weight: 700;
+    margin: 0 0 28px 0;
+    color: var(--text);
+  }
+  p.lead {
+    font-size: clamp(18px, 2.1vw, 28px);
+    color: var(--text-muted);
+    max-width: 46ch;
+    line-height: 1.5;
+    margin: 0;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols, 3), 1fr);
+    gap: 22px;
+    margin-top: 10px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 24px;
+  }
+  .card .step {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    background: rgba(139, 92, 246, .12);
+    border-radius: 999px;
+    padding: 3px 10px;
+    margin-bottom: 12px;
+  }
+  .card h3 {
+    font-size: clamp(17px, 1.6vw, 21px);
+    margin: 0 0 8px 0;
+  }
+  .card p {
+    font-size: clamp(14px, 1.15vw, 16px);
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+  code, .pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: rgba(139, 92, 246, .14);
+    color: var(--accent-text);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: .88em;
+  }
+  ul.points { list-style: none; padding: 0; margin: 18px 0 0 0; }
+  ul.points li {
+    font-size: clamp(17px, 1.7vw, 24px);
+    color: var(--text);
+    padding-left: 30px;
+    position: relative;
+    margin-bottom: 16px;
+    line-height: 1.4;
+  }
+  ul.points li::before {
+    content: "→";
+    color: var(--accent);
+    position: absolute;
+    left: 0;
+    font-weight: 700;
+  }
+  .stack-row {
+    display: flex; gap: 14px; flex-wrap: wrap; margin-top: 22px;
+  }
+  .stack-row span {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: clamp(14px, 1.2vw, 17px);
+    border: 1px solid var(--border);
+    background: var(--card);
+    padding: 8px 16px;
+    border-radius: 10px;
+    color: var(--text);
+  }
+  .slide.split {
+    flex-direction: row;
+    align-items: center;
+    gap: 4vw;
+  }
+  .split-left {
+    flex: 0 0 42%;
+    max-width: 42%;
+  }
+  .split-left .grid { margin-top: 16px; }
+  .split-left .card { padding: 16px 18px; }
+  .split-left .card p { display: none; }
+  .split-right {
+    flex: 1;
+    height: 82vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  .split-right img {
+    max-height: 100%;
+    max-width: 100%;
+    width: 100%;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 16px;
+    padding: 20px 26px;
+  }
+
+  /* Title + closing slides */
+  .center { text-align: center; align-items: center; }
+  .center p.lead { max-width: 60ch; margin-left: auto; margin-right: auto; }
+  .big-final {
+    font-size: clamp(48px, 8vw, 110px);
+    font-weight: 800;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+
+  /* Chrome: progress + counter */
+  .progress {
+    position: fixed; left: 0; bottom: 0; height: 4px;
+    background: var(--accent); width: 0%;
+    transition: width .3s ease; z-index: 5;
+  }
+  .counter {
+    position: fixed; right: 22px; bottom: 16px;
+    font-size: 13px; color: var(--text-muted);
+    font-family: ui-monospace, monospace; z-index: 5;
+  }
+  .brand {
+    position: fixed; left: 22px; bottom: 16px;
+    font-size: 13px; color: var(--text-muted);
+    font-family: ui-monospace, monospace; z-index: 5;
+    letter-spacing: .05em;
+  }
+
+  /* Notes overlay (press N) */
+  .notes-overlay {
+    position: fixed; inset: auto 0 0 0; max-height: 40vh; overflow-y: auto;
+    background: rgba(10, 11, 15, .96); border-top: 1px solid var(--border);
+    padding: 18px 10vw; display: none; z-index: 10;
+    font-size: 16px; line-height: 1.6; color: #d7dae0;
+  }
+  .notes-overlay.show { display: block; }
+  .notes-overlay .timing {
+    display: inline-block; color: var(--accent-text); font-weight: 700;
+    font-family: ui-monospace, monospace; margin-right: 10px;
+  }
+  .hint {
+    position: fixed; top: 16px; right: 22px; font-size: 12px; color: var(--text-muted);
+    z-index: 5; font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+  <!-- 1 -->
+  <section class="slide center" data-notes="~5s — Di el nombre del proyecto y deja un segundo de silencio antes de arrancar. Este silencio se recorta en postproducción, no pasa nada si dudas.">
+    <div class="kicker">Meeting transcripts → living architecture</div>
+    <h1>Architecture evolution <span class="accent">RAG</span></h1>
+    <p class="lead">De transcripciones de reuniones a una arquitectura viva, versionada y consultable por chat.</p>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide" data-notes="~15s — El problema: las decisiones de arquitectura se toman hablando, y esa conversación se pierde. Nadie relee un acta de hace seis meses para saber por qué un contrato de datos tiene la forma que tiene.">
+    <div class="kicker">El problema</div>
+    <h2>Las decisiones de arquitectura se hablan… y se pierden</h2>
+    <ul class="points">
+      <li>Una reunión decide cambiar un contrato de datos, pero el <em>porqué</em> se queda en el audio</li>
+      <li>Seis meses después nadie sabe si ese campo era opcional desde el principio</li>
+      <li>El único "registro" real es la memoria de quien estaba en la sala</li>
+    </ul>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide" data-notes="~20s — La idea central: cada transcripción se convierte automáticamente en un ADR, y ese ADR alimenta una base de conocimiento (Gold) que registra cada componente y cada contrato, versión a versión, para siempre.">
+    <div class="kicker">La idea</div>
+    <h2>Cada reunión se convierte en un registro permanente</h2>
+    <ul class="points">
+      <li>Subes la transcripción → el sistema genera un <code>ADR</code> (Architecture Decision Record)</li>
+      <li>Cada componente y cada contrato de datos queda versionado, nunca sobreescrito</li>
+      <li>El historial completo — no solo el estado actual — queda consultable</li>
+    </ul>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide" data-notes="~15s — El resultado: un chat que no solo te dice cómo está tu arquitectura HOY, sino que puede responder con precisión sobre cualquier momento de su evolución — 'cómo era este contrato en la v1' es una pregunta con respuesta exacta, no una alucinación.">
+    <div class="kicker">El resultado</div>
+    <h2>Un chat que conoce toda la evolución, no solo el presente</h2>
+    <p class="lead">"¿Cómo era este contrato en la versión 1?" tiene una respuesta exacta — anclada a la fila real de esa versión, no inventada.</p>
+  </section>
+
+  <!-- 5: architecture section header -->
+  <section class="slide center" data-notes="~5s — Frase puente corta antes de entrar en la arquitectura. Aquí puedes respirar y cambiar de ritmo.">
+    <div class="kicker">Segunda parte</div>
+    <h1>Cómo funciona <span class="accent">por dentro</span></h1>
+  </section>
+
+  <!-- 6: medallion + system diagram + stack -->
+  <section class="slide split" data-notes="~26s — Arquitectura Medallion: Bronze es la transcripción cruda tal cual se sube. Silver es el documento estructurado y versionado (el ADR generado). Gold son las entidades extraídas de ese ADR — componentes y contratos — con su propio historial independiente. Este es el diagrama real del sistema, y el stack sobre el que está construido.">
+    <div class="split-left">
+      <div class="kicker">Pipeline de datos</div>
+      <h2>Bronze → Silver → Gold</h2>
+      <div class="grid" style="--cols:1">
+        <div class="card">
+          <span class="step">Bronze</span>
+          <h3>Transcripción cruda</h3>
+        </div>
+        <div class="card">
+          <span class="step">Silver</span>
+          <h3>ADR estructurado</h3>
+        </div>
+        <div class="card">
+          <span class="step">Gold</span>
+          <h3>Entidades versionadas</h3>
+        </div>
+      </div>
+      <div class="stack-row">
+        <span>FastAPI</span>
+        <span>LangGraph</span>
+        <span>Postgres + pgvector</span>
+        <span>Streamlit</span>
+      </div>
+    </div>
+    <div class="split-right">
+      <img src="doc/dataviz_architecture_general.svg" alt="Arquitectura general: el usuario sube un transcript o pregunta al Frontend, que llama al Backend, que orquesta LangGraph. LangGraph llama al LLM y escribe en Postgres siguiendo el patrón medallion: Bronze, luego Silver, luego Gold. El Chat lee directamente de Gold.">
+    </div>
+  </section>
+
+  <!-- 7: clarification loop + agent graph -->
+  <section class="slide split" data-notes="~24s — El bucle de clarificación con LangGraph: patrón Actor-Crítico-Jefe. El sistema genera un borrador, se autocritica, y solo le pregunta al humano lo que de verdad no puede inferir del contexto — no interrumpe con preguntas triviales. Este es el grafo real de agentes.">
+    <div class="split-left">
+      <div class="kicker">Generación del ADR</div>
+      <h2>El sistema se corrige antes de preguntarte</h2>
+      <ul class="points">
+        <li><strong>Actor</strong> — redacta un primer borrador del ADR</li>
+        <li><strong>Crítico</strong> — señala huecos o ambigüedades reales</li>
+        <li><strong>Jefe</strong> — decide qué se infiere y qué te pregunta a ti</li>
+      </ul>
+    </div>
+    <div class="split-right">
+      <img src="doc/dataviz_langgraph_cycle.svg" alt="Ciclo de agentes de LangGraph: carga Bronze, genera y clasifica preguntas, si falta algo por responder un humano contesta, el Actor redacta el ADR, el Critic lo revisa, y si queda una afirmación sin verificar se vuelve a preguntar al humano una vez; si no, se publica en Silver y Gold.">
+    </div>
+  </section>
+
+  <!-- 8: gold model -->
+  <section class="slide" data-notes="~18s — Gold es append-only: nunca se sobreescribe una versión. Cada entidad se compara por hash contra la última versión conocida y se decide si es new, modified, unchanged o removed — así el historial completo queda intacto y auditable.">
+    <div class="kicker">El modelo de datos</div>
+    <h2>Gold: un historial que nunca se sobreescribe</h2>
+    <p class="lead">Cada componente o contrato se compara con su última versión — <code>new</code> · <code>modified</code> · <code>unchanged</code> · <code>removed</code> — y cada cambio real queda como una fila nueva, nunca como una edición.</p>
+  </section>
+
+  <!-- 9: chat / RAG -->
+  <section class="slide" data-notes="~22s — El chat usa varias técnicas de RAG: verificación de citas (cada afirmación se contrasta contra la fuente antes de responder), corrective RAG, expansión de consultas, y respuestas ancladas a una versión exacta cuando preguntas por el pasado.">
+    <div class="kicker">Consulta</div>
+    <h2>El chat no solo recupera — verifica</h2>
+    <div class="grid" style="--cols:2">
+      <div class="card"><h3>Verificación de citas</h3><p>Cada afirmación se contrasta contra la fila real de Gold antes de entregarse.</p></div>
+      <div class="card"><h3>Corrective RAG</h3><p>Si la primera recuperación no es suficiente, el sistema reformula y vuelve a buscar.</p></div>
+      <div class="card"><h3>Expansión de consultas</h3><p>Una pregunta ambigua se amplía para cubrir sinónimos y entidades relacionadas.</p></div>
+      <div class="card"><h3>Anclaje a versión</h3><p>"¿Cómo era esto en la v1?" resuelve contra esa fila exacta, no contra el estado actual.</p></div>
+    </div>
+  </section>
+
+  <!-- 12: time to demo -->
+  <section class="slide center" data-notes="~5s — Pausa aquí. Este es el corte limpio hacia la demo en vivo — en edición, aquí es donde empalmas con la grabación de pantalla de la app.">
+    <div class="kicker">Fin de la presentación</div>
+    <div class="big-final">Time to demo</div>
+  </section>
+
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="counter" id="counter"></div>
+<div class="brand">technical_meeting_rag</div>
+<div class="hint">← → avanzar · N notas · F pantalla completa</div>
+<div class="notes-overlay" id="notes"></div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const progress = document.getElementById('progress');
+  const counter = document.getElementById('counter');
+  const notesBox = document.getElementById('notes');
+  let i = 0;
+  let notesVisible = false;
+
+  function render() {
+    slides.forEach((s, idx) => s.classList.toggle('active', idx === i));
+    progress.style.width = ((i + 1) / slides.length * 100) + '%';
+    counter.textContent = (i + 1) + ' / ' + slides.length;
+    const note = slides[i].dataset.notes || '';
+    const parts = note.match(/^(~\S+)\s*—\s*(.*)$/);
+    if (parts) {
+      notesBox.innerHTML = '<span class="timing">' + parts[1] + '</span>' + parts[2];
+    } else {
+      notesBox.textContent = note;
+    }
+  }
+
+  function go(delta) {
+    i = Math.max(0, Math.min(slides.length - 1, i + delta));
+    render();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(e.key)) { go(1); e.preventDefault(); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { go(-1); e.preventDefault(); }
+    else if (e.key === 'Home') { i = 0; render(); }
+    else if (e.key === 'End') { i = slides.length - 1; render(); }
+    else if (e.key.toLowerCase() === 'n') {
+      notesVisible = !notesVisible;
+      notesBox.classList.toggle('show', notesVisible);
+    } else if (e.key.toLowerCase() === 'f') {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.notes-overlay')) return;
+    const x = e.clientX / window.innerWidth;
+    go(x < 0.5 ? -1 : 1);
+  });
+
+  render();
+</script>
+</body>
+</html>

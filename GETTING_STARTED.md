@@ -72,19 +72,19 @@ activo) monitorizar resultados de tests y coste de LLM.
 
 No hay un sistema de usuarios real — `frontend_users` en `app/config.py` es un listado fijo y
 hardcodeado. Cada login se asocia a su propio **tenant**, que es lo que realmente aísla los
-datos: un fichero que sube `pepe`, o un ADR que publica `pepe`, es invisible para `peter`, y
+datos: un fichero que sube `fer`, o un ADR que publica `fer`, es invisible para `peter`, y
 viceversa.
 
 | Usuario  | Contraseña | Tenant  | proósito                               |
 | -------- | ---------- | ------- |----------------------------------------|
-| `pepe`   | `1234`     | `lidr`  | Trabajar en un tenant vacío            |
+| `fer`    | `1234`     | `trial` | Trabajar en un tenant vacío            |
 | `peter`  | `123`      | `lotus` | Se trabaja con una arquitectura simple |
 | `martin` | `123`      | `lotus` | Se trabaja con arquitectura simple (comparte tenant con `peter`) |
 | `mike`   | `444`      | `ibm`   | Se trabaja con un arquitectura compleja |
 
 `martin` comparte tenant con `peter` (`lotus`), así que los dos ven y editan exactamente los
-mismos datos — a diferencia de `pepe` y `mike`, cada uno aislado en su propio tenant separado
-(`lidr` y `ibm` respectivamente).
+mismos datos — a diferencia de `fer` y `mike`, cada uno aislado en su propio tenant separado
+(`trial` y `ibm` respectivamente).
 
 Un único comando arranca todo — Postgres, el backend y el frontend, todo en Docker:
 
@@ -110,7 +110,7 @@ hacia él con `BACKEND_URL`:
 BACKEND_URL=http://localhost:8010 make frontend
 ```
 
-Inicia sesión como `pepe`/`1234` o `peter`/`123`, y luego:
+Inicia sesión como `fer`/`1234` o `peter`/`123`, y luego:
 
 1. **Input transcription** — escribe algo directamente en la caja de "Prompt", sube un `.txt`
    o `.md` para una reunión, o ambas cosas, y pulsa "Process and clarify" (se activa en cuanto
