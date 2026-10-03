@@ -44,6 +44,7 @@ from agents.stages.adr_generation.service import (
     SUGGEST_INFO_CORRECTION_MESSAGE,
     adr_drops_suggest_info_content,
     adr_has_placeholder_leak,
+    fix_diagram_class_references,
     strip_diagram_colors,
 )
 from agents.stages.architecture_questions.service import (
@@ -131,6 +132,17 @@ def _downgrade_claim(content: str, claim: str) -> str:
         if not _is_inside_code_fence(content, index):
             return content[:index] + marked + content[index + len(claim) :]
         search_from = index + 1
+
+
+def strip_downgrade_markers(content: str) -> str:
+    """Removes every `_DOWNGRADE_MARKER` from `content`, restoring each claim to its own
+    original wording. `_DOWNGRADE_MARKER` is an internal review annotation — `boss_decide`
+    flagging a claim the Critic could not verify against the transcript — not something a
+    published ADR should carry permanently once a human has reviewed and accepted it via
+    "Publish" (`app.routers.frontend.finalize_document`). The marker's own leading space
+    (`" **[unknown — flagged by review]**"`) means a plain substring removal leaves no dangling
+    space or double space behind."""
+    return content.replace(_DOWNGRADE_MARKER, "")
 
 
 async def load_bronze(state: SilverState) -> dict:
@@ -369,7 +381,7 @@ async def synthesize_document(state: SilverState) -> dict:
                     retry_messages, temperature=SHALLOW_RETRY_TEMPERATURE, reasoning_effort="none"
                 )
                 content = retry_response.choices[0].message.content
-            documents[source] = content
+            documents[source] = fix_diagram_class_references(content)
 
     return {
         "documents": documents,
@@ -640,8 +652,12 @@ async def resolve_gold_identity(state: SilverState) -> dict:
             unknown_component_names = {c["name"] for c in extraction["components"] if c["status"] == "unknown"}
             unknown_contract_names = {c["name"] for c in extraction["contracts"] if c["action"] == "unknown"}
 
+            # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components
+            # or contracts at all. Skipping both here too is the defensive backstop for a model
+            # that disobeys that instruction anyway — see the identical comment in
+            # `agents.stages.gold.service.extract_and_persist_gold_facts`, which this mirrors.
             for component in extraction["components"]:
-                if component["status"] == "unknown":
+                if component["status"] in ("unknown", "unchanged"):
                     continue
                 await gold.resolve_and_alias(
                     session, "component", component["name"], name_to_id, source, version, tenant=state["tenant"]
@@ -660,7 +676,7 @@ async def resolve_gold_identity(state: SilverState) -> dict:
                     )
 
             for contract in extraction["contracts"]:
-                if contract["action"] == "unknown":
+                if contract["action"] in ("unknown", "unchanged"):
                     continue
                 await gold.resolve_and_alias(
                     session, "data_contract", contract["name"], name_to_id, source, version, tenant=state["tenant"]
@@ -681,27 +697,42 @@ async def resolve_gold_identity(state: SilverState) -> dict:
 async def _persist_components(
     session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date, tenant: str,
     authored_by: str,
-) -> None:
+) -> tuple[set[str], dict[str, dict[str, set[str]]]]:
+    """Returns `(mentioned_component_ids, contract_directions_by_component_id)` —
+    `persist_gold_evolution` passes both straight into `gold.apply_contract_ripple_effect`,
+    the same way `agents.stages.gold.service.extract_and_persist_gold_facts` does."""
     contract_directions = gold.classify_contract_directions(extraction["contracts"], name_to_id)
-    changed_contract_ids = gold.contracts_with_real_changes(extraction["contracts"], name_to_id)
+    contract_directions_by_component_id = {
+        name_to_id[key]: directions
+        for name, directions in contract_directions.items()
+        if (key := gold.memo_key("component", name)) in name_to_id
+    }
+    mentioned_component_ids: set[str] = set()
     for component in extraction["components"]:
-        if component["status"] == "unknown":
+        # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components at
+        # all — this skip is the defensive backstop for a model that disobeys that anyway. See
+        # `gold.apply_contract_ripple_effect` for what now covers a genuinely-affected component
+        # this skip lets through un-mentioned.
+        if component["status"] in ("unknown", "unchanged"):
             continue
 
         directions = contract_directions.get(component["name"], {"input": set(), "output": set()})
-        # `doc/cicle_evolution.md` "Regla especial", condition 2: a contract this component was
-        # ALREADY associated with (same id, its own input/output list unchanged) can itself
-        # change underneath it this same ADR — that affects the component just as much as its
-        # own payload changing would, so it gets the same "unchanged" -> "modified" correction.
-        status = component["status"]
-        if status == "unchanged" and (directions["input"] | directions["output"]) & changed_contract_ids:
-            status = "modified"
+        entity_id = name_to_id[gold.memo_key("component", component["name"])]
+        mentioned_component_ids.add(entity_id)
         payload = ComponentPayload(
             dependency_ids=sorted(
-                {name_to_id[n] for n in component.get("dependency_names", []) if n in name_to_id}
+                {
+                    name_to_id[key]
+                    for n in component.get("dependency_names", [])
+                    if (key := gold.memo_key("component", n)) in name_to_id
+                }
             ),
             contract_ids=sorted(
-                {name_to_id[n] for n in component.get("contract_names", []) if n in name_to_id}
+                {
+                    name_to_id[key]
+                    for n in component.get("contract_names", [])
+                    if (key := gold.memo_key("data_contract", n)) in name_to_id
+                }
             ),
             input_contract_ids=sorted(directions["input"]),
             output_contract_ids=sorted(directions["output"]),
@@ -709,9 +740,9 @@ async def _persist_components(
         await gold.persist_entity_version(
             session,
             entity_type="component",
-            entity_id=name_to_id[component["name"]],
+            entity_id=entity_id,
             canonical_name=component["name"],
-            operation=status,
+            operation=component["status"],
             narrative=component["narrative"],
             payload=payload,
             source_component=source,
@@ -720,6 +751,7 @@ async def _persist_components(
             tenant=tenant,
             authored_by=authored_by,
         )
+    return mentioned_component_ids, contract_directions_by_component_id
 
 
 async def _persist_contracts(
@@ -727,22 +759,24 @@ async def _persist_contracts(
     authored_by: str,
 ) -> None:
     for contract in extraction["contracts"]:
-        if contract["action"] == "unknown":
+        if contract["action"] in ("unknown", "unchanged"):
             continue
         odcs_spec = gold.parse_odcs_spec(contract.get("odcs_spec", ""))
         if not odcs_spec:
-            odcs_spec = await gold.latest_odcs_spec(session, name_to_id[contract["name"]], tenant)
+            odcs_spec = await gold.latest_odcs_spec(
+                session, name_to_id[gold.memo_key("data_contract", contract["name"])], tenant
+            )
         payload = DataContractPayload(
             producer=contract["producer"],
             consumer=contract["consumer"],
-            producer_id=name_to_id.get(contract["producer"], ""),
-            consumer_id=name_to_id.get(contract["consumer"], ""),
+            producer_id=name_to_id.get(gold.memo_key("component", contract["producer"]), ""),
+            consumer_id=name_to_id.get(gold.memo_key("component", contract["consumer"]), ""),
             odcs_spec=odcs_spec,
         ).model_dump()
         await gold.persist_entity_version(
             session,
             entity_type="data_contract",
-            entity_id=name_to_id[contract["name"]],
+            entity_id=name_to_id[gold.memo_key("data_contract", contract["name"])],
             canonical_name=contract["name"],
             operation=contract["action"],
             narrative=contract["narrative"],
@@ -756,15 +790,37 @@ async def _persist_contracts(
 
 
 async def _persist_architecture(
-    session, extraction: dict, source: str, version: int, ingestion_date, tenant: str, authored_by: str
+    session, extraction: dict, mentioned_component_ids: set[str], source: str, version: int, ingestion_date,
+    tenant: str, authored_by: str,
 ) -> None:
-    """This is scoped per source_component"""
-    # These are sorted for the same reason as ComponentPayload's dependency_ids and
-    # contract_ids above: order must not affect `_entity_hash`
+    """This is scoped per source_component.
+
+    `ArchitecturePayload` is documented as a snapshot of the WHOLE architecture as of this ADR
+    (`agents/stages/gold/schemas.py`), not just what this ADR itself mentions — but `extraction`
+    now only ever holds this ADR's own new/modified/removed entries. Union them with every OTHER
+    live component's own last-known name/dependencies, read straight from `gold_evolution`, so
+    the snapshot stays whole without needing the LLM to re-list everything that already existed
+    untouched. See the identical comment in
+    `agents.stages.gold.service.extract_and_persist_gold_facts`, which this mirrors."""
+    live_components = [
+        row for row in await gold.current_gold_state(session, "component", tenant=tenant) if row.operation != "removed"
+    ]
+    id_to_name = {row.entity_id: row.canonical_name for row in live_components}
+    all_component_names = {c["name"] for c in extraction["components"] if c["status"] != "removed"}
+    all_dependency_names = {
+        dep for c in extraction["components"] if c["status"] != "removed" for dep in c.get("dependency_names", [])
+    }
+    for row in live_components:
+        if row.entity_id in mentioned_component_ids:
+            continue
+        all_component_names.add(row.canonical_name)
+        payload = ComponentPayload.model_validate(row.payload)
+        all_dependency_names.update(id_to_name.get(i, i) for i in payload.dependency_ids)
+
     payload = ArchitecturePayload(
         mermaid_diagram=extraction.get("mermaid_diagram", ""),
-        components=sorted({c["name"] for c in extraction["components"]}),
-        dependencies=sorted({dep for c in extraction["components"] for dep in c.get("dependency_names", [])}),
+        components=sorted(all_component_names),
+        dependencies=sorted(all_dependency_names),
     ).model_dump()
     await gold.persist_entity_version(
         session,
@@ -791,13 +847,26 @@ async def persist_gold_evolution(state: SilverState) -> dict:
             name_to_id = state["gold_entity_ids"].get(source, {})
             tenant = state["tenant"]
             authored_by = extract_authors_line(state["documents"][source])
-            await _persist_components(
+            mentioned_component_ids, contract_directions_by_component_id = await _persist_components(
                 session, extraction, name_to_id, source, version, ingestion_date, tenant, authored_by
             )
             await _persist_contracts(
                 session, extraction, name_to_id, source, version, ingestion_date, tenant, authored_by
             )
-            await _persist_architecture(session, extraction, source, version, ingestion_date, tenant, authored_by)
+            changed_contract_ids = gold.contracts_with_real_changes(extraction["contracts"], name_to_id)
+            await gold.apply_contract_ripple_effect(
+                session,
+                changed_contract_ids=changed_contract_ids,
+                contract_directions_by_component_id=contract_directions_by_component_id,
+                mentioned_component_ids=mentioned_component_ids,
+                source_component=source,
+                source_adr_version=version,
+                ingestion_date=ingestion_date,
+                tenant=tenant,
+            )
+            await _persist_architecture(
+                session, extraction, mentioned_component_ids, source, version, ingestion_date, tenant, authored_by
+            )
         await session.commit()
 
     return {}

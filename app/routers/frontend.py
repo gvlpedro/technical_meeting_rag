@@ -13,6 +13,8 @@ Nothing here issues a session token. Instead, the frontend just holds
 import asyncio
 import json
 import re
+import time
+from collections import defaultdict, deque
 from datetime import date
 from pathlib import Path
 from typing import Literal
@@ -25,7 +27,13 @@ from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.graph import _persist_document_version, _top_questions, build_graph, checkpointer_dsn
+from agents.graph import (
+    _persist_document_version,
+    _top_questions,
+    build_graph,
+    checkpointer_dsn,
+    strip_downgrade_markers,
+)
 from agents.shared import (
     bronze_content_for_source,
     bronze_ingestion_date_for_source,
@@ -37,7 +45,7 @@ from agents.stages import gold
 from agents.stages.adr_critic.prompts import build_critic_prompt
 from agents.stages.adr_critic.schemas import CritiqueResult
 from agents.stages.adr_generation.prompts import build_adr_generation_prompt
-from agents.stages.adr_generation.service import own_previous_architecture_diagram
+from agents.stages.adr_generation.service import fix_diagram_class_references, own_previous_architecture_diagram
 from agents.stages.architecture_questions.service import (
     generate_architecture_questions_for_batch,
     previous_architecture_context,
@@ -85,6 +93,37 @@ def _tenant_for_username(username: str) -> str:
         if user.username == username:
             return user.tenant
     raise HTTPException(status_code=401, detail="Unknown user")
+
+
+# Per-tenant sliding window of `time.monotonic()` call timestamps, for `_enforce_llm_rate_limit`
+# below. In-process only — resets on restart and is not shared across workers. That is fine for
+# today's single `uvicorn` process (`Dockerfile` has no `--workers`); a multi-worker or
+# multi-instance deployment would need this moved to Postgres or Redis instead.
+_llm_call_log: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _enforce_llm_rate_limit(tenant: str) -> None:
+    """Cost/abuse guardrail for the three endpoints that trigger real, paid LLM calls per
+    request (`regenerate_document`, `ask_more_questions`, `finalize_document`): rejects a
+    request once `tenant` has made `settings.max_llm_calls_per_window` of THESE calls within
+    the last `settings.llm_rate_limit_window_seconds`, so a buggy frontend loop or a malicious
+    client can't run up an unbounded LLM bill. Called right after `_tenant_for_username`, before
+    anything else in the request runs — same "reject before reading anything else" shape as the
+    tenant check itself."""
+    now = time.monotonic()
+    window = _llm_call_log[tenant]
+    cutoff = now - settings.llm_rate_limit_window_seconds
+    while window and window[0] < cutoff:
+        window.popleft()
+    if len(window) >= settings.max_llm_calls_per_window:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Too many AI requests for this tenant — max {settings.max_llm_calls_per_window} "
+                f"per {settings.llm_rate_limit_window_seconds}s. Wait and try again."
+            ),
+        )
+    window.append(now)
 
 
 class ConfigResponse(BaseModel):
@@ -249,6 +288,7 @@ async def regenerate_document(
     """Re-drafts one source's ADR"""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
+    _enforce_llm_rate_limit(tenant)
     transcript_text = await bronze_content_for_source(db, tenant, request.source_component)
     if not transcript_text:
         raise HTTPException(
@@ -262,7 +302,7 @@ async def regenerate_document(
 
     messages = build_adr_generation_prompt(transcript_text, qa_pairs, previous_diagram)
     response = await llm_complete(messages)
-    document = response.choices[0].message.content
+    document = fix_diagram_class_references(response.choices[0].message.content)
 
     clarification_items = [
         {"target": request.source_component, "question": qa["question"], "answer": qa["answer"]}
@@ -302,6 +342,7 @@ async def ask_more_questions(request: AskMoreRequest, db: AsyncSession = Depends
     `/transcriptions/regenerate`."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
+    _enforce_llm_rate_limit(tenant)
     transcript_text = await bronze_content_for_source(db, tenant, request.source_component)
     if not transcript_text:
         raise HTTPException(
@@ -375,9 +416,20 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
     """"Publish": persists `content` as this source's next SilverDocument version (a no-op
     if byte-identical to the last one) and immediately runs Gold extraction on it, falling
     back to `BronzeDocument`'s own `ingestion_date` on this source's first-ever publish, or a
-    404 if there's no Bronze content either."""
+    404 if there's no Bronze content either.
+
+    `strip_downgrade_markers` runs on `request.content` first, before it touches anything —
+    the review card the reviewer approved still shows `_DOWNGRADE_MARKER` annotations
+    (`agents.graph.boss_decide`'s "the Critic could not verify this against the transcript"
+    flag), but once a human has reviewed and published, that internal review annotation has
+    done its job and should not become a permanent part of the ADR's own record. Stripping it
+    here, before `_persist_document_version`/the embedding/Gold extraction, means every
+    downstream reader — SilverDocument, SilverChunk, Gold's own extraction LLM call — sees the
+    same clean text a human accepted, never the raw review markup."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
+    _enforce_llm_rate_limit(tenant)
+    content = strip_downgrade_markers(request.content)
     latest_row = (
         await db.execute(
             select(SilverDocument)
@@ -400,7 +452,7 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
             )
 
     version = await _persist_document_version(
-        db, ingestion_date, request.source_component, request.content, [], [], tenant
+        db, ingestion_date, request.source_component, content, [], [], tenant
     )
     await db.commit()
 
@@ -411,21 +463,21 @@ async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends
             SilverChunk.version == version,
         )
     )
-    [embedding] = await asyncio.to_thread(embed, [request.content])
+    [embedding] = await asyncio.to_thread(embed, [content])
     db.add(
         SilverChunk(
             tenant=tenant,
             ingestion_date=ingestion_date,
             source_component=request.source_component,
             version=version,
-            content=request.content,
+            content=content,
             embedding=embedding,
         )
     )
     await db.commit()
 
     await gold.extract_and_persist_gold_facts(
-        db, request.content, request.source_component, version, ingestion_date, tenant=tenant
+        db, content, request.source_component, version, ingestion_date, tenant=tenant
     )
     await db.commit()
 

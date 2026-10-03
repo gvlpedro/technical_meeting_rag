@@ -10,6 +10,7 @@ from agents.stages.adr_generation.prompts import build_adr_generation_prompt
 from agents.stages.adr_generation.service import (
     adr_drops_suggest_info_content,
     adr_has_placeholder_leak,
+    fix_diagram_class_references,
     own_previous_architecture_diagram,
     previous_target_architecture_diagram,
 )
@@ -246,3 +247,228 @@ def test_adr_drops_suggest_info_content_is_false_when_no_clarification_was_sugge
 
 def test_adr_drops_suggest_info_content_is_false_for_no_clarifications_at_all():
     assert adr_drops_suggest_info_content("# ADR\n\nSome content.", []) is False
+
+
+# --- fix_diagram_class_references (agents/stages/adr_generation/service.py) -------------------
+
+
+def _adr_with_target_architecture(diagram_body: str, table_rows: str, *, include_section_2: bool = False) -> str:
+    """Minimal realistic document shape `fix_diagram_class_references` actually keys off:
+    `## 3. Target Architecture`'s own fence, followed eventually by `## 4. Affected
+    Components`'s own table, followed by `## 5. ...` as the table's own end boundary."""
+    section_2 = (
+        "## 2. Previous Architecture\n\n"
+        "```mermaid\n"
+        "flowchart LR\n"
+        '    n0["`Frontend v1`"]\n'
+        "```\n\n"
+        if include_section_2
+        else ""
+    )
+    return (
+        f"{section_2}"
+        "## 3. Target Architecture\n\n"
+        "```mermaid\n"
+        f"{diagram_body}\n"
+        "```\n\n"
+        "**Legend:** 🟢 New · 🟠 Modified · 🔴 Removed\n\n"
+        "## 4. Affected Components\n\n"
+        "| Component | Change | Description |\n"
+        "|-----------|--------|-------------|\n"
+        f"{table_rows}\n"
+        "## 5. Affected Data Contracts\n\n"
+        "No data contract changes were confirmed by the transcript and clarifications for this change.\n"
+    )
+
+
+def test_fix_diagram_class_references_colors_a_component_with_no_class_line_at_all():
+    """Regression test for a real, reported bug — a third real shape of the same underlying
+    failure, distinct from the two below: §4 correctly says `Frontend` is `**MODIFIED**`, but §3
+    has no `class` line for its node at all, and no `classDef nodeModified` either. The model
+    simply never wrote one, despite the fact being right there in its own §4 table."""
+    document = _adr_with_target_architecture(
+        diagram_body=(
+            '    n0["`Frontend v1`"]\n'
+            '    n1["`Backend v1`"]\n'
+            '    n3["`Auth Service v1`"]\n'
+            "    n0 --> n3\n"
+            "    classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22\n"
+            "    class n3 nodeNew"
+        ),
+        table_rows=(
+            "| Auth Service | **NEW** | New component owning signup and login |\n"
+            "| Frontend | **MODIFIED** | Now calls Auth Service directly |\n"
+        ),
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "classDef nodeModified fill:#fb923c,stroke:#c2410c,color:#431407" in fixed
+    assert "class n0 nodeModified" in fixed
+    assert "class n3 nodeNew" in fixed  # the already-correct line for Auth Service survives
+
+
+def test_fix_diagram_class_references_ignores_a_class_line_naming_a_label_instead_of_an_id():
+    """Two real, reported variants of a second failure mode — the model named a node by its own
+    label instead of its id (`class ia-service nodeNew` / `class frontend nodeModified`, and
+    separately `class backend v1 nodeModified`, the label WITH its version). This function no
+    longer tries to read or repair those lines at all — it rebuilds §3's styling from §4 from
+    scratch, so whatever shape the model's own mistake took here is simply discarded."""
+    document = _adr_with_target_architecture(
+        diagram_body=(
+            '    n0["`frontend v1`"]\n'
+            '    n1["`backend v1`"]\n'
+            '    n2["`ia-service`"]\n'
+            "    n0 --> n1\n"
+            "    n0 --> n2\n"
+            "    classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22\n"
+            "    class ia-service nodeNew\n"
+            "    class backend v1 nodeModified"
+        ),
+        table_rows=(
+            "| ia-service | **NEW** | A new chat service |\n"
+            "| backend | **MODIFIED** | Now calls ia-service |\n"
+        ),
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "class n2 nodeNew" in fixed
+    assert "class n1 nodeModified" in fixed
+    assert "class ia-service" not in fixed
+    assert "class backend v1" not in fixed
+
+
+def test_fix_diagram_class_references_fixes_a_classdef_declared_for_the_wrong_class_only():
+    """A `class` line pointing at a real node id is still worth nothing if NEITHER
+    `classDef nodeModified ...` nor `classDef nodeNew ...` was ever declared — confirmed live.
+    Since this function rebuilds styling from §4 rather than reading what the model wrote, the
+    missing-`classDef` shape of the bug collapses into the same fix as every other shape."""
+    document = _adr_with_target_architecture(
+        diagram_body=(
+            '    n0["`Frontend v2`"]\n'
+            '    n1["`Backend v2`"]\n'
+            '    n1 --> n5["`Order Placed`"]'
+        ),
+        table_rows=(
+            "| Backend | **MODIFIED** | Extended to support checkout |\n"
+            "| Order Placed | **NEW** | Event published on checkout |\n"
+        ),
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "classDef nodeModified fill:#fb923c,stroke:#c2410c,color:#431407" in fixed
+    assert "classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22" in fixed
+    assert "class n1 nodeModified" in fixed
+    assert "class n5 nodeNew" in fixed
+
+
+def test_fix_diagram_class_references_groups_multiple_nodes_of_the_same_class_on_one_line():
+    """The prompt's own example groups same-status nodes on one `class` line
+    (`class CDS,RNS nodeNew`) — a rebuilt diagram must do the same, not one `class` line per
+    node."""
+    document = _adr_with_target_architecture(
+        diagram_body=(
+            '    n0["`Checkout Service v1`"]\n'
+            '    n1["`Fraud Scorer v1`"]\n'
+            '    n2["`Notifications v1`"]'
+        ),
+        table_rows=(
+            "| Fraud Scorer | **NEW** | Scores checkout risk |\n"
+            "| Notifications | **NEW** | Sends checkout alerts |\n"
+        ),
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "class n1,n2 nodeNew" in fixed
+    assert fixed.count("classDef nodeNew") == 1
+
+
+def test_fix_diagram_class_references_colors_a_removed_node():
+    document = _adr_with_target_architecture(
+        diagram_body='    n0["`Frontend v1`"]\n    n1["`Legacy Cache v3`"]',
+        table_rows="| Legacy Cache | **REMOVED** | Decommissioned |\n",
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "classDef nodeRemoved fill:#f87171,stroke:#b91c1c,color:#450a0a,stroke-dasharray: 5 5" in fixed
+    assert "class n1 nodeRemoved" in fixed
+
+
+def test_fix_diagram_class_references_handles_plain_bracket_labels_too():
+    """The model does not always reproduce Gold's backtick-label style — with no previous
+    diagram to reproduce, it writes plain `NodeId[Label]` nodes instead."""
+    document = _adr_with_target_architecture(
+        diagram_body="    CheckoutService[Checkout Service] --> PaymentGateway[Payment Gateway]",
+        table_rows="| Payment Gateway | **NEW** | Processes card payments |\n",
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "class PaymentGateway nodeNew" in fixed
+
+
+def test_fix_diagram_class_references_skips_a_component_not_resolvable_in_the_diagram():
+    """A §4 name that matches no node in §3's own diagram is not something this function can
+    safely guess at — it is silently skipped, never invented."""
+    document = _adr_with_target_architecture(
+        diagram_body='    n0["`Frontend v1`"]',
+        table_rows="| Backend | **MODIFIED** | Not actually drawn in this diagram |\n",
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "classDef" not in fixed
+    assert "class n0" not in fixed
+
+
+def test_fix_diagram_class_references_is_a_noop_when_section_4_has_no_qualifying_row():
+    document = _adr_with_target_architecture(
+        diagram_body='    n0["`Frontend v1`"]',
+        table_rows="",
+    )
+    assert fix_diagram_class_references(document) == document
+
+
+def test_fix_diagram_class_references_is_a_noop_with_no_section_3_at_all():
+    assert fix_diagram_class_references("# ADR\n\nNo architecture sections here at all.") == (
+        "# ADR\n\nNo architecture sections here at all."
+    )
+
+
+def test_fix_diagram_class_references_never_touches_section_2():
+    """§2 Previous Architecture must never carry a color (a separate, already-enforced rule —
+    `strip_diagram_colors`) — this function does not even look at §2's own fence; it only ever
+    reads and rewrites §3's."""
+    document = _adr_with_target_architecture(
+        diagram_body='    n0["`Frontend v1`"]\n    n1["`Backend v2`"]',
+        table_rows="| Backend | **MODIFIED** | Extended |\n",
+        include_section_2=True,
+    )
+    fixed = fix_diagram_class_references(document)
+    section_2 = fixed[fixed.find("## 2.") : fixed.find("## 3.")]
+    assert "classDef" not in section_2
+    assert "class " not in section_2
+
+
+def test_fix_diagram_class_references_works_without_numbered_headings():
+    """Regression test for a real, reported bug: a whole generated ADR wrote plain `"##
+    Target Architecture"` / `"## Affected Components"` throughout, never the numbered
+    `"## 3. ..."` / `"## 4. ..."` form `prompts/adr_generation/generator.jinja`'s OUTPUT
+    STRUCTURE specifies — this function used to find no section at all and return the
+    document untouched, silently leaving `class Redis nodeNew` / `class Auth Service v2
+    nodeModified` broken (the second of those lines breaks the WHOLE diagram's Mermaid parse,
+    confirmed live)."""
+    document = (
+        "## Target Architecture\n\n"
+        "```mermaid\n"
+        "flowchart LR\n"
+        '    n3["`Auth Service v2`"]\n'
+        '    n4["`Redis v1`"]\n'
+        "    n3 --> n4\n"
+        "    classDef nodeNew fill:#34d399,stroke:#047857,color:#022c22\n"
+        "    class Redis nodeNew\n"
+        "    class Auth Service v2 nodeModified\n"
+        "```\n\n"
+        "## Affected Components\n\n"
+        "| Component | Change | Description |\n"
+        "|-----------|--------|-------------|\n"
+        "| Redis | **NEW** | Session cache |\n"
+        "| Auth Service | **MODIFIED** | Now stores sessions in Redis |\n\n"
+        "## Affected Data Contracts\n"
+    )
+    fixed = fix_diagram_class_references(document)
+    assert "classDef nodeModified fill:#fb923c,stroke:#c2410c,color:#431407" in fixed
+    assert "class n4 nodeNew" in fixed
+    assert "class n3 nodeModified" in fixed
+    assert "class Redis nodeNew" not in fixed
+    assert "class Auth Service v2" not in fixed

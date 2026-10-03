@@ -26,7 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from ulid import ULID
 
-from agents.shared import extract_authors_line, transcription_base_name
+from agents.shared import extract_authors_line
 from agents.stages.gold.prompts import build_gold_extraction_prompt
 from agents.stages.gold.retrieval.citation_verification import _verify_citations
 from agents.stages.gold.retrieval.conversational_memory import MAX_HISTORY_MESSAGES, _format_history_block
@@ -130,9 +130,10 @@ def classify_contract_directions(
     instances directly, since this indexes with `contract["field"]`."""
     directions: dict[str, dict[str, set[str]]] = {}
     for contract in contracts:
-        if contract["action"] == "unknown" or contract["name"] not in name_to_id:
+        key = memo_key("data_contract", contract["name"])
+        if contract["action"] == "unknown" or key not in name_to_id:
             continue
-        contract_id = name_to_id[contract["name"]]
+        contract_id = name_to_id[key]
         consumer, producer = contract.get("consumer"), contract.get("producer")
         if consumer:
             directions.setdefault(consumer, {"input": set(), "output": set()})["input"].add(contract_id)
@@ -152,9 +153,9 @@ def contracts_with_real_changes(contracts: list, name_to_id: dict[str, str]) -> 
     (`extract_and_persist_gold_facts` below, `agents.graph._persist_components`) call this one
     alongside it, from the exact same `contracts` list."""
     return {
-        name_to_id[c["name"]]
+        name_to_id[memo_key("data_contract", c["name"])]
         for c in contracts
-        if c["action"] not in ("unchanged", "unknown") and c["name"] in name_to_id
+        if c["action"] not in ("unchanged", "unknown") and memo_key("data_contract", c["name"]) in name_to_id
     }
 
 
@@ -391,6 +392,27 @@ async def ensure_alias(
     await session.execute(stmt)
 
 
+def memo_key(entity_type: GoldEntityType, name: str) -> str:
+    """The one place a `name_to_id` memo key gets built — `resolve_and_alias` and every one of
+    its callers that reads the same dict back (`classify_contract_directions`,
+    `contracts_with_real_changes`, `extract_and_persist_gold_facts`,
+    `agents.graph.resolve_gold_identity`/`_persist_components`/`_persist_contracts`) must all
+    build it this same way, never index `name_to_id` by bare `name` directly.
+
+    This is a regression fix, confirmed on real IBM tenant data: `name_to_id` used to be keyed
+    by bare `name` alone, shared across BOTH a component's own resolution and a data contract's,
+    within one extraction batch. A component and a data contract can legitimately share the
+    exact same name — a "Catalog Listing" component alongside a "Catalog Listing" event/contract
+    is completely ordinary — and whichever type resolved first used to win the shared slot, so
+    the second type silently reused the FIRST one's `entity_id` instead of getting its own. A
+    component that consumed or produced that contract then carried the WRONG id in its own
+    `contract_ids`/`producer_id`/`consumer_id`, and the contract's own evolution history split
+    across two different identities. Keying by `(entity_type, name)` instead means two same-
+    named entities of different types can never collide, no matter which one this ADR happens
+    to mention first."""
+    return f"{entity_type}:{name}"
+
+
 async def resolve_and_alias(
     session: AsyncSession,
     entity_type: GoldEntityType,
@@ -402,17 +424,20 @@ async def resolve_and_alias(
     tenant: str = "default",
 ) -> str:
     """This composes `resolve_entity_id` and `ensure_alias`. It is memoized against the caller's
-    own source-scoped `name_to_id` map. So a name already resolved earlier in the same batch is
-    just a dict lookup, not a second round trip to the database.
+    own source-scoped `name_to_id` map, keyed by `memo_key(entity_type, name)` — see that
+    function's own docstring for why entity_type must be part of the key. So a name already
+    resolved earlier in the same batch is just a dict lookup, not a second round trip to the
+    database.
 
     Both `agents.graph.resolve_gold_identity` and `scripts.backfill_gold._backfill_one` need this
     same identity-resolution step. Before this function existed, it was a nested closure in the
     first one and a near-identical module-level function in the second one. Now both just call
     this single definition."""
-    if name in name_to_id:
-        return name_to_id[name]
+    key = memo_key(entity_type, name)
+    if key in name_to_id:
+        return name_to_id[key]
     entity_id = await resolve_entity_id(session, entity_type, name, tenant=tenant)
-    name_to_id[name] = entity_id
+    name_to_id[key] = entity_id
     await ensure_alias(session, entity_type, entity_id, name, source_component, source_adr_version, tenant=tenant)
     return entity_id
 
@@ -431,6 +456,7 @@ async def persist_entity_version(
     ingestion_date: date,
     tenant: str = "default",
     authored_by: str = "",
+    force_new_version: bool = False,
 ) -> int | None:
     """This does a hash-compare-then-bump against the latest `gold_evolution` row for this
     `(entity_type, entity_id)`. It runs a query (`ORDER BY version DESC LIMIT 1`), not a
@@ -456,7 +482,7 @@ async def persist_entity_version(
     that `operation` is the right *subset* for the given `entity_type`. That pairing is the
     caller's responsibility.
 
-    See `doc/cicle_evolution.md` for the full evolution rules this enforces. Two of them live
+    See `doc/cicle_evolution.md` for the full evolution rules this enforces. Three of them live
     here specifically:
 
     1. **The payload corrects a false "unchanged" for a component.** The LLM's `operation`
@@ -485,7 +511,31 @@ async def persist_entity_version(
        comparison down the chain. Concretely, this means a component's displayed narrative, once
        "unchanged" starts repeating, stays pinned to the last version where something genuinely
        changed — never diluted by a string of "still nothing changed" rewrites — until a real
-       change (payload, or a genuine `"modified"`/`"new"`) writes a fresh one again."""
+       change (payload, or a genuine `"modified"`/`"new"`) writes a fresh one again.
+    3. **The no-op comparison hashes against `latest.operation`, never the literal "unchanged".**
+       `latest.entity_hash` was computed with whatever operation actually produced that row (e.g.
+       "modified" or "new") — it was never computed with "unchanged" baked in, because a row
+       whose own operation is "unchanged" never gets inserted unless something genuinely changed
+       (this rule is what makes that true in the first place). Comparing the fresh "unchanged"
+       extraction's hash using the literal string "unchanged" instead of `latest.operation` was a
+       real, reported bug: the very first "unchanged" ADR after any real change always missed the
+       no-op check — pure string mismatch, since narrative (rule 2) and payload already matched —
+       so it silently inserted a bogus extra version stamped with THAT "unchanged" ADR's own
+       `(source_component, source_adr_version)`. A clicked architecture-diagram node then linked
+       to the ADR that said "nothing changed" instead of the one that actually created or last
+       modified the component, and the node's displayed version kept climbing on every
+       "unchanged" mention. `operation` is still stored as the literal "unchanged" on the rare row
+       that does get inserted (e.g. a non-component entity whose payload contradicts its own
+       "unchanged" claim) — only the hash comparison substitutes `latest.operation`, so a genuine
+       no-change collapses into `latest.entity_hash` exactly, regardless of which verb produced
+       that prior row.
+    4. **`force_new_version` inserts a new version even on a hash match.** Used by
+       `apply_contract_ripple_effect`: a component whose OWN narrative/payload never changed can
+       still need a new version stamped with THIS ADR's `(source_component, source_adr_version)`,
+       because something it depends on changed instead (`doc/cicle_evolution.md`'s "Regla
+       especial") — an intentional lineage marker, not a real content change, so the normal
+       identical-content no-op would otherwise swallow it silently and leave the component
+       pointing at whichever earlier ADR last touched it directly."""
     latest = (
         await session.execute(
             select(GoldEvolution)
@@ -504,15 +554,29 @@ async def persist_entity_version(
         if payload_changed:
             operation = "modified"
 
+    hash_operation = operation
     if operation == "unchanged" and latest is not None:
         # Replaces the actual value that gets hashed AND stored — not just a local variable used
         # for hashing — so the chain stays self-consistent for the NEXT comparison. See the
         # docstring above for why hashing against one narrative while storing another is unsound.
         narrative = latest.narrative
+        # The hash must compare against `latest.operation`, not the literal string "unchanged":
+        # `latest.entity_hash` was computed with THAT operation baked in (e.g. "modified" or
+        # "new"), never "unchanged" itself. Comparing with the literal "unchanged" made the very
+        # first "unchanged" ADR after a real change always miss the no-op check — a real,
+        # reported bug. It silently inserted a bogus extra version stamped with THAT "unchanged"
+        # ADR's own `(source_component, source_adr_version)`, so a clicked architecture-diagram
+        # node linked to the ADR that said "nothing changed" instead of the one that actually
+        # created or last modified the component, and the node's displayed version kept
+        # climbing on every "unchanged" mention. `operation` itself is still stored as
+        # "unchanged" below (untouched) — only the hash comparison uses `latest.operation`, so a
+        # genuine no-change collapses into `latest.entity_hash` exactly, regardless of which verb
+        # produced that prior row.
+        hash_operation = latest.operation
 
-    entity_hash = _entity_hash(operation, narrative, payload)
+    entity_hash = _entity_hash(hash_operation, narrative, payload)
 
-    if latest is not None and latest.entity_hash == entity_hash:
+    if not force_new_version and latest is not None and latest.entity_hash == entity_hash:
         return None
 
     if latest is not None:
@@ -541,6 +605,103 @@ async def persist_entity_version(
         )
     )
     return version
+
+
+async def apply_contract_ripple_effect(
+    session: AsyncSession,
+    *,
+    changed_contract_ids: set[str],
+    contract_directions_by_component_id: dict[str, dict[str, set[str]]],
+    mentioned_component_ids: set[str],
+    source_component: str,
+    source_adr_version: int,
+    ingestion_date: date,
+    tenant: str = "default",
+) -> None:
+    """`doc/cicle_evolution.md`'s "Regla especial" (both its conditions), computed
+    deterministically against `gold_evolution` instead of requiring the LLM to mention an
+    "unchanged" component just so its payload can be compared against the previous one.
+    `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components at all —
+    `extract_and_persist_gold_facts`/`agents.graph._persist_components` skip them outright — so
+    neither condition has an "unchanged" entry left to correct. This replaces that correction.
+
+    Checks every LIVE component this ADR's own new/modified/removed extraction did NOT already
+    persist a version for (`mentioned_component_ids`), against two independent conditions —
+    which need two different payload treatments, not one:
+
+    1. **Condition 1 — starts producing/consuming a contract it never had before.**
+       `contract_directions_by_component_id.get(row.entity_id)` is non-empty: every contract this
+       ADR genuinely changed (`changed_contract_ids`) names its producer/consumer directly in
+       THIS extraction (`classify_contract_directions`, re-keyed from name to `entity_id`), so a
+       component newly linked that way shows up here even with zero prior history with that
+       contract. This IS a real change to the component's OWN `input_contract_ids`/
+       `output_contract_ids` — its list of what it's linked to just grew — so the new direction
+       ids are MERGED into its last payload and persisted normally: the hash will genuinely
+       differ, no `force_new_version` needed.
+    2. **Condition 2 — a contract it ALREADY had is the one that changed.** Its own last-
+       persisted `input_contract_ids`/`output_contract_ids` intersects `changed_contract_ids`,
+       with nothing from condition 1 also firing. This is the one condition 1 cannot see, because
+       a real contract can accumulate more producers/consumers across separate ADRs than any
+       single ADR's own producer/consumer fields restate — a component consuming it from an
+       earlier ADR is invisible to THIS ADR's own extraction. Confirmed as a real, previously-
+       shipped case: `Catalog Listing` (`ibm` tenant) gained a third consumer this way, and
+       `Frontend`/`Search Service` (its earlier, still-valid consumers) were never renamed in
+       that later ADR's own text at all. Here the component's OWN payload genuinely does NOT
+       change — only something it depends on did — so it is persisted as-is, with
+       `force_new_version=True`: the hash would otherwise match the latest row exactly (same
+       narrative, same payload) and silently no-op, leaving the component's
+       `(source_component, source_adr_version)` pointing at whichever earlier ADR last touched it
+       directly instead of this one. That mismatch is exactly the bug this function exists to
+       avoid — a clicked architecture-diagram node must land on an ADR its own story is tied to."""
+    if not changed_contract_ids and not contract_directions_by_component_id:
+        return
+    live_components = await current_gold_state(session, "component", tenant=tenant)
+    for row in live_components:
+        if row.entity_id in mentioned_component_ids:
+            continue
+        payload = ComponentPayload.model_validate(row.payload)
+        new_directions = contract_directions_by_component_id.get(row.entity_id, {"input": set(), "output": set()})
+        already_linked = (set(payload.input_contract_ids) | set(payload.output_contract_ids)) & changed_contract_ids
+        if not new_directions["input"] and not new_directions["output"] and not already_linked:
+            continue
+
+        if new_directions["input"] or new_directions["output"]:
+            updated_payload = ComponentPayload(
+                dependency_ids=payload.dependency_ids,
+                contract_ids=payload.contract_ids,
+                input_contract_ids=sorted(set(payload.input_contract_ids) | new_directions["input"]),
+                output_contract_ids=sorted(set(payload.output_contract_ids) | new_directions["output"]),
+            ).model_dump()
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=row.entity_id,
+                canonical_name=row.canonical_name,
+                operation="modified",
+                narrative=row.narrative,
+                payload=updated_payload,
+                source_component=source_component,
+                source_adr_version=source_adr_version,
+                ingestion_date=ingestion_date,
+                tenant=tenant,
+                authored_by=row.authored_by,
+            )
+        else:
+            await persist_entity_version(
+                session,
+                entity_type="component",
+                entity_id=row.entity_id,
+                canonical_name=row.canonical_name,
+                operation="modified",
+                narrative=row.narrative,
+                payload=row.payload,
+                source_component=source_component,
+                source_adr_version=source_adr_version,
+                ingestion_date=ingestion_date,
+                tenant=tenant,
+                authored_by=row.authored_by,
+                force_new_version=True,
+            )
 
 
 async def extract_and_persist_gold_facts(
@@ -611,8 +772,16 @@ async def extract_and_persist_gold_facts(
     authored_by = extract_authors_line(adr_content)
     name_to_id: dict[str, str] = {}
 
+    # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components or
+    # contracts at all — it only returns ones with a real `new`/`modified`/`removed` (component)
+    # or `new`/`forward-update`/`break-change`/`removed` (contract) status. These `in (...)`
+    # skips are the defensive backstop for a model that disobeys that instruction anyway: the
+    # type itself (`GoldOperation`, `agents/stages/gold/schemas.py`) still allows every value,
+    # same as it always has for `"unknown"` — enforcing the subset is the caller's job, not the
+    # type's. See `apply_contract_ripple_effect` for what now covers a genuinely-affected
+    # component this skip lets through un-mentioned.
     for component in result.components:
-        if component.status == "unknown":
+        if component.status in ("unknown", "unchanged"):
             continue
         await resolve_and_alias(
             session, "component", component.name, name_to_id, source_component, source_adr_version, tenant=tenant
@@ -632,7 +801,7 @@ async def extract_and_persist_gold_facts(
                 tenant=tenant,
             )
     for contract in result.contracts:
-        if contract.action == "unknown":
+        if contract.action in ("unknown", "unchanged"):
             continue
         await resolve_and_alias(
             session, "data_contract", contract.name, name_to_id, source_component, source_adr_version, tenant=tenant
@@ -645,27 +814,37 @@ async def extract_and_persist_gold_facts(
     contract_dicts = [c.model_dump() for c in result.contracts]
     contract_directions = classify_contract_directions(contract_dicts, name_to_id)
     changed_contract_ids = contracts_with_real_changes(contract_dicts, name_to_id)
+    # Re-keyed from component NAME to `entity_id`, for `apply_contract_ripple_effect` below —
+    # every name here was already resolved by the `resolve_and_alias` producer/consumer loop
+    # just above, so it is always present in `name_to_id`.
+    contract_directions_by_component_id = {
+        name_to_id[key]: directions
+        for name, directions in contract_directions.items()
+        if (key := memo_key("component", name)) in name_to_id
+    }
+    mentioned_component_ids: set[str] = set()
     for component in result.components:
-        if component.status == "unknown":
+        if component.status in ("unknown", "unchanged"):
             continue
         directions = contract_directions.get(component.name, {"input": set(), "output": set()})
-        # `doc/cicle_evolution.md` "Regla especial", condition 2 — see the identical comment in
-        # `agents.graph._persist_components`, which this mirrors.
-        status = component.status
-        if status == "unchanged" and (directions["input"] | directions["output"]) & changed_contract_ids:
-            status = "modified"
+        entity_id = name_to_id[memo_key("component", component.name)]
+        mentioned_component_ids.add(entity_id)
         payload = ComponentPayload(
-            dependency_ids=sorted({name_to_id[n] for n in component.dependency_names if n in name_to_id}),
-            contract_ids=sorted({name_to_id[n] for n in component.contract_names if n in name_to_id}),
+            dependency_ids=sorted(
+                {name_to_id[key] for n in component.dependency_names if (key := memo_key("component", n)) in name_to_id}
+            ),
+            contract_ids=sorted(
+                {name_to_id[key] for n in component.contract_names if (key := memo_key("data_contract", n)) in name_to_id}
+            ),
             input_contract_ids=sorted(directions["input"]),
             output_contract_ids=sorted(directions["output"]),
         ).model_dump()
         await persist_entity_version(
             session,
             entity_type="component",
-            entity_id=name_to_id[component.name],
+            entity_id=entity_id,
             canonical_name=component.name,
-            operation=status,
+            operation=component.status,
             narrative=component.narrative,
             payload=payload,
             source_component=source_component,
@@ -675,22 +854,24 @@ async def extract_and_persist_gold_facts(
             authored_by=authored_by,
         )
     for contract in result.contracts:
-        if contract.action == "unknown":
+        if contract.action in ("unknown", "unchanged"):
             continue
         odcs_spec = parse_odcs_spec(contract.odcs_spec)
         if not odcs_spec:
-            odcs_spec = await latest_odcs_spec(session, name_to_id[contract.name], tenant)
+            odcs_spec = await latest_odcs_spec(session, name_to_id[memo_key("data_contract", contract.name)], tenant)
+        producer_id = name_to_id.get(memo_key("component", contract.producer), "")
+        consumer_id = name_to_id.get(memo_key("component", contract.consumer), "")
         payload = DataContractPayload(
             producer=contract.producer,
             consumer=contract.consumer,
-            producer_id=name_to_id.get(contract.producer, ""),
-            consumer_id=name_to_id.get(contract.consumer, ""),
+            producer_id=producer_id,
+            consumer_id=consumer_id,
             odcs_spec=odcs_spec,
         ).model_dump()
         await persist_entity_version(
             session,
             entity_type="data_contract",
-            entity_id=name_to_id[contract.name],
+            entity_id=name_to_id[memo_key("data_contract", contract.name)],
             canonical_name=contract.name,
             operation=contract.action,
             narrative=contract.narrative,
@@ -702,10 +883,40 @@ async def extract_and_persist_gold_facts(
             authored_by=authored_by,
         )
 
+    await apply_contract_ripple_effect(
+        session,
+        changed_contract_ids=changed_contract_ids,
+        contract_directions_by_component_id=contract_directions_by_component_id,
+        mentioned_component_ids=mentioned_component_ids,
+        source_component=source_component,
+        source_adr_version=source_adr_version,
+        ingestion_date=ingestion_date,
+        tenant=tenant,
+    )
+
+    # `ArchitecturePayload` is documented as a snapshot of the WHOLE architecture as of this
+    # ADR (schemas.py), not just what this ADR itself mentions — but `result.components` now
+    # only ever holds this ADR's own new/modified/removed entries (see the skips above). Union
+    # them with every OTHER live component's own last-known name/dependencies, read straight
+    # from `gold_evolution`, so the snapshot stays whole without needing the LLM to re-list
+    # everything that already existed untouched.
+    live_components = [
+        row for row in await current_gold_state(session, "component", tenant=tenant) if row.operation != "removed"
+    ]
+    id_to_name = {row.entity_id: row.canonical_name for row in live_components}
+    all_component_names = {c.name for c in result.components if c.status != "removed"}
+    all_dependency_names = {dep for c in result.components if c.status != "removed" for dep in c.dependency_names}
+    for row in live_components:
+        if row.entity_id in mentioned_component_ids:
+            continue  # already folded in above, straight from this ADR's own extraction
+        all_component_names.add(row.canonical_name)
+        payload = ComponentPayload.model_validate(row.payload)
+        all_dependency_names.update(id_to_name.get(i, i) for i in payload.dependency_ids)
+
     architecture_payload = ArchitecturePayload(
         mermaid_diagram=result.mermaid_diagram,
-        components=sorted({c.name for c in result.components}),
-        dependencies=sorted({dep for c in result.components for dep in c.dependency_names}),
+        components=sorted(all_component_names),
+        dependencies=sorted(all_dependency_names),
     ).model_dump()
     await persist_entity_version(
         session,
@@ -937,11 +1148,24 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
     component Gold currently has on record across every ADR, with any `removed` component
     dropped.
 
-    This backs the frontend's "Architecture history" tab. Each node's label names the
-    component's own current Gold `version` (e.g. "Backend v4" — how many real changes this
-    entity has recorded, `.tmp/... cicle_evolution.md`'s version, never the ADR's own), plus a
-    small italic subtitle naming the `(source_component, source_adr_version)` that last touched
-    it. This returns `""` if Gold has no live component yet.
+    Each node's label names the component's own current Gold `version` (e.g. "Backend v4" — how
+    many real changes this entity has recorded, `doc/cicle_evolution.md`'s version, never the
+    ADR's own). This returns `""` if Gold has no live component yet.
+
+    The label used to also carry a small italic subtitle naming the `(source_component,
+    source_adr_version)` that last touched each node — dropped as a real, reported bug: this
+    function's only two remaining callers (`agents.graph.generate_architecture_questions`,
+    `agents.graph.synthesize_document`) feed its output to an LLM as grounding context, never
+    render it to a person directly (`current_architecture_diagram_interactive` replaced this
+    function for the UI — see that function's own docstring). `synthesize_document` in particular
+    passes this diagram in as "PREVIOUS_ARCHITECTURE_DIAGRAM", which
+    `prompts/adr_generation/generator.jinja` instructs the model to reproduce "verbatim" into the
+    ADR's own §2/§3 — so that subtitle leaked straight into every newly generated ADR's own
+    embedded diagrams, permanently, since a later redraft reads its own previous §2 back
+    (`agents.stages.adr_generation.service.own_previous_architecture_diagram`), not this function
+    again. A generated ADR's diagram has no use for which OTHER ADR touched a node last; that
+    belongs to Gold's own "Architecture history" tab, which already links it through the table
+    beneath the diagram, not the node label.
 
     Navigating to a node's ADR is handled by plain "View ADR" links in the table that
     `frontend/app.py`'s `_architecture_history_tab` renders below the diagram. This is
@@ -994,8 +1218,7 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
         "    classDef goldNode fill:#f1f3f5,stroke:#8b5cf6,color:#16181d,stroke-width:1px",
     ]
     for c in live:
-        adr_ref = f"{transcription_base_name(c.source_component)} v{c.source_adr_version}"
-        lines.append(f'    {node_id[c.entity_id]}["`{c.canonical_name} v{c.version}\n*{adr_ref}*`"]')
+        lines.append(f'    {node_id[c.entity_id]}["`{c.canonical_name} v{c.version}`"]')
     for c in live:
         dependency_ids = ComponentPayload.model_validate(c.payload).dependency_ids
         for dependency_id in dependency_ids:
@@ -1824,6 +2047,7 @@ __all__ = [
     "already_extracted",
     "answer_evolution_question",
     "answer_question",
+    "apply_contract_ripple_effect",
     "build_context_lines",
     "build_relationship_diagram",
     "classify_contract_directions",
@@ -1847,6 +2071,7 @@ __all__ = [
     "is_evolution_question",
     "latest_odcs_spec",
     "latest_versions",
+    "memo_key",
     "parse_odcs_spec",
     "persist_entity_version",
     "resolve_and_alias",

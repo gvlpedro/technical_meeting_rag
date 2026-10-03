@@ -57,6 +57,10 @@ class Settings(BaseSettings):
 
     max_upload_file_bytes: int = 50 * 1024 * 1024  # 50 MB
 
+    # Cost/abuse guardrail
+    max_llm_calls_per_window: int = 20
+    llm_rate_limit_window_seconds: int = 60
+
     # These are hardcoded example logins for the Streamlit frontend.
     # See the "Frontend usage" section in GETTING_STARTED.md. Each login maps to its own tenant. The tenant
     # is what actually keeps data separate

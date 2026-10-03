@@ -16,6 +16,7 @@ from agents.stages.gold.service import (
     get_predecessors,
     get_successors,
     latest_odcs_spec,
+    memo_key,
     persist_entity_version,
 )
 from db.models import GoldAlias, GoldEvolution
@@ -40,7 +41,7 @@ async def _cleanup(tenant: str) -> None:
 
 
 def test_classify_contract_directions_splits_by_producer_and_consumer():
-    name_to_id = {"checkout-events": "contract-1", "Checkout Service": "comp-a", "Billing": "comp-b"}
+    name_to_id = {memo_key("data_contract", "checkout-events"): "contract-1"}
     contracts = [
         {"name": "checkout-events", "action": "new", "producer": "Checkout Service", "consumer": "Billing"}
     ]
@@ -50,7 +51,7 @@ def test_classify_contract_directions_splits_by_producer_and_consumer():
 
 
 def test_classify_contract_directions_skips_unknown_action_and_unresolved_names():
-    name_to_id = {"Checkout Service": "comp-a", "Billing": "comp-b"}
+    name_to_id: dict[str, str] = {}
     contracts = [
         {"name": "checkout-events", "action": "unknown", "producer": "Checkout Service", "consumer": "Billing"},
         {"name": "not-resolved", "action": "new", "producer": "Checkout Service", "consumer": "Billing"},

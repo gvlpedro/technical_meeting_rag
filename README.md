@@ -81,7 +81,10 @@ Documentos ─────────►│ contenido original   │
 
 ## Guardrails
 
-Identificar elementos ocultos por permisos o límites organizativos, donde algunos componentes son visibles para ciertos perfiles pero no para otros.
+Guardrails implementados (`tests/test_guardrails.py`):
+
+* **Aislamiento de tenant.** Toda tabla y toda query filtran por `tenant`; un tenant nunca ve datos de otro.
+* **Rate limit de coste/abuso.** Máx. `settings.max_llm_calls_per_window` llamadas LLM por tenant ( 20 llamadas cada 60 segundos)
 
 ## Ejemplos
 
@@ -258,5 +261,6 @@ MCP para cada salida, para agentes internos
 
 # Próximos pasos
 
-* Solo hay dos usuarios incluidos; esto debería evolucionar para gestionar múltiples usuarios y una arquitectura multi-tenant.
 * Reducir costes de las llamadas a LLM poniendo una cache de embeddings y respuestas
+* Refinar el tema de los FLAGS (detalles desconocidos que podrían resolverse de otra manera)
+* Solo hay 4 usuarios incluidos; Habría que implementar un sistema de registro.

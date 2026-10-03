@@ -38,8 +38,10 @@ from agents.stages.gold.service import (
     extract_and_persist_gold_facts,
     find_entity_by_name_in_text,
     is_evolution_question,
+    memo_key,
     parse_odcs_spec,
     persist_entity_version,
+    resolve_and_alias,
     resolve_entity_id,
     resolve_entity_id_for_lookup,
     top_k_gold_evolution,
@@ -302,6 +304,332 @@ async def test_ensure_alias_is_idempotent():
         await _cleanup_entity(entity_type, entity_id)
 
 
+async def test_resolve_and_alias_never_collides_a_component_with_a_same_named_contract():
+    """Regression: `resolve_and_alias`'s `name_to_id` memo used to be keyed by bare `name`
+    alone, shared across a component's own resolution AND a data contract's, within the same
+    extraction batch. A component and a data contract can legitimately share the exact same
+    name (a "Catalog Listing" component alongside a "Catalog Listing" event/contract is
+    completely ordinary) — confirmed as a real bug on live IBM tenant data: whichever type
+    resolved first won, and the SECOND type silently reused the first one's `entity_id`, merging
+    two unrelated entities into one identity across types. `memo_key` fixes this by keying the
+    memo on `(entity_type, name)`, never `name` alone."""
+    shared_name = f"Catalog Listing {uuid4().hex[:8]}"
+    name_to_id: dict[str, str] = {}
+    async with async_session_factory() as session:
+        component_id = await resolve_and_alias(
+            session, "component", shared_name, name_to_id, "meeting.en.vtt", 1
+        )
+        contract_id = await resolve_and_alias(
+            session, "data_contract", shared_name, name_to_id, "meeting.en.vtt", 1
+        )
+        await session.commit()
+    try:
+        assert component_id != contract_id
+        assert name_to_id[memo_key("component", shared_name)] == component_id
+        assert name_to_id[memo_key("data_contract", shared_name)] == contract_id
+    finally:
+        await _cleanup_entity("component", component_id)
+        await _cleanup_entity("data_contract", contract_id)
+
+
+async def test_extract_and_persist_never_collides_a_components_entity_id_with_a_same_named_contract(monkeypatch):
+    """End-to-end regression, through the real call site: a component and a data contract
+    sharing the exact same name, extracted from the SAME ADR, must end up as two independent
+    Gold entities with two independent `entity_id`s — never merged just because they happen to
+    be named alike. Before the `memo_key` fix, `Frontend`'s own `contract_ids` (in real IBM
+    tenant data) ended up holding the `Catalog Listing` COMPONENT's id where the `Catalog
+    Listing` CONTRACT's id belonged, because the component resolved first within the same
+    extraction and silently won the shared memo slot."""
+    tenant = f"test-name-collision-{uuid4().hex[:8]}"
+    source_component = f"collision-{uuid4().hex[:8]}.en.vtt"
+    shared_name = f"Catalog Listing {uuid4().hex[:8]}"
+
+    async def fake_extract(adr_content: str) -> GoldExtractionResult:
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(
+                    name=shared_name,
+                    status="new",
+                    narrative=f"{shared_name} is a new component that manages catalog listings.",
+                    contract_names=[shared_name],
+                )
+            ],
+            contracts=[
+                ExtractedDataContract(
+                    name=shared_name,
+                    action="new",
+                    narrative=f"{shared_name} is a new event published when a listing changes.",
+                    producer=shared_name,
+                    consumer="Checkout Service",
+                )
+            ],
+            architecture_change="changed",
+            architecture_narrative="Introduced the component/contract pair.",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract)
+    try:
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr content", source_component, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            component_row = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant,
+                        GoldEvolution.entity_type == "component",
+                        GoldEvolution.canonical_name == shared_name,
+                    )
+                )
+            ).scalars().one()
+            contract_row = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant,
+                        GoldEvolution.entity_type == "data_contract",
+                        GoldEvolution.canonical_name == shared_name,
+                    )
+                )
+            ).scalars().one()
+
+        assert component_row.entity_id != contract_row.entity_id
+
+        component_payload = ComponentPayload.model_validate(component_row.payload)
+        # The component's own contract_ids must point at the CONTRACT's id, never its own.
+        assert component_payload.contract_ids == [contract_row.entity_id]
+
+        contract_payload = DataContractPayload.model_validate(contract_row.payload)
+        # The contract's producer_id must point at the COMPONENT's id, never the contract's own.
+        assert contract_payload.producer_id == component_row.entity_id
+    finally:
+        async with async_session_factory() as session:
+            await session.execute(delete(GoldEvolution).where(GoldEvolution.tenant == tenant))
+            await session.execute(delete(GoldAlias).where(GoldAlias.tenant == tenant))
+            await session.commit()
+
+
+async def test_extract_and_persist_never_bumps_a_component_only_mentioned_in_passing(monkeypatch):
+    """Regression for the real, user-reported bug this whole extraction redesign fixes: an ADR
+    that mentions an existing component only in passing (background context, a diagram node) —
+    never restating its full dependency/contract list, never actually changing anything about it
+    — used to still bump its version and re-attribute it to that ADR, because the OLD extraction
+    included it as `status: "unchanged"` with an incomplete, freshly-computed payload that
+    differed from its real last-known one purely from the omission. Confirmed live:
+    `backend`/`lotus` tenant, bumped by an ADR titled "Create intranet for Internal Area
+    Management" that never touches it.
+
+    `prompts/gold/extraction.jinja` no longer asks for "unchanged" components at all, so this ADR
+    (faked here to the same shape) never even mentions `backend` in its own extraction result.
+    With no contract link tying it to this round either, `apply_contract_ripple_effect` has
+    nothing to ripple. `backend` must stay pinned to its real, original ADR."""
+    tenant = f"test-passing-mention-{uuid4().hex[:8]}"
+    backend_source = f"backend-intro-{uuid4().hex[:8]}.en.vtt"
+    intranet_source = f"add-intranet-{uuid4().hex[:8]}.en.vtt"
+
+    async def fake_extract_backend(adr_content: str) -> GoldExtractionResult:
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(
+                    name="backend", status="new", narrative="backend is the marketplace application layer.",
+                    dependency_names=["frontend"], contract_names=[],
+                )
+            ],
+            contracts=[], architecture_change="changed", architecture_narrative="backend was introduced.",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_backend)
+    try:
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v1", backend_source, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+
+        async def fake_extract_intranet(adr_content: str) -> GoldExtractionResult:
+            return GoldExtractionResult(
+                components=[
+                    ExtractedComponent(
+                        name="intranet", status="new",
+                        narrative="intranet is a new, isolated internal-area-management component.",
+                        dependency_names=[], contract_names=[],
+                    )
+                ],
+                contracts=[], architecture_change="changed",
+                architecture_narrative=(
+                    "intranet was added. backend remains the central application component, unchanged."
+                ),
+            )
+
+        monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_intranet)
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v2 mentions backend only in passing", intranet_source, 1, date(2026, 6, 2),
+                tenant=tenant,
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            backend_rows = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant, GoldEvolution.canonical_name == "backend"
+                    )
+                )
+            ).scalars().all()
+        assert len(backend_rows) == 1  # no spurious v2
+        assert backend_rows[0].version == 1
+        assert backend_rows[0].source_component == backend_source  # still its real, original ADR
+    finally:
+        async with async_session_factory() as session:
+            await session.execute(delete(GoldEvolution).where(GoldEvolution.tenant == tenant))
+            await session.execute(delete(GoldAlias).where(GoldAlias.tenant == tenant))
+            await session.commit()
+
+
+async def test_apply_contract_ripple_effect_condition_2_versions_an_unmentioned_consumer(monkeypatch):
+    """Regression for `doc/cicle_evolution.md`'s "Regla especial" condition 2, now computed
+    deterministically instead of relying on the LLM mentioning an "unchanged" component: a
+    contract gains an ADDITIONAL consumer the component never had before, in an ADR that never
+    names that component's OTHER, already-existing consumer at all. Confirmed as a real,
+    previously-shipped case: `Catalog Listing` (`ibm` tenant) gained a third consumer this way,
+    and `Frontend` (an earlier, still-valid consumer) was never renamed in that later ADR's own
+    text. `Frontend` here stands in for that same shape: it must still get a new version
+    attributing it to this ADR, with its own payload otherwise byte-identical to before."""
+    tenant = f"test-ripple-cond2-{uuid4().hex[:8]}"
+    source_v1 = f"catalog-intro-{uuid4().hex[:8]}.en.vtt"
+    source_v2 = f"catalog-new-consumer-{uuid4().hex[:8]}.en.vtt"
+
+    async def fake_extract_v1(adr_content: str) -> GoldExtractionResult:
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(
+                    name="Frontend", status="new", narrative="Frontend renders the product grid.",
+                    dependency_names=[], contract_names=["Catalog Listing"],
+                )
+            ],
+            contracts=[
+                ExtractedDataContract(
+                    name="Catalog Listing", action="new", narrative="Catalog Listing is a new contract.",
+                    producer="Backend", consumer="Frontend",
+                )
+            ],
+            architecture_change="changed", architecture_narrative="Catalog Listing was introduced.",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v1)
+    try:
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v1", source_v1, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+
+        async def fake_extract_v2(adr_content: str) -> GoldExtractionResult:
+            return GoldExtractionResult(
+                components=[],  # neither Frontend nor Backend is mentioned again at all
+                contracts=[
+                    ExtractedDataContract(
+                        name="Catalog Listing", action="forward-update",
+                        narrative="Catalog Listing gains Search Service as a second consumer.",
+                        producer="Backend", consumer="Search Service",
+                    )
+                ],
+                architecture_change="changed", architecture_narrative="Search Service now consumes Catalog Listing.",
+            )
+
+        monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v2)
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v2", source_v2, 1, date(2026, 6, 2), tenant=tenant
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            frontend_rows = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant, GoldEvolution.canonical_name == "Frontend"
+                    )
+                )
+            ).scalars().all()
+        by_version = {r.version: r for r in frontend_rows}
+        assert set(by_version) == {1, 2}
+        assert by_version[2].source_component == source_v2  # correctly attributed to the ripple ADR
+        assert by_version[2].payload == by_version[1].payload  # Frontend's own facts never changed
+        assert by_version[2].narrative == by_version[1].narrative
+    finally:
+        async with async_session_factory() as session:
+            await session.execute(delete(GoldEvolution).where(GoldEvolution.tenant == tenant))
+            await session.execute(delete(GoldAlias).where(GoldAlias.tenant == tenant))
+            await session.commit()
+
+
+async def test_extract_and_persist_architecture_payload_stays_a_full_snapshot(monkeypatch):
+    """`ArchitecturePayload` is documented as a snapshot of the WHOLE architecture as of this ADR
+    (`agents/stages/gold/schemas.py`) — this must stay true even though `result.components` now
+    only ever holds THIS ADR's own new/modified/removed entries. A component from an earlier ADR,
+    never mentioned again, must still appear in a later ADR's own architecture snapshot."""
+    tenant = f"test-arch-snapshot-{uuid4().hex[:8]}"
+    source_v1 = f"backend-intro-{uuid4().hex[:8]}.en.vtt"
+    source_v2 = f"add-intranet-{uuid4().hex[:8]}.en.vtt"
+
+    async def fake_extract_v1(adr_content: str) -> GoldExtractionResult:
+        return GoldExtractionResult(
+            components=[
+                ExtractedComponent(
+                    name="backend", status="new", narrative="backend is the marketplace application layer.",
+                    dependency_names=["frontend"], contract_names=[],
+                )
+            ],
+            contracts=[], architecture_change="changed", architecture_narrative="backend was introduced.",
+        )
+
+    monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v1)
+    try:
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v1", source_v1, 1, date(2026, 6, 1), tenant=tenant
+            )
+            await session.commit()
+
+        async def fake_extract_v2(adr_content: str) -> GoldExtractionResult:
+            return GoldExtractionResult(
+                components=[
+                    ExtractedComponent(
+                        name="intranet", status="new", narrative="intranet is a new, isolated component.",
+                        dependency_names=[], contract_names=[],
+                    )
+                ],
+                contracts=[], architecture_change="changed", architecture_narrative="intranet was added.",
+            )
+
+        monkeypatch.setattr("agents.stages.gold.service.extract_gold_facts_for_source", fake_extract_v2)
+        async with async_session_factory() as session:
+            await extract_and_persist_gold_facts(
+                session, "adr v2 never mentions backend again", source_v2, 1, date(2026, 6, 2), tenant=tenant
+            )
+            await session.commit()
+
+        async with async_session_factory() as session:
+            architecture_row = (
+                await session.execute(
+                    select(GoldEvolution).where(
+                        GoldEvolution.tenant == tenant, GoldEvolution.entity_type == "architecture",
+                        GoldEvolution.canonical_name == source_v2,
+                    )
+                )
+            ).scalars().one()
+        assert set(architecture_row.payload["components"]) == {"backend", "intranet"}
+    finally:
+        async with async_session_factory() as session:
+            await session.execute(delete(GoldEvolution).where(GoldEvolution.tenant == tenant))
+            await session.execute(delete(GoldAlias).where(GoldAlias.tenant == tenant))
+            await session.commit()
+
+
 async def test_persist_entity_version_first_write_is_version_one():
     entity_type = "component"
     entity_id = str(uuid4())
@@ -409,7 +737,11 @@ async def test_persist_entity_version_different_hash_bumps_version():
 
 
 async def test_contracts_with_real_changes_excludes_unchanged_and_unknown():
-    name_to_id = {"a": "id-a", "b": "id-b", "c": "id-c"}
+    name_to_id = {
+        memo_key("data_contract", "a"): "id-a",
+        memo_key("data_contract", "b"): "id-b",
+        memo_key("data_contract", "c"): "id-c",
+    }
     contracts = [
         {"name": "a", "action": "new"},
         {"name": "b", "action": "unchanged"},
@@ -419,14 +751,19 @@ async def test_contracts_with_real_changes_excludes_unchanged_and_unknown():
 
 
 async def test_persist_entity_version_unchanged_with_same_payload_is_a_noop_despite_reworded_narrative():
-    """Regression: `doc/cicle_evolution.md` — a real bug where a component/contract picked up a
-    spurious new version every ADR purely because the LLM re-narrates "still unchanged" with
-    different wording each time, even though nothing about it actually changed. The FIRST
-    "new" -> "unchanged" transition still versions (that first confirmation is itself a real,
-    one-time fact worth recording, and `_entity_hash` deliberately includes `operation`) — the
-    bug, and this fix, is specifically about a SECOND, THIRD, ... consecutive "unchanged" on top
-    of an already-"unchanged" version, exactly the `product-catalog` v2->v3->v4 pattern found in
-    real data."""
+    """Regression: `doc/cicle_evolution.md` is unconditional — "unchanged" with the same payload
+    never versions, no matter what operation produced the prior row. A component/contract used to
+    pick up a spurious new version on the very FIRST "unchanged" after a "new"/"modified", purely
+    because the no-op hash compared against the literal string "unchanged" instead of
+    `latest.operation` — `latest.entity_hash` was computed with "new" baked in, never "unchanged",
+    so that first comparison always missed even though narrative (once carried forward) and
+    payload already matched. That bogus row then carried the "unchanged" ADR's own
+    `(source_component, source_adr_version)`, so a reader following that lineage landed on the
+    ADR that merely confirmed no change, not the one that actually created or modified the entity
+    — this is `technical_meeting_rag`'s own architecture-diagram "click a node" bug. Every
+    following "unchanged" (SECOND, THIRD, ...) already no-opped correctly, exactly the
+    `product-catalog` v2->v3->v4 pattern found in real data — this test now also covers the first
+    transition, not just the repeats."""
     entity_type = "component"
     entity_id = str(uuid4())
     payload = {"dependency_ids": [], "contract_ids": [], "input_contract_ids": [], "output_contract_ids": []}
@@ -447,7 +784,7 @@ async def test_persist_entity_version_unchanged_with_same_payload_is_a_noop_desp
                 source_component="meeting.en.vtt", source_adr_version=2, ingestion_date=date(2026, 6, 2),
             )
             await session.commit()
-        assert second == 2  # "new" -> "unchanged" is a real, one-time confirmation — still versions.
+        assert second is None  # "new" -> "unchanged" with the same payload — no v2.
 
         async with async_session_factory() as session:
             third = await persist_entity_version(
@@ -457,7 +794,7 @@ async def test_persist_entity_version_unchanged_with_same_payload_is_a_noop_desp
                 ingestion_date=date(2026, 6, 3),
             )
             await session.commit()
-        assert third is None  # "unchanged" repeated, different wording, same payload — no v3.
+        assert third is None  # "unchanged" repeated, different wording, same payload — still no v3.
 
         async with async_session_factory() as session:
             rows = (
@@ -467,7 +804,8 @@ async def test_persist_entity_version_unchanged_with_same_payload_is_a_noop_desp
                     )
                 )
             ).scalars().all()
-        assert len(rows) == 2
+        assert len(rows) == 1
+        assert rows[0].source_adr_version == 1  # still points at the ADR that actually created it
     finally:
         await _cleanup_entity(entity_type, entity_id)
 
@@ -810,11 +1148,12 @@ async def test_current_architecture_diagram_draws_a_node_per_live_component():
         # function's own docstring for why. Those HTML tags broke node visibility under
         # Streamlit's strict security mode.
         assert "<br/>" not in diagram and "<sub>" not in diagram
-        # "Payment Gateway v1"/"Checkout Service v1" is each entity's own Gold version (both
-        # are persisted only once in this test) — distinct from "*meeting v1*"/"*meeting v2*",
-        # the ADR's own source_adr_version, which the italic subtitle still names.
-        assert '["`Payment Gateway v1\n*meeting v1*`"]' in diagram
-        assert '["`Checkout Service v1\n*meeting v2*`"]' in diagram
+        # "Payment Gateway v1"/"Checkout Service v1" is each entity's own Gold version — no
+        # italic "which ADR touched this last" subtitle: this diagram is LLM grounding context
+        # now, never rendered to a person, and that subtitle used to leak verbatim into every
+        # newly generated ADR's own embedded diagrams (see the function's own docstring).
+        assert '["`Payment Gateway v1`"]' in diagram
+        assert '["`Checkout Service v1`"]' in diagram
         assert "-->" in diagram  # Checkout Service depends on Payment Gateway
         # There is no `click ... href` directive here. We confirmed, with a real headless-Chrome
         # run against `st.mermaid_chart` and not just mermaid-cli, that this directive makes

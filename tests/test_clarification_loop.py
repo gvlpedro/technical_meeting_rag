@@ -1162,7 +1162,7 @@ async def test_gold_data_contract_resolves_producer_and_consumer_to_component_en
             "components": [
                 {
                     "name": "Checkout Service",
-                    "status": "unchanged",
+                    "status": "modified",
                     "narrative": "Checkout Service handles checkout and now publishes an event.",
                     "dependency_names": [],
                     "contract_names": ["checkout-completed"],
@@ -1249,8 +1249,8 @@ async def test_gold_discovers_a_component_never_in_the_pre_clarification_mention
     exactly that shape. `mentioned_components` only ever names "Checkout Service". But the
     faked extraction result, standing in for what a real LLM reading the final ADR would
     find, also reports a brand-new "Notification Bus" that the ADR's own clarification
-    answers introduced. Both must reach `gold_evolution`. The node must not filter the
-    extraction against the earlier list."""
+    answers introduced. "Notification Bus" must reach `gold_evolution` even though it was
+    never in the earlier list — the node must not filter the extraction against it."""
     source = "meeting_new_component.en.vtt"
     await _insert_bronze(
         DATE_GOLD_DISCOVERS_NEW_COMPONENT, source, ["Checkout Service handles order checkout flows."]
@@ -1312,7 +1312,13 @@ async def test_gold_discovers_a_component_never_in_the_pre_clarification_mention
             "pre-clarification mentioned_components list, must still reach gold_evolution"
         )
         assert by_name["Notification Bus"].operation == "new"
-        assert by_name["Checkout Service"].operation == "unchanged"
+        # "Checkout Service" is genuinely unchanged here (no contract link either), and
+        # `prompts/gold/extraction.jinja` no longer asks for "unchanged" components at all —
+        # `_persist_components` skips it outright. With no prior version to fall back to and no
+        # contract tying it to this ADR, `apply_contract_ripple_effect` has nothing to ripple
+        # either: it simply never reaches `gold_evolution` for this ADR, exactly as an entity
+        # nothing actually happened to should not.
+        assert "Checkout Service" not in by_name
     finally:
         await _cleanup_date(DATE_GOLD_DISCOVERS_NEW_COMPONENT)
 

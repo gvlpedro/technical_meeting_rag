@@ -463,9 +463,12 @@ reproduction of §2 because nothing was confirmed changed):
 ## 4. Affected Components
 
 A Markdown table — `| Component | Change | Description |` — listing every component that passed
-the **COMPONENT INCLUSION RULE**, tagged `**NEW**` / `**MODIFIED**` / `**REMOVED**` /
-`**UNCHANGED**`, with a one-line description sourced from `DOCUMENTED_CONTENT`. If no component
-passes the rule, write one sentence saying no component's status was confirmed, and omit the table.
+the **COMPONENT INCLUSION RULE** AND whose confirmed status this round is `**NEW**` /
+`**MODIFIED**` / `**REMOVED**` — never `**UNCHANGED**`: an unchanged component already carries
+forward, uncolored, in §2/§3's own diagram, so a row for it here would say nothing a reader needs
+that the diagram does not already show. If no component qualifies — either because none passed
+the rule at all, or because every one that did is `UNCHANGED` this round — write one sentence
+saying no component's status changed this round, and omit the table.
 
 ## 5. Affected Data Contracts
 
@@ -518,14 +521,18 @@ Before returning the document, verify internally:
   from §3.
 * §3's diagram has the `**Legend:**` line right after it whenever the diagram carries at least
   one color class, and has no legend at all when it carries none.
-* Every component in §4 has exactly one of `NEW`/`MODIFIED`/`REMOVED`/`UNCHANGED` — never
-  `UNKNOWN`, never left blank.
+* Every component in §4 has exactly one of `NEW`/`MODIFIED`/`REMOVED` — never `UNCHANGED`, never
+  `UNKNOWN`, never left blank. An `UNCHANGED` component is just as confirmed as any other status
+  (it still appears, uncolored, in §2/§3's diagram) but is deliberately left OUT of §4 itself —
+  see §4's own section for why.
 * No component appears in §4, in a diagram, or in a data-contract producer/consumer field unless
   it passed the **COMPONENT INCLUSION RULE**.
-* Every component/contract `IDENTIFIED_COMPONENTS`/`IDENTIFIED_DATA_CONTRACTS` classified as
-  `new`/`modified`/`removed`/`unchanged` (i.e. not `unknown`) DOES appear in §4/§5, using that
-  same status — it is confirmed, not something this document may silently drop or downgrade to
-  "not established."
+* Every component `IDENTIFIED_COMPONENTS` classified as `new`/`modified`/`removed` DOES appear
+  in §4, using that same status — it is confirmed, not something this document may silently drop
+  or downgrade to "not established." (An `unchanged` classification is equally confirmed, but
+  §4 excludes it by design — this is the one place §4 and §5 differ: every data contract
+  `IDENTIFIED_DATA_CONTRACTS` classifies as `new`/`modified`/`removed`/`unchanged`, i.e. not
+  `unknown`, still DOES appear in §5, `unchanged` included — see §5's own section for why.)
 * A confirmed replacement (one component replaced by a different, differently-named one) has
   BOTH sides in §4 — the old one `REMOVED`, the new one `NEW` — never only one of the two, and
   never a single `MODIFIED` row standing in for both.

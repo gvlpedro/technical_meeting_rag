@@ -8,8 +8,9 @@ what it protects against. Three sections:
     supposed to control mechanically, in Python, not through the LLM.
   - **OTHER GUARDRAILS** — everything else worth a regression test on its own: SQL-metacharacter
     safety, the specific `LIKE`-wildcard-injection risk `find_entity_by_name_in_text` already
-    documents avoiding, and the upload file-size cap that stops a single request from paying to
-    tokenize/chunk/embed an arbitrarily large file.
+    documents avoiding, the upload file-size cap that stops a single request from paying to
+    tokenize/chunk/embed an arbitrarily large file, and the per-tenant LLM call rate limit that
+    stops a single request loop from paying for unbounded real LLM calls.
 
 None of these tests call a real LLM. Every one of them proves a guardrail holds STRUCTURALLY —
 by inspecting what a SQL query actually filters on, or what a plain Python function actually
@@ -47,7 +48,7 @@ from agents.stages.gold.service import (
 )
 from app.config import settings
 from app.main import app
-from app.routers.frontend import _resume_graph, _tenant_for_username
+from app.routers.frontend import _enforce_llm_rate_limit, _resume_graph, _tenant_for_username
 from db.models import GoldAlias, GoldEvolution, SilverDocument
 from db.session import async_session_factory
 
@@ -129,9 +130,19 @@ def test_every_tenant_scoped_endpoint_rejects_an_unknown_username(method, path, 
 async def test_architecture_history_only_shows_the_callers_own_tenant():
     """The concrete guardrail: given two `SilverDocument` rows under two different tenants, a
     request naming one tenant's user must see ONLY that tenant's ADR, never the other's — even
-    though both rows sit side by side in the same table."""
-    assert len(settings.frontend_users) >= 2, "this test needs at least two configured logins"
-    user_a, user_b = settings.frontend_users[0], settings.frontend_users[1]
+    though both rows sit side by side in the same table.
+
+    `user_a`/`user_b` must come from two DIFFERENT tenants, never just `frontend_users[0]` and
+    `[1]` positionally: `settings.frontend_users` has "peter" and "martin" both under the same
+    "lotus" tenant (see `app/config.py`), so indexing the first two entries picked two same-
+    tenant logins and made this test pass or fail on tenant isolation for the wrong reason —
+    confirmed a false positive, not a real leak, by re-running the same request against two
+    users known to differ (`peter`/lotus vs `mike`/ibm), which isolates correctly."""
+    by_tenant: dict[str, object] = {}
+    for candidate in settings.frontend_users:
+        by_tenant.setdefault(candidate.tenant, candidate)
+    assert len(by_tenant) >= 2, "this test needs logins from at least two distinct tenants"
+    user_a, user_b = list(by_tenant.values())[:2]
     source_a = f"guardrail-a-{uuid4().hex[:8]}.en.vtt"
     source_b = f"guardrail-b-{uuid4().hex[:8]}.en.vtt"
     ingestion_date = date(2026, 6, 20)
@@ -427,3 +438,47 @@ def test_upload_rejects_a_file_over_the_configured_size_limit(monkeypatch):
 
     assert response.status_code == 413
     assert "too_big.txt" in response.json()["detail"]
+
+
+def test_llm_rate_limit_rejects_the_call_over_the_configured_cap(monkeypatch):
+    """`app.routers.frontend._enforce_llm_rate_limit` caps how many of the three real,
+    paid-LLM-call endpoints (`regenerate`, `ask-more`, `finalize`) one tenant can hit within a
+    rolling window — see that setting's own comment in `app/config.py` for why: nothing else
+    stops a buggy frontend loop, or a malicious client, from running up an unbounded LLM bill.
+    A fresh, unique tenant key is used so this never collides with another test's or another
+    real tenant's own call history in the shared, in-process `_llm_call_log`."""
+    monkeypatch.setattr(settings, "max_llm_calls_per_window", 2)
+    monkeypatch.setattr(settings, "llm_rate_limit_window_seconds", 60)
+    tenant = f"guardrail-ratelimit-{uuid4().hex[:8]}"
+
+    _enforce_llm_rate_limit(tenant)  # 1st — allowed
+    _enforce_llm_rate_limit(tenant)  # 2nd — allowed, now at the cap
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_llm_rate_limit(tenant)  # 3rd within the same window — rejected
+    assert exc_info.value.status_code == 429
+
+    other_tenant = f"guardrail-ratelimit-other-{uuid4().hex[:8]}"
+    _enforce_llm_rate_limit(other_tenant)  # a different tenant's own cap is untouched
+
+
+def test_llm_rate_limit_forgets_calls_once_they_age_out_of_the_window(monkeypatch):
+    """The cap is a ROLLING window, not a lifetime count: once enough real time has passed that
+    the earlier calls fall outside `llm_rate_limit_window_seconds`, the tenant can call again.
+    `time.monotonic` is monkeypatched to a controllable fake clock so this proves the window
+    logic itself, without a real `time.sleep`."""
+    import app.routers.frontend as frontend_module
+
+    monkeypatch.setattr(settings, "max_llm_calls_per_window", 1)
+    monkeypatch.setattr(settings, "llm_rate_limit_window_seconds", 10)
+    tenant = f"guardrail-ratelimit-window-{uuid4().hex[:8]}"
+
+    fake_now = [1000.0]
+    monkeypatch.setattr(frontend_module.time, "monotonic", lambda: fake_now[0])
+
+    _enforce_llm_rate_limit(tenant)  # 1st — allowed, at the cap of 1
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_llm_rate_limit(tenant)  # still inside the window — rejected
+    assert exc_info.value.status_code == 429
+
+    fake_now[0] += 11  # past the 10s window
+    _enforce_llm_rate_limit(tenant)  # the earlier call has aged out — allowed again

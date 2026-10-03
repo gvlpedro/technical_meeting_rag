@@ -3,9 +3,11 @@ that more than one pipeline stage depends on. This test file stays under `tests/
 any `agents/stages/<stage>/test/` folder, because no single stage owns this code."""
 
 from agents.shared import (
+    _markdown_section,
     extract_source_line,
     insert_authors_line,
     insert_source_line,
+    markdown_heading_pattern,
     mentions_grounded_in_source,
 )
 
@@ -68,3 +70,50 @@ def test_mentions_grounded_in_source_is_case_insensitive_and_can_match_more_than
 def test_mentions_grounded_in_source_returns_empty_list_when_nothing_matches():
     items = [{"name": "Checkout Service", "status": "new"}]
     assert mentions_grounded_in_source("A totally unrelated transcript about billing.", items) == []
+
+
+# --- markdown_heading_pattern / _markdown_section -----------------------------------------------
+
+
+def test_markdown_heading_pattern_matches_the_numbered_form():
+    pattern = markdown_heading_pattern("## 3. Target Architecture")
+    assert pattern.search("## 3. Target Architecture\n") is not None
+
+
+def test_markdown_heading_pattern_also_matches_the_unnumbered_form():
+    """Regression test for a real, reported bug: a whole generated ADR wrote plain `"##
+    Target Architecture"` / `"## Affected Components"` throughout, never the numbered form
+    `prompts/adr_generation/generator.jinja`'s OUTPUT STRUCTURE specifies. Every caller that
+    sliced a document by its exact numbered heading silently got an empty section back —
+    not just a diagram-coloring miss, but the NEXT ADR's "previous architecture" grounding
+    would have been lost entirely, since `previous_target_architecture_diagram` depends on the
+    same matching."""
+    pattern = markdown_heading_pattern("## 3. Target Architecture")
+    assert pattern.search("## Target Architecture\n") is not None
+
+
+def test_markdown_heading_pattern_does_not_match_a_similar_but_different_heading():
+    pattern = markdown_heading_pattern("## 3. Target Architecture")
+    assert pattern.search("## Target Architecture Notes\n") is None
+    assert pattern.search("## Previous Target Architecture\n") is None
+
+
+def test_markdown_section_extracts_the_unnumbered_form():
+    content = (
+        "## Target Architecture\n\nSome diagram text.\n\n## Affected Components\n\nA table.\n"
+    )
+    section = _markdown_section(content, "## 3. Target Architecture", "## 4. Affected Components")
+    assert section == "## Target Architecture\n\nSome diagram text."
+
+
+def test_markdown_section_still_extracts_the_numbered_form():
+    content = (
+        "## 3. Target Architecture\n\nSome diagram text.\n\n## 4. Affected Components\n\nA table.\n"
+    )
+    section = _markdown_section(content, "## 3. Target Architecture", "## 4. Affected Components")
+    assert section == "## 3. Target Architecture\n\nSome diagram text."
+
+
+def test_markdown_section_returns_empty_when_the_start_heading_is_missing():
+    content = "# ADR\n\nNo matching heading here."
+    assert _markdown_section(content, "## 3. Target Architecture", "## 4. Affected Components") == ""

@@ -245,12 +245,29 @@ async def latest_document_content(
     return result.scalar_one_or_none()
 
 
+def markdown_heading_pattern(heading: str) -> re.Pattern[str]:
+    """A `##` Markdown heading matcher tolerant of a model that drops the OUTPUT STRUCTURE's own
+    numeric prefix — confirmed as a real, reported case: a whole generated ADR that wrote plain
+    `"## Target Architecture"` / `"## Affected Components"` throughout, never `"## 3. Target
+    Architecture"` / `"## 4. Affected Components"`, silently breaking every caller below that
+    expected the numbered form verbatim (this document's own NEXT redraft would have lost its
+    "previous architecture" grounding entirely, not just failed to color a diagram).
+
+    `heading` is given in its fully-numbered form (`"## 3. Target Architecture"`); the numeric
+    prefix, if present in `heading` itself, is treated as OPTIONAL in what it matches, never
+    required — so this matches a real document's heading whether or not that document numbered
+    it. Anchored to the whole line (`re.MULTILINE`, `^...$`) so e.g. "## Target Architecture
+    Notes" is correctly NOT a match for "## Target Architecture"."""
+    bare_text = re.sub(r"^##\s*\d+\.\s*", "", heading).strip()
+    return re.compile(rf"^##\s*(?:\d+\.\s*)?{re.escape(bare_text)}\s*$", re.MULTILINE)
+
+
 def _markdown_section(content: str, start_heading: str, end_heading: str) -> str:
-    """Slices `content` from `start_heading` up to `end_heading` (or to the end if not
-    found), as a plain string search rather than a Markdown parser — works because the ADR
-    prompt always uses these exact heading names."""
-    start = content.find(start_heading)
-    if start == -1:
+    """Slices `content` from `start_heading` up to `end_heading` (or to the end if not found).
+    Tolerant of a missing numeric heading prefix — see `markdown_heading_pattern`, which this
+    uses for both ends instead of a plain string search."""
+    start_match = markdown_heading_pattern(start_heading).search(content)
+    if start_match is None:
         return ""
-    end = content.find(end_heading, start + len(start_heading))
-    return (content[start:end] if end != -1 else content[start:]).strip()
+    end_match = markdown_heading_pattern(end_heading).search(content, start_match.end())
+    return (content[start_match.start() : end_match.start()] if end_match else content[start_match.start() :]).strip()

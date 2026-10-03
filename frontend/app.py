@@ -100,6 +100,7 @@ def _login_screen() -> None:
             # `st.session_state` survives a plain `del st.session_state.user` / re-login cycle.
             st.session_state.chat_history = []
             st.session_state.chat_diagrams = {}
+            st.session_state.pop("architecture_history_selected_adr", None)
             st.rerun()
         except requests.HTTPError:
             st.error("Invalid username or password.")
@@ -489,8 +490,22 @@ def _current_architecture_tab(username: str) -> None:
     selected = st.session_state.get("architecture_history_selected_adr")
     if selected:
         source_component, _, version = selected.rpartition("::")
-        with st.expander(f"ADR — {source_component} v{version}", expanded=True):
-            _render_adr_detail(history, source_component, int(version))
+        version = int(version)
+        # Validated against THIS call's own `history`, not rendered on faith: `selected` can be
+        # stale — logging in as a different user resets it (see `_login_screen`), but it can
+        # still outlive the data it pointed to, e.g. a Gold recalculation that changed which ADR
+        # a component is attributed to. A stale reference here is never the user clicking
+        # something that does not exist; showing `_render_adr_detail`'s "No ADR found" error for
+        # it would be confusing, not informative, so this drops it silently instead.
+        found = any(
+            adr["source_component"] == source_component and adr["version"] == version
+            for adr in history["adrs"]
+        )
+        if not found:
+            del st.session_state["architecture_history_selected_adr"]
+        else:
+            with st.expander(f"ADR — {source_component} v{version}", expanded=True):
+                _render_adr_detail(history, source_component, version)
 
 
 def _architecture_history_tab(username: str) -> None:
