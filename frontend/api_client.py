@@ -1,10 +1,7 @@
-"""This is a thin HTTP wrapper around the backend's `app/routers/frontend.py` endpoints.
-`app.py` never builds a request by hand. Every call the UI makes goes through one of these
-functions. So the shape of the backend API only needs to be known in one place.
+"""Thin HTTP wrapper around the backend API in `app/routers/frontend.py`.
+All UI calls go through these functions. This keeps the API shape in one place.
 
-`BACKEND_URL` points at the FastAPI service. This is `docker-compose.yml`'s `app` service, or
-a local `uvicorn app.main:app` run. See GETTING_STARTED.md's "Frontend usage" section for more
-detail.
+`BACKEND_URL` points to the FastAPI service. See GETTING_STARTED.md, "Frontend usage".
 """
 
 import os
@@ -34,9 +31,9 @@ def upload_transcription(
     max_questions_per_stage: int,
     username: str,
 ) -> dict:
-    """No `tenant` field. The backend derives it from `username` alone
-    (`app.routers.frontend._tenant_for_username`) — this is the guardrail that stops a request
-    from ever choosing a different tenant to act on."""
+    """No `tenant` field. The backend derives it from `username`
+    (`app.routers.frontend._tenant_for_username`). This stops a request from picking a
+    different tenant."""
     multipart_files = [("files", (name, content)) for name, content in files]
     response = requests.post(
         f"{BACKEND_URL}/v1/frontend/transcriptions/upload",
@@ -46,7 +43,7 @@ def upload_transcription(
             "username": username,
         },
         files=multipart_files,
-        timeout=600,  # a real graph run makes several sequential LLM calls
+        timeout=600,  # A graph run makes many LLM calls in sequence.
     )
     response.raise_for_status()
     return response.json()
@@ -114,10 +111,9 @@ def architecture_history(username: str) -> dict:
 
 
 def chat(username: str, question: str, k: int = 8, history: list[tuple[str, str]] | None = None) -> dict:
-    """`history` is the chat's prior turns, oldest first, as `(role, content)` pairs with
-    `role` one of `"user"`/`"assistant"` — the caller's own `chat_history`, excluding the
-    current `question`. Enables the backend to resolve follow-up references ("who approved
-    it?") — see `.tmp/advanced_techniques.md` §8."""
+    """`history` holds prior turns as `(role, content)` pairs, oldest first. `role` is
+    `"user"` or `"assistant"`. Exclude the current `question`. This lets the backend resolve
+    follow-up references, for example "who approved it?"."""
     response = requests.post(
         f"{BACKEND_URL}/v1/frontend/chat",
         json={

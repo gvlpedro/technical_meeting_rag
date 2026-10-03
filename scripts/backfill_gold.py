@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""This script replays Gold extraction and reconciliation over existing `silver_documents`
-rows. It does this on its own, without running Silver's own graph. This is the "fully
-rebuildable" promise from `.tmp/gold_process_v5.md` §4.
+"""Replays Gold extraction over existing `silver_documents` rows. It runs standalone,
+not through Silver's own graph.
 
-The three Gold nodes in `agents/graph.py` (`extract_gold_facts`, `resolve_gold_identity`, and
-`persist_gold_evolution`) call the same function this script calls:
-`agents.stages.gold.service.extract_and_persist_gold_facts`. So there is one shared
-implementation of this persist step, not two separate copies.
+It calls the same function the Gold nodes in `agents/graph.py` call:
+`agents.stages.gold.service.extract_and_persist_gold_facts`. One implementation serves
+both paths.
 
-Use this script after you change the extraction prompt or model and want to reprocess history.
-You can also use it to backfill Gold for `silver_documents` rows that existed before Gold did.
+Run this after a change to the extraction prompt or model, to reprocess history. It also
+backfills Gold for old `silver_documents` rows from before Gold existed.
 
 Usage:
     uv run python3 scripts/backfill_gold.py                          # every silver_documents row
@@ -33,14 +31,9 @@ from db.session import async_session_factory
 
 async def main(source_component: str | None, force: bool) -> None:
     async with async_session_factory() as session:
-        # Ordered by ingestion_date, not just left to whatever order Postgres happens to
-        # return rows in: `persist_entity_version` now closes a superseded row's `valid_to` to
-        # whatever `ingestion_date` this loop hands it next, assuming version order tracks date
-        # order. Processing an older meeting after a newer one (e.g. two source_components
-        # backfilled out of chronological order) would otherwise close `valid_to` to a date
-        # earlier than the row's own `ingestion_date` — a broken window for
-        # `current_gold_state_as_of` from then on. See
-        # `.tmp/improve_timeline_questions_and_linage.md` §2.1.
+        # Order by ingestion_date, not by insertion order. `persist_entity_version` closes a
+        # superseded row's `valid_to` using the next row's own `ingestion_date`. Processing an
+        # older meeting after a newer one would close `valid_to` before the row's own date.
         query = select(SilverDocument).order_by(SilverDocument.ingestion_date, SilverDocument.version)
         if source_component:
             query = query.where(SilverDocument.source_component == source_component)

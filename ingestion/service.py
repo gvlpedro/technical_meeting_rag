@@ -25,17 +25,15 @@ class IngestResult:
 async def ingest_uploaded_files(
     files: list[tuple[str, bytes]], ingestion_date: str, tenant: str, db: AsyncSession, *, uploaded_by: str = ""
 ) -> IngestResult:
-    """Ingest files uploaded straight from the frontend's "Input transcription" tab. This
-    never touches disk — `files` is `[(filename, raw_bytes), ...]`. A `.txt` or `.md` file
-    is decoded as plain text directly. Any other file type is rejected with a `ValueError`
-    that names the file.
+    """Ingests files from the frontend's "Input transcription" tab. `files` is
+    `[(filename, raw_bytes), ...]`. This function never writes to disk. It decodes a
+    `.txt` or `.md` file as plain text. It rejects any other file type with a
+    `ValueError` that names the file.
 
-    `uploaded_by` is the logged-in username that submitted this batch. It is stamped on
-    every `BronzeDocument` row written here. See that column's own docstring in
-    `db/models.py`.
+    `uploaded_by` is the logged-in username. It is stamped on every `BronzeDocument` row.
 
-    Raises `ValueError` for a malformed `ingestion_date` or an unsupported file extension.
-    Raises `NoTranscriptsFoundError` if `files` is empty."""
+    Raises `ValueError` for a bad `ingestion_date` or file type. Raises
+    `NoTranscriptsFoundError` if `files` is empty."""
     parsed_date = parse_ingestion_date(ingestion_date)
     if not files:
         raise NoTranscriptsFoundError("No files were uploaded")

@@ -1,17 +1,11 @@
-"""This is a compact theme for the Streamlit frontend, built for developers. It injects one
-CSS string once per page load. It also has a few small HTML helpers. One of them draws the
-completeness score bar. We use a helper here because `st.progress` does not give us enough
-control over that one element.
+"""Compact theme for the Streamlit frontend. Injects one CSS string per page load.
+Also has small HTML helpers, for example the completeness score bar (`st.progress`
+gives no color control).
 
-The page has two zones, and we made them look different on purpose. The left sidebar holds
-the vertical nav and shows who is logged in. It stays dark, so it reads as its own separate
-rail. The main content area is light, with a white background and near-black text. This gives
-the best reading contrast for the real work: uploaded transcripts, generated ADRs, and chat
-answers.
+The sidebar is dark. The main content area is light, for best reading contrast.
 
-The CSS targets Streamlit's own stable `data-testid` and `data-baseweb` attributes. It does
-not target Streamlit's internal class names, because those are hashed and change between
-versions. Streamlit's own docs recommend this same approach for custom CSS.
+The CSS targets stable `data-testid`/`data-baseweb` attributes, not Streamlit's
+internal class names. Those names are hashed and change between versions.
 """
 
 import base64
@@ -20,18 +14,9 @@ from pathlib import Path
 
 import streamlit as st
 
-# We read this file once per process, at module level, not on every rerun. Streamlit reruns
-# this whole script on every interaction. But re-importing a module that is already imported
-# does nothing. So this code only reads and encodes the file once.
-#
-# The path is relative to the current working directory. That is the repo root, both when you
-# run it locally with `uv run streamlit run frontend/app.py` and when you run it in Docker
-# from the image's WORKDIR. The rest of the app already uses this same convention for
-# on-disk paths.
-#
-# We embed the image as a base64 data URI. A plain `<img src="app/img/logo.png">` inside
-# `unsafe_allow_html` HTML cannot resolve a server-side file path, because the browser has no
-# access to the server's file system.
+# Reads and encodes the logo once per process, at import time, not on every Streamlit rerun.
+# Path is relative to the repo root (the working directory in both local and Docker runs).
+# Embedded as a base64 data URI: the browser cannot load a server-side file path directly.
 _LOGO_PATH = Path("app/img/logo.png")
 _LOGO_DATA_URI = (
     f"data:image/png;base64,{base64.b64encode(_LOGO_PATH.read_bytes()).decode('ascii')}"
@@ -39,23 +24,16 @@ _LOGO_DATA_URI = (
     else ""
 )
 
-# This is the height of the fixed, full-width header bar drawn by `render_header`. Every
-# other fixed or absolute Streamlit layout piece (`stHeader`, `stSidebar`,
-# `stAppViewContainer`) gets pushed down by exactly this much. See the CSS's "HEADER BAR"
-# section. This makes sure nothing renders underneath the header bar.
+# Height of the fixed header bar. Every other fixed/absolute layout piece shifts down by
+# this much, so nothing renders under the header. See the CSS "HEADER BAR" section.
 HEADER_HEIGHT_PX = 64
 
 CSS = f"""
 /* ================= FULL-WIDTH PAGE HEADER =================
-   A plain top bar — logo + bold title, no menu — spanning the ENTIRE browser width, including
-   over the sidebar, like a website's top nav bar. `position: fixed` escapes whatever column/
-   container `render_header`'s `st.markdown` call happens to sit inside (that's what makes a
-   normal Streamlit element "full width" in the first place: it can only ever fill its own
-   container, never the viewport) and a `z-index` above both `stHeader` (999990) and `stSidebar`
-   (999991, confirmed on the live DOM) keeps it on top of both. Every other top-level layout
-   piece is then shifted down by `HEADER_HEIGHT_PX` so it starts below the bar instead of
-   underneath it — `.stApp` is the single outermost container both the sidebar and the header/
-   main content live inside, so shifting it once pushes everything uniformly. */
+   Plain top bar (logo + title), spanning the full browser width, over the sidebar.
+   `position: fixed` escapes the container a normal Streamlit element is stuck inside.
+   `z-index` stays above `stHeader` and `stSidebar`. `.stApp` then shifts down by
+   `HEADER_HEIGHT_PX`, so the sidebar and main content both start below the bar. */
 .app-header-bar {{
     position: fixed;
     top: 0;
@@ -84,13 +62,9 @@ CSS = f"""
     color: var(--text-primary);
     letter-spacing: -0.01em;
 }}
-/* `[data-testid="stAppViewContainer"]` is the one container holding BOTH the sidebar and the
-   main content — itself `position: absolute; top: 0`, so shifting IT down (rather than
-   `.stApp`'s `padding-top`, which does nothing here: padding never moves an absolutely
-   positioned box's own origin, confirmed on the live DOM — the sidebar and its collapse button
-   stayed at `top: 0`, hidden under this bar, even with that padding in place) carries the
-   sidebar, its collapse button, `stHeader`'s Deploy/menu, and the main content down together as
-   one unit, preserving whatever positioning each already had relative to it. */
+/* `stAppViewContainer` holds both the sidebar and the main content, and is
+   `position: absolute; top: 0`. Shift it down directly. `.stApp`'s `padding-top` does not
+   work here: padding cannot move an absolutely positioned box's own origin. */
 [data-testid="stAppViewContainer"] {{
     top: {HEADER_HEIGHT_PX}px !important;
     height: calc(100vh - {HEADER_HEIGHT_PX}px) !important;
@@ -122,15 +96,11 @@ CSS += """
     --text-muted: #868e96;
 
     /* ---- Accents — one hue set, two uses ----
-       *-fill: exactly the given palette, for solid fills (buttons, badges, the score bar) —
-       a light/dark foreground sits ON TOP of these, so the original bright values are fine.
-       *-text: a darker read of the same hue, for the accent used AS text color on the white
-       main background (links) — the bright fill values are too light to pass contrast there. */
+       *-fill: the bright palette, for solid fills (buttons, badges, score bar).
+       *-text: a darker read of the same hue, for text on the white background (links). */
     --purple: #8b5cf6;
     --purple-text: #6d28d9;
-    /* Between --text-muted gray and --purple — the disabled `type="primary"` button's fill
-       (see `.stButton button[kind="primary"]:disabled` below): dark enough that the white label
-       text stays readable without a hover, unlike plain --surface (near white). */
+    /* Fill for the disabled primary button. Dark enough to keep white label text readable. */
     --purple-muted: #a99bd1;
     --cyan: #22d3ee;
     --cyan-text: #0e7490;
@@ -157,7 +127,7 @@ CSS += """
     color: var(--text-secondary);
 }
 
-/* Relatively small titles, on purpose — compact/technical, not a marketing page. */
+/* Small titles on purpose — compact, technical look. */
 h1 { font-size: 1.35rem !important; }
 h2 { font-size: 1.1rem !important; }
 h3 { font-size: 0.95rem !important; }
@@ -203,12 +173,9 @@ h1, h2, h3, h4, .stApp strong {
     background: var(--purple);
     border-color: var(--purple);
 }
-/* `!important` + targeting every descendant, not just the button itself: Streamlit wraps a
-   button's label in nested <div>/<span>/<p> elements, and the generic `.stApp span`/`.stApp p`
-   rule above sets its own `color` directly on those — a direct rule on an element always wins
-   over an inherited one, regardless of the ancestor selector's specificity. Without this, the
-   label read as --text-secondary gray on the purple fill even though the <button> itself
-   computed white correctly (confirmed via the actual rendered DOM, not just the stylesheet). */
+/* Targets every descendant, not just the button. Streamlit wraps the label in nested
+   <div>/<span>/<p> tags. The generic `.stApp span`/`.stApp p` rule sets color directly
+   on those, and a direct rule always wins over an inherited one. */
 [data-testid="stAppViewContainer"] .stButton button[kind="primary"],
 [data-testid="stAppViewContainer"] .stButton button[kind="primary"] *,
 [data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"],
@@ -219,12 +186,9 @@ h1, h2, h3, h4, .stApp strong {
     background: var(--purple-text);
     border-color: var(--purple-text);
 }
-/* Disabled `type="primary"` buttons (e.g. "Process and clarify" before any input is given) —
-   the generic `:disabled` rule below sets a near-white `--surface` fill, which combined with
-   the white text forced on every primary-button descendant above (needed so the label reads on
-   the purple fill) left the disabled label unreadable until hovered (hover isn't blocked on a
-   disabled button, so its own `:hover` rule masked the bug in a quick look). More specific than
-   the plain `:disabled` rule below, so it wins without needing `!important`. */
+/* Disabled primary buttons. The generic `:disabled` rule below sets a near-white fill,
+   which with the forced white text above left the label unreadable. More specific than
+   that rule, so it wins without `!important`. */
 [data-testid="stAppViewContainer"] .stButton button[kind="primary"]:disabled,
 [data-testid="stAppViewContainer"] .stFormSubmitButton button[kind="primary"]:disabled {
     background: var(--purple-muted);
@@ -236,20 +200,12 @@ h1, h2, h3, h4, .stApp strong {
     border-color: var(--border-subtle);
 }
 
-/* Per-question clarification action buttons (Irrelevant / Infer an answer / Suggest info) —
-   `frontend/app.py::_render_question_row` gives each one a `key` starting with `qbtn-<action>-`,
-   which Streamlit turns into a `st-key-<key>` class it attaches near the button; `[class*=...]`
-   matches that class regardless of the unique per-question suffix or whether Streamlit puts it
-   on the button itself or a wrapping element. `!important` so these permanent colors always win
-   over the plain-button/primary-button rules above, regardless of rule order.
-
-   Text color is set on the button AND on every descendant (`* { color: ... !important }`) for
-   the same reason the primary-button fix above needs it: Streamlit wraps the label in nested
-   <div>/<span>/<p> elements that `.stApp span`/`.stApp p` give their own direct `color`, which
-   otherwise wins over whatever the <button> itself computes (confirmed against the live DOM).
-   White text (not the previous dark-on-bright shades) is what actually reads on these
-   saturated fills; the smaller font keeps "Infer an answer" from being clipped in a ~13%-wide
-   button (see `_render_question_row`'s 60/40 answer/buttons split). */
+/* Per-question action buttons (Irrelevant / Infer an answer / Suggest info).
+   `_render_question_row` gives each a `key` starting with `qbtn-<action>-`, which Streamlit
+   turns into a `st-key-<key>` class. `[class*=...]` matches that class for any question.
+   `!important` makes these colors win over the plain/primary button rules above.
+   Color is also set on every descendant, for the same reason as the primary-button fix
+   above. Smaller font keeps "Infer an answer" from being clipped. */
 [data-testid="stAppViewContainer"] [class*="st-key-qbtn-irrelevant-"] button,
 [data-testid="stAppViewContainer"] button[class*="st-key-qbtn-irrelevant-"],
 [data-testid="stAppViewContainer"] [class*="st-key-qbtn-irrelevant-"] button *,
@@ -282,13 +238,10 @@ h1, h2, h3, h4, .stApp strong {
     line-height: 1.15 !important;
     white-space: normal !important;
 }
-/* The label sits inside a Streamlit-generic text-wrapper div (not one of our own classes) that
-   defaults to `overflow:hidden; text-overflow:ellipsis; white-space:nowrap` — fine for the
-   arbitrary-length labels it's normally built for, but it was clipping "Infer an answer" to
-   "Infer an…" even after the font-size cut above (confirmed on the live DOM: that div's own
-   `clientWidth` was 58px against a 90px `scrollWidth`). Forcing wrap on every descendant here,
-   scoped to just these three buttons, lets the label break onto a second line instead of being
-   cut — the buttons are short enough that two lines still reads fine. */
+/* The label sits in a Streamlit text-wrapper div that defaults to
+   `overflow:hidden; text-overflow:ellipsis; white-space:nowrap`. This clipped "Infer an
+   answer" to "Infer an…" even after the font-size cut above. Forces wrap instead, so the
+   label breaks onto a second line. */
 [data-testid="stAppViewContainer"] [class*="st-key-qbtn-"] button * {
     overflow: visible !important;
     text-overflow: clip !important;
@@ -371,9 +324,7 @@ section[data-testid="stSidebar"] hr {
     border-color: var(--sidebar-border-subtle);
 }
 
-/* Vertical nav — plain "inactive" items and one "active" (primary) item, matching the exact
-   top-nav look this app used before the layout moved into the sidebar: flat, no border,
-   pill-shaped highlight only on the current page. */
+/* Vertical nav. Flat, no border. Pill-shaped highlight only on the current page. */
 section[data-testid="stSidebar"] .stButton button {
     background: transparent;
     color: var(--sidebar-text-secondary);
@@ -401,14 +352,12 @@ section[data-testid="stSidebar"] .stButton button[kind="primary"]:hover {
 
 
 def inject() -> None:
-    """This injects the theme's `<style>` block. It also injects the full-width page header,
-    which shows the logo and the bold title. See the CSS's "FULL-WIDTH PAGE HEADER" section for
-    the styling. Call this once, early in `main()`, on every script run. This is cheap, because
-    Streamlit re-runs the whole script on every interaction anyway.
+    """Injects the theme's `<style>` block and the full-width header (logo and title).
+    Call once, early in `main()`, on every script run — cheap, since Streamlit reruns
+    the whole script anyway.
 
-    `main()` calls this before its login check, with no condition. So the header is the very
-    first thing on every page, including the login screen. No page has to remember to render the
-    header itself."""
+    `main()` calls this before its login check. The header shows on every page,
+    including login, with no extra work per page."""
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
     st.markdown(
         f"""<div class="app-header-bar">
@@ -420,10 +369,8 @@ def inject() -> None:
 
 
 def score_bar_html(score: int) -> str:
-    """This builds a small HTML completeness bar. Its color depends on the score band: green,
-    yellow, or red. This gives more control over the "is this actually production-ready" signal
-    than `st.progress` gives, since `st.progress` only has one fixed color. `score` is a number
-    from 0 to 100."""
+    """Builds a small HTML completeness bar. Color depends on the score band: green,
+    yellow, or red. `score` is a number from 0 to 100."""
     if score >= 80:
         color = "var(--green)"
     elif score >= 50:
@@ -453,10 +400,9 @@ def adr_metadata_header_html(
     created_at: str,
     content_hash: str,
 ) -> str:
-    """Builds the colored metadata header shown above a published ADR's content, on the
-    "Architecture history" → "View ADR" page. Blue, not yellow — yellow is reserved for the
-    Gold-entity cards `gold_entity_cards_html` draws below the ADR's own content, so the two
-    blocks read as visually distinct without sharing a color."""
+    """Builds the metadata header shown above a published ADR, on the "View ADR" page.
+    Blue, not yellow: yellow is reserved for the Gold-entity cards below, so the two
+    blocks look distinct."""
     fields = [
         ("Meeting date", ingestion_date),
         ("Authored by", authored_by or "—"),
@@ -484,10 +430,9 @@ def adr_metadata_header_html(
     """
 
 
-# Maps a `gold_evolution.operation` value to a readable color, spanning `ComponentStatus`,
-# `ContractAction`, and `ArchitectureChangeType` (`agents/shared.py`, `agents/stages/gold/
-# schemas.py`) — this one dict covers all three, since a card never knows in advance which
-# entity_type it is drawing. Unrecognized values fall back to `--text-muted` rather than KeyError.
+# Maps a `gold_evolution.operation` value to a color. Covers `ComponentStatus`,
+# `ContractAction`, and `ArchitectureChangeType` in one dict, since a card does not know
+# its entity_type in advance. Unknown values fall back to `--text-muted`.
 _OPERATION_COLORS = {
     "new": "var(--green-text)",
     "forward-update": "var(--blue-text)",
@@ -502,15 +447,12 @@ _OPERATION_COLORS = {
 
 
 def gold_entity_cards_html(entities: list[dict]) -> str:
-    """Builds the "Generated in Gold" card row shown at the end of a published ADR — one card
-    per `gold_evolution` row this exact ADR version actually wrote (see
-    `agents.stages.gold.service.gold_entities_for_adr`). Each `entities` item needs
-    `entity_type`, `canonical_name`, `operation`, and `version` keys — the same shape
-    `ArchitectureHistoryGoldEntity` sends over the wire.
+    """Builds the "Generated in Gold" card row at the end of a published ADR. One card per
+    `gold_evolution` row this ADR version wrote. Each `entities` item needs `entity_type`,
+    `canonical_name`, `operation`, and `version` keys.
 
-    A very soft yellow background (`rgba(250, 204, 21, 0.10)`, derived from the theme's own
-    `--yellow`, not a new color) sets this block apart from the rest of the page, so a reader
-    can tell at a glance what THIS ADR added to Gold, separate from the ADR's own prose above."""
+    Soft yellow background sets this block apart, so a reader sees at a glance what this
+    ADR added to Gold."""
     if not entities:
         return (
             '<p style="color:var(--text-muted); font-size:0.85rem;">'

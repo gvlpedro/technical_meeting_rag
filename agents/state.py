@@ -58,17 +58,11 @@ class SilverState(TypedDict):
 
     tenant: str
     username: str
-    # Whether `write_document` may persist a SilverDocument/audit file and let the graph
-    # continue into Gold — `True` everywhere except the frontend's initial upload, which
-    # stays `False` until a human clicks "Publish" (`finalize_document`); `SilverClarification`
-    # is the one exception, always logged regardless, since `regenerate_document`/
-    # `ask_more_questions` need it to ground a still-unpublished draft.
+    # True unless this is a frontend draft awaiting "Publish". Controls whether
+    # write_document persists the SilverDocument/audit file and continues into Gold.
     persist: bool
     # Per-run override of settings.max_architecture_pending_questions and
-    # settings.max_data_contract_pending_questions. See _top_questions.
-    # The frontend's "Input transcription" tab lets a user set one shared number for both,
-    # per upload. A run started any other way, such as a script or a test, falls back to the
-    # settings default. See initial_state.
+    # settings.max_data_contract_pending_questions. See _top_questions, initial_state.
     max_architecture_pending_questions: int
     max_data_contract_pending_questions: int
     # Restricts this run's Bronze batch to exactly these source_components instead of every

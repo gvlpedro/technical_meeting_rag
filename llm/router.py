@@ -17,7 +17,7 @@ _PROVIDER_API_KEY_FIELD = {
 
 USD_TO_EUR = 0.92
 
-# FastAPI asyncio.Task has there own tenant
+# Each FastAPI asyncio.Task gets its own tenant value.
 _tenant_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("llm_router_tenant", default="default")
 
 

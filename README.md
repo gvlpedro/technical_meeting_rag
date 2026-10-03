@@ -70,6 +70,8 @@ Documentos ─────────►│ contenido original   │
                     └────────────────────────────────────┘
 ```
 
+Consulta el documento [doc/gold_process.md](doc/gold_process.md) para más detalle.
+
 ## Preguntas esperadas a resolver
 
 * ¿Cuándo se introdujo el componente X en la empresa?
@@ -85,10 +87,6 @@ Guardrails implementados (`tests/test_guardrails.py`):
 
 * **Aislamiento de tenant.** Toda tabla y toda query filtran por `tenant`; un tenant nunca ve datos de otro.
 * **Rate limit de coste/abuso.** Máx. `settings.max_llm_calls_per_window` llamadas LLM por tenant ( 20 llamadas cada 60 segundos)
-
-## Ejemplos
-
-* Transcripciones sintéticas: descripciones específicas para gestionar tests unitarios y verificar el comportamiento esperado a partir de distintas descripciones.
 
 ## Interfaz de usuario
 
@@ -255,12 +253,15 @@ tests):
 | Fuga de guardrail | Un chunk restringido por perfil llega a una respuesta generada para otro perfil, incluso parafraseado | Tolerancia cero — cualquier fuga es un fallo, no un umbral |
 
 
-# Integración
-
-MCP para cada salida, para agentes internos
-
 # Próximos pasos
 
 * Reducir costes de las llamadas a LLM poniendo una cache de embeddings y respuestas
 * Refinar el tema de los FLAGS (detalles desconocidos que podrían resolverse de otra manera)
 * Solo hay 4 usuarios incluidos; Habría que implementar un sistema de registro.
+* Monitorización del sistema más exhaustiva
+
+# Presentación
+
+```
+presentation.html
+```

@@ -1,10 +1,12 @@
 .atl
+.claude
 .env
 output/*
 __pycache__/
 .download_transcript.pid
 .idea
 .tmp
+
 /agents/stages/architecture_questions/testing/output/
 /agents/stages/data_contract_questions/testing/output/
 /agents/stages/adr_generation/testing/output/

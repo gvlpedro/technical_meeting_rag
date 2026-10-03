@@ -1,32 +1,22 @@
 #!/usr/bin/env python3
-"""This script wipes every Bronze, Silver, and Gold row, every logged LLM call, and every
-LangGraph checkpoint, from the dev database. It also wipes the `output/` directory's generated
-audit files. This gives a full reset back to "nothing uploaded yet". Use it when you want to
-start a fresh round of uploads, with no old transcripts, ADRs, Gold facts, or Monitor-tab call
-history left over. This is the `make clean` entry point.
+"""Wipes every Bronze, Silver, and Gold row, every logged LLM call, and every LangGraph
+checkpoint from the dev database. It also clears the `output/` directory. This resets
+the app to "nothing uploaded yet". This is the `make clean` entry point.
 
-This script uses TRUNCATE, not DELETE, on the same list of tables that
-`agents/stages/gold/testing/test_golden_set.py` already truncates between its own steps
-(`_TABLES_TO_TRUNCATE` there), plus `llm_costs` — that other list does not include it either;
-both are a hand-kept "every table this app writes rows to" enumeration, so a new table only
-ends up wiped here once someone explicitly adds it, not automatically. `gold_aliases`,
-`gold_evolution`, `silver_chunks`, `silver_clarifications`, `silver_documents`,
-`bronze_documents`, `llm_costs`. The script reads this list from each model's own
-`__tablename__`, so a table already listed here cannot drift out of sync with `db/models.py` —
-it just does not catch a table that was never added to the list in the first place, which is
-exactly what happened to `llm_costs` when it was introduced.
+It TRUNCATEs each table listed by its own model's `__tablename__`
+(`bronze_documents`, `silver_documents`, `silver_chunks`, `silver_clarifications`,
+`gold_evolution`, `gold_aliases`, `llm_costs`). A table only gets wiped once someone
+adds it to this list.
 
-This script also truncates the LangGraph checkpointer's three data tables: `checkpoints`,
-`checkpoint_blobs`, and `checkpoint_writes`. This makes sure no paused, half-answered
-clarification thread survives the reset. It deliberately does NOT touch
-`checkpoint_migrations`. That table is the checkpointer library's own schema-version
-bookkeeping, not this app's data.
+It also truncates the checkpointer's three data tables (`checkpoints`,
+`checkpoint_blobs`, `checkpoint_writes`), so no paused clarification thread survives
+the reset. It does not touch `checkpoint_migrations` — that is the checkpointer
+library's own schema bookkeeping.
 
-This script never touches `alembic_version` or the table structure. It resets DATA, not
-schema. It always runs against `settings.database_url`, which is the dev database on
-`localhost:5433`. Every test target in the Makefile explicitly overrides `DATABASE_URL` to
-point at a separate test database instead, so this script can never reach the test database by
-accident.
+It never touches `alembic_version` or the schema itself — this resets data, not
+structure. It always runs against `settings.database_url`, the dev database on
+`localhost:5433`. Every Makefile test target overrides `DATABASE_URL` to a separate
+test database, so this script can never reach it by accident.
 
 Usage:
     uv run python3 scripts/clean_dev_data.py

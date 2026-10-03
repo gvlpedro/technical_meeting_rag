@@ -1,54 +1,31 @@
 #!/usr/bin/env python3
-"""This is an interactive REPL over Gold's evolution history. This is the `make chat` entry
-point. It picks between two different retrieval strategies per question, not just one:
+"""Interactive REPL over Gold's evolution history. This is the `make chat` entry point.
 
-  - **Full-history retrieval.** When the question both names a known component or data
-    contract (`find_entity_by_name_in_text`) AND reads as asking for its history
-    (`is_evolution_question`, e.g. "how has X evolved over time?" / "qué evolución ha tenido
-    X"), this fetches EVERY version of that one entity, in order (`entity_history`), and a
-    real LLM narrates it chronologically (`answer_evolution_question`) — who introduced it,
-    when, why, and what changed at each later step. This never uses embedding similarity: the
-    entity is already known, so there is nothing to rank, and top-k could otherwise drop an
-    early version whose narrative just does not word-match the question.
-  - **Hybrid top-k retrieval**, for everything else: cosine-similarity search over
-    `gold_evolution.embedding` (HNSW-indexed, `vector_cosine_ops`) fused, via Reciprocal Rank
-    Fusion, with a lexical `ts_rank` search over `gold_evolution.search_vector` (a generated
-    `tsvector`, GIN-indexed — see `.tmp/advanced_techniques.md` §1 and migration
-    `188c1b98dd96`). The lexical half catches an exact component name, acronym, or ODCS field
-    name that the embedding alone can blur. A real LLM then writes an answer from the fused
-    rows.
+It picks one of two retrieval strategies per question:
 
-All of this retrieval code (`find_entity_by_name_in_text`, `is_evolution_question`,
-`entity_history`, `answer_evolution_question`, `embed_question`, `top_k_gold_evolution`,
-`latest_versions`, `answer_question`) lives in `agents/stages/gold/service.py`. The
-`agents/stages/gold/testing/` test suite uses the same top-k code, through a thin re-export in
-`agents/stages/gold/testing/retrieval.py`. So there is one definition of each retrieval
-strategy, not a separate copy for each caller.
+  - **Full-history.** The question names a known entity AND asks for its history
+    (`is_evolution_question`). This fetches every version of that entity, in order
+    (`entity_history`), and an LLM narrates it (`answer_evolution_question`). It skips
+    embedding search — the entity is already known, so there is nothing to rank.
+  - **Hybrid top-k**, for everything else. It fuses a cosine-similarity search over
+    `gold_evolution.embedding` with a lexical `ts_rank` search, then an LLM answers from
+    the fused rows. The lexical half catches an exact name or acronym the embedding alone
+    can miss.
 
-`agents/stages/gold/service.py` adds three refinements on top of plain top-k retrieval. First,
-`max_distance` drops rows that are too far from the question, instead of always answering
-from the k closest rows regardless of how relevant they are (`--max-distance`, which defaults
-to `DEFAULT_MAX_DISTANCE`; this default is not yet tuned against real usage, see its
-docstring). Second, `latest_versions` tags each retrieved row as current or superseded. This
-way, a question about today's state does not get answered from an old version that happens to
-rank close by embedding similarity. Third, `--rerank` (opt-in, off by default) repunctuates
-the deduped candidates with a real local cross-encoder before cutting to `k` — see
-`top_k_gold_evolution`'s own docstring and `.tmp/advanced_techniques.md` §3. This flag is what
-actually makes `rerank` reachable from this CLI at all: `top_k_gold_evolution`'s own
-`rerank` parameter has no effect unless some real caller passes `rerank=True`, and before
-this flag existed, nothing in this codebase ever did. Fourth, `--expand` (opt-in, off by
-default) asks a cheap LLM call for a few reformulations of the question and searches with
-those too — see `agents/stages/gold/retrieval/query_expansion.py` and
-`.tmp/advanced_techniques.md` §4. Same reachability story as `--rerank`: `top_k_gold_evolution`'s
-`expand` parameter does nothing unless a caller passes `expand=True`.
+All retrieval code lives in `agents/stages/gold/service.py`. The test suite re-exports
+the same top-k code through `agents/stages/gold/testing/retrieval.py` — one definition,
+not a copy per caller.
 
-Fifth, this REPL keeps a running `history` of `(role, content)` turns across the session and
-threads it through both retrieval and generation the same way `app/routers/frontend.py::chat`
-does: a contextualized question (recent history + the current question) drives entity
-matching/embedding/lexical search, so a follow-up like "and who approved it?" still resolves
-to the right rows, while the raw history is passed to `answer_question`/
-`answer_evolution_question` for reference resolution only — see
-`.tmp/advanced_techniques.md` §8.
+Three flags refine top-k retrieval. `--max-distance` drops rows too far from the
+question. `latest_versions` tags each row as current or superseded, so a question about
+today's state does not answer from an old version. `--rerank` (opt-in) re-scores
+candidates with a local cross-encoder. `--expand` (opt-in) also searches with a few
+LLM-generated reformulations of the question.
+
+This REPL keeps a running `history` across the session. A contextualized question
+(recent history plus the current question) drives retrieval, so a follow-up like "and
+who approved it?" still resolves to the right rows. Generation gets the raw `history`
+and the original question separately, for reference resolution only.
 
 Usage:
     uv run python3 scripts/chat_gold.py
@@ -78,10 +55,9 @@ DEFAULT_K = 8
 
 
 def _contextualize(question: str, history: list[tuple[str, str]]) -> str:
-    """Same purpose as `app/routers/frontend.py::_contextualize_question` — folds the last
-    `MAX_HISTORY_MESSAGES` turns into the text handed to retrieval, so a follow-up question
-    still targets the right rows. Only used for retrieval; generation gets the raw `history`
-    and the original `question` separately."""
+    """Folds the last `MAX_HISTORY_MESSAGES` turns into the text handed to retrieval, so a
+    follow-up question still targets the right rows. Used for retrieval only. Generation
+    gets the raw `history` and the original `question` separately."""
     if not history:
         return question
     trimmed = history[-MAX_HISTORY_MESSAGES:]

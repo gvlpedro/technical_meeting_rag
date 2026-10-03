@@ -1,16 +1,13 @@
-"""Cada técnica de recuperación (RAG) que usa el chat de Gold vive en su propio fichero aquí,
-una por técnica, para poder estudiarlas y modificarlas de forma aislada:
+"""Each retrieval technique for the Gold chat lives in its own file here:
 
-- `hybrid_search.py` — búsqueda vectorial + léxica, fusionadas con Reciprocal Rank Fusion.
-- `deduplication.py` — colapsar varias versiones de la misma entidad a una sola en el top-k.
-- `reranking.py` — repuntuar candidatos con un cross-encoder local.
-- `citation_verification.py` — comprobar que cada cita del LLM corresponde a una fila real.
-- `conversational_memory.py` — la mitad de generación de la memoria conversacional del chat.
-- `corrective_rag.py` — reintento automático con un filtro de relevancia más laxo.
-- `query_expansion.py` — reformular la pregunta para encontrar sinónimos sin palabras en común.
+- `hybrid_search.py` — vector + lexical search, fused with Reciprocal Rank Fusion.
+- `deduplication.py` — collapses multiple versions of one entity into the top-k.
+- `reranking.py` — re-scores candidates with a local cross-encoder.
+- `citation_verification.py` — checks each LLM citation against a real row.
+- `conversational_memory.py` — builds the chat's conversation memory.
+- `corrective_rag.py` — retries with a looser relevance filter.
+- `query_expansion.py` — rephrases the question to find synonyms.
 
-`agents/stages/gold/service.py` es quien orquesta la mayoría (`top_k_gold_evolution`,
-`answer_question`, `answer_evolution_question`); `corrective_rag.py` es la excepción — la
-orquesta directamente el endpoint `/chat` en `app/routers/frontend.py`, envolviendo su llamada
-a `top_k_gold_evolution`. Este paquete no decide CUÁNDO se usa cada técnica, solo implementa
-CÓMO funciona cada una."""
+`agents/stages/gold/service.py` calls most of these. `app/routers/frontend.py`'s `/chat`
+endpoint calls `corrective_rag.py` directly. This package defines HOW each technique works,
+not WHEN to use it."""

@@ -1,5 +1,4 @@
-"""This file builds the prompt for the ADR-critic stage. The stage has one `.jinja` file, one
-path constant, one loader function, and one builder function."""
+"""Builds the prompt for the ADR-critic stage."""
 
 import jinja2
 
@@ -27,8 +26,7 @@ def _clarifications_block(clarifications: list[ClarificationItem]) -> str:
 def build_critic_prompt(
     document: str, source_content: str, clarifications: list[ClarificationItem]
 ) -> list[dict]:
-    """Renders `prompts/adr_critic/critic.jinja` as a real Jinja template. This follows the same
-    single-user-message convention every prompt builder in this codebase uses."""
+    """Renders `prompts/adr_critic/critic.jinja` as a single user message."""
     role_template = jinja2.Template(load_adr_critic_role())
     prompt = role_template.render(
         document=document,

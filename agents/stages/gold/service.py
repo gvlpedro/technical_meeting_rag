@@ -1,18 +1,14 @@
-"""This file holds reusable Gold-stage logic. Code can call it directly, for example a future
-backfill script or unit tests, without needing the full LangGraph state shape. This mirrors the
-split this repo's other stages already use relative to `agents/graph.py`: the three Gold nodes
-in `agents/graph.py` (`extract_gold_facts`, `resolve_gold_identity`, `persist_gold_evolution`)
-are thin wrappers that call the functions here.
+"""Reusable Gold-stage logic. Callable directly, for example by `scripts/backfill_gold.py` or
+tests, without the full LangGraph state. The three Gold nodes in `agents/graph.py`
+(`extract_gold_facts`, `resolve_gold_identity`, `persist_gold_evolution`) are thin wrappers
+around the functions here.
 
-Gold's per-ADR reconciliation runs inside Silver's own graph run. It does not run as a
-separately triggered pipeline that watches `silver_documents` for changes. See
-`.tmp/gold_process_v5.md` §1-2 for why.
+Gold's per-ADR reconciliation runs inside Silver's own graph run, not as a separate pipeline
+watching `silver_documents` for changes.
 
-Every function below is still a plain function that takes explicit arguments. None of them take
-a graph `state`. This lets `.tmp/gold_process_v5.md` §4's standalone rebuild path call the exact
-same functions the graph does. That rebuild path is a future `scripts/backfill_gold.py`: it
-replays Gold over existing `silver_documents` rows, without re-running Silver's ACB loop.
-"""
+Every function below takes explicit arguments, never a graph `state`. This lets
+`scripts/backfill_gold.py` call the same functions the graph does, replaying Gold over
+existing `silver_documents` rows without re-running Silver's own loop."""
 
 import asyncio
 import hashlib
@@ -54,36 +50,25 @@ from db.models import GoldAlias, GoldEvolution
 from ingestion.embedder import embed
 from llm import router
 
-# `resolve_entity_id` uses this same value on either side of an ambiguous match. A lower value
-# would start resolving genuinely different names to the same entity_id. For example, on a bad
-# day it could merge "Order Service" and "Orders API" into one entity. A higher value would mint
-# duplicate entity_ids for trivial spelling or casing drift, which is exactly what `gold_aliases`
-# exists to absorb. This value is not tuned against a real corpus yet. It is a candidate to
-# revisit once real transcripts exercise this path.
+# `resolve_entity_id` uses this threshold for a fuzzy match. Lower risks merging genuinely
+# different names ("Order Service" and "Orders API"). Higher risks minting a duplicate
+# entity_id for a trivial spelling drift. Not yet tuned against a real corpus.
 FUZZY_MATCH_THRESHOLD = 0.6
 
 
 def content_hash(content: str) -> str:
-    """`_entity_hash` below and `agents.graph._persist_document_version` both use this function.
-    It is the one definition of "how we turn a string into our version hash." Silver's
-    whole-document hash and Gold's per-entity hash both use it this way, even though they hash
-    different-shaped things (v6 §4)."""
+    """Turns a string into a version hash. Shared by `_entity_hash` and
+    `agents.graph._persist_document_version`."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def parse_odcs_spec(raw: str) -> dict:
-    """Parses `ExtractedDataContract.odcs_spec`'s JSON-encoded string back into the dict that
-    `DataContractPayload.odcs_spec` actually stores. See `ExtractedDataContract.odcs_spec`'s own
-    docstring for why it is a string at all on the extraction side. In short: OpenAI's strict
-    structured-output mode cannot express a deliberately open object field.
+    """Parses `ExtractedDataContract.odcs_spec`'s JSON string back into the dict
+    `DataContractPayload.odcs_spec` stores. Shared by `extract_and_persist_gold_facts` and
+    `agents.graph._persist_contracts`.
 
-    Both real callers of this conversion share this one function: `extract_and_persist_gold_facts`
-    below, and `agents.graph._persist_contracts`. Sharing it this way keeps the parsing and
-    fallback rule from drifting apart between the two callers.
-
-    This function falls back to `{}` for anything that is not a JSON object. A malformed spec
-    string should degrade to "no spec captured" for that one contract. It should never crash Gold
-    persistence for the whole ADR just because one contract has a formatting slip."""
+    Falls back to `{}` for anything that is not a JSON object, so one malformed spec never
+    crashes the whole ADR's Gold persistence."""
     if not raw:
         return {}
     try:
@@ -122,12 +107,9 @@ def classify_contract_directions(
     contracts: list, name_to_id: dict[str, str]
 ) -> dict[str, dict[str, set[str]]]:
     """Maps each component name to the contract ids it consumes ("input") and produces
-    ("output"), read straight off this same ADR's own contract extraction — no query needed.
-    Shared by both real callers that build `ComponentPayload` (`extract_and_persist_gold_facts`
-    below, `agents.graph._persist_components`), so the split logic cannot drift between them.
-    `contracts` must be a list of plain dicts (one `ExtractedDataContract.model_dump()` per
-    contract, or `extraction["contracts"]`'s own already-dict shape) — never `ExtractedDataContract`
-    instances directly, since this indexes with `contract["field"]`."""
+    ("output"), from this same ADR's own extraction. Shared by `extract_and_persist_gold_facts`
+    and `agents.graph._persist_components`. `contracts` must be a list of plain dicts, not
+    `ExtractedDataContract` instances, since this indexes with `contract["field"]`."""
     directions: dict[str, dict[str, set[str]]] = {}
     for contract in contracts:
         key = memo_key("data_contract", contract["name"])
@@ -143,15 +125,10 @@ def classify_contract_directions(
 
 
 def contracts_with_real_changes(contracts: list, name_to_id: dict[str, str]) -> set[str]:
-    """The entity ids of every contract in THIS SAME extraction whose own `action` is a real
-    change — anything other than `"unchanged"`/`"unknown"`. Used to correct a component's own
-    `"unchanged"` judgment to `"modified"` when a contract it was ALREADY associated with (same
-    id, still in its `input_contract_ids`/`output_contract_ids` — its own list of ids did not
-    change) itself got a new version underneath it this round. See `doc/cicle_evolution.md`'s
-    "Regla especial", condition 2. Shares the same "plain dicts, not `ExtractedDataContract`
-    instances" contract as `classify_contract_directions`, and both real callers
-    (`extract_and_persist_gold_facts` below, `agents.graph._persist_components`) call this one
-    alongside it, from the exact same `contracts` list."""
+    """Entity ids of every contract in this extraction whose `action` is a real change (not
+    `"unchanged"`/`"unknown"`). Used to correct a component's own `"unchanged"` to `"modified"`
+    when a contract it already depends on changed this round. Same "plain dicts" contract as
+    `classify_contract_directions`; both are called together on the same `contracts` list."""
     return {
         name_to_id[memo_key("data_contract", c["name"])]
         for c in contracts
@@ -160,49 +137,25 @@ def contracts_with_real_changes(contracts: list, name_to_id: dict[str, str]) -> 
 
 
 def _entity_hash(operation: GoldOperation, narrative: str, payload: dict) -> str:
-    """This uses the same hash-compare-then-bump mechanism as `content_hash` and
-    `agents.graph._persist_document_version`. It is scoped to one entity's own fields instead of
-    a whole document. See `GoldEvolution.entity_hash`'s column comment for why this function is
-    not named `content_hash`.
+    """Same hash-compare-then-bump mechanism as `content_hash`, scoped to one entity instead of
+    a whole document.
 
-    `payload` is serialized with `sort_keys=True`. This makes two logically identical payloads
-    hash the same, even if their keys were inserted in a different order. This is a real risk
-    here, because `payload` round-trips through Pydantic's `.model_dump()` in some call sites and
-    through plain dict construction in others.
-
-    `sort_keys=True` only normalizes dict key order. It does NOT normalize list element order. So
-    `payload["dependency_ids"]`, `payload["contract_ids"]`, and similar list fields must already
-    be sorted by the caller before this function runs. See `agents.graph.persist_gold_evolution`
-    and `scripts.backfill_gold._backfill_one` for where that sorting happens. Without it, two
-    logically identical extractions could list the same names in a different order. That would
-    hash differently and trigger a version bump that should not happen."""
+    `payload` is serialized with `sort_keys=True`, so two identical payloads hash the same even
+    with keys in a different order. This does NOT sort list elements. Callers must already sort
+    list fields like `dependency_ids` before calling this, or an unordered list can trigger a
+    version bump that should not happen."""
     canonical_payload = json.dumps(payload, sort_keys=True)
     return content_hash(f"{operation}\n{narrative}\n{canonical_payload}")
 
 
 async def extract_gold_facts_for_source(adr_content: str) -> GoldExtractionResult:
-    """This is one structured-extraction LLM call, using `temperature=0`. This is a deterministic
-    extraction task, not creative writing. This follows the same reasoning as
-    `agents.stages.architecture_questions.service.generate_architecture_questions_for_batch`'s
-    own `temperature=0, reasoning_effort="none"` call.
+    """One structured-extraction LLM call, at `temperature=0`: deterministic extraction, not
+    creative writing. `reasoning_effort="none"` turns off a reasoning-locked model's own
+    temperature check. Anthropic's reasoning-locked models have no such setting and require
+    temperature=1; a fallback to Anthropic here would fail instead. Accepted risk, not fixed.
 
-    `reasoning_effort="none"` is required alongside `temperature=0`, for the same documented
-    reason. A reasoning-locked model, for example gpt-5.6-terra, otherwise rejects any
-    temperature value other than 1. Setting `reasoning_effort="none"` turns that check off.
-
-    Anthropic's reasoning-locked models, for example claude-opus-5, have no equivalent setting to
-    turn that check off. They hard-require temperature=1. If `settings.llm_fallback_order` ever
-    falls through to Anthropic for this call, the call fails instead of falling back cleanly.
-    This is the same known risk as the call this mirrors, and it is accepted for now, not fixed
-    here. Fixing it would mean either reordering the fallback for every deterministic call in this
-    codebase, or teaching the router itself to drop `temperature` and `reasoning_effort` per
-    provider. Both are a bigger change than this pass's scope.
-
-    This function takes only `adr_content`. It does not take a pre-given list of mentioned
-    components or contracts. Gold discovers every component and contract straight from the
-    final, clarified ADR. See `build_gold_extraction_prompt`'s own docstring for why grounding
-    extraction against an earlier, pre-clarification list used to silently drop anything
-    introduced only through a clarification answer."""
+    Takes only `adr_content`, never a pre-given component/contract list. Gold discovers every
+    component and contract from the final, clarified ADR."""
     messages = build_gold_extraction_prompt(adr_content)
     response = await router.complete(
         messages, response_format=GoldExtractionResult, temperature=0, reasoning_effort="none"
@@ -242,13 +195,8 @@ async def already_extracted(
 async def gold_entities_for_adr(
     session: AsyncSession, source_component: str, source_adr_version: int, *, tenant: str = "default"
 ) -> Sequence[GoldEvolution]:
-    """Returns every `gold_evolution` row this exact `(tenant, source_component,
-    source_adr_version)` triple actually wrote — every Gold entity this specific ADR version
-    created or changed. `persist_entity_version` is a hash-compare-then-bump no-op when an
-    entity's asserted state is unchanged from its prior version, so an entity this ADR merely
-    re-confirmed without altering has no row here; only entities this ADR version genuinely
-    added or changed do. This is the same `(tenant, source_component, source_adr_version)`
-    filter `already_extracted` uses to check existence — this returns the full rows instead, for
+    """Returns every `gold_evolution` row this `(tenant, source_component, source_adr_version)`
+    triple actually wrote — only entities this ADR version genuinely added or changed. Backs
     the frontend's "what did this ADR generate in Gold" view."""
     result = await session.execute(
         select(GoldEvolution)
@@ -265,30 +213,16 @@ async def gold_entities_for_adr(
 async def _lookup_entity_id(
     session: AsyncSession, entity_type: GoldEntityType, name: str, *, tenant: str
 ) -> str | None:
-    """The shared exact-then-fuzzy lookup both `resolve_entity_id` and
-    `resolve_entity_id_for_lookup` build on. First, an exact match on `gold_aliases.alias`.
-    Second, a `pg_trgm` fuzzy match above `FUZZY_MATCH_THRESHOLD`, where the best similarity
-    wins. Returns `None` if neither matches — what happens next (mint a new id, or report "no
-    such entity") is the caller's decision, not this function's, since the write path and the
-    read path need opposite answers to "nothing matched."
+    """Shared exact-then-fuzzy lookup for `resolve_entity_id` and `resolve_entity_id_for_lookup`.
+    Tries an exact match on `gold_aliases.alias` first, then a `pg_trgm` fuzzy match above
+    `FUZZY_MATCH_THRESHOLD`. Returns `None` if neither matches.
 
-    `tenant` scopes both lookups. This is the one place where a missing tenant filter would cause
-    a real data leak, not just a wrong count. Without this filter, tenant A's "Order Service"
-    alias would exact-match or fuzzy-match tenant B's own "Order Service" mention. That would
-    silently merge two unrelated companies' components under the same entity_id.
+    `tenant` scopes both lookups, or two different companies' same-named components would
+    merge into one entity_id.
 
-    The fuzzy comparison rounds `similarity()` to 4 decimal places before comparing it to
-    `FUZZY_MATCH_THRESHOLD`, instead of comparing the raw value directly. `pg_trgm.similarity()`
-    returns a 4-byte `real`, and `FUZZY_MATCH_THRESHOLD` is a Python `float` (8-byte double) —
-    comparing `real > float8` widens the `real` to double precision first, and that widening can
-    turn a conceptually exact 0.6 into something like `0.6000000238418579`, which then passes a
-    strict `> 0.6` check it should not. This is not theoretical: `similarity('frontend',
-    'frontend-intra')` is exactly this case, and without the rounding here, it silently merged
-    two genuinely different components (a marketplace frontend and an unrelated, deliberately
-    separate intranet frontend) into one Gold entity — confirmed by reproducing the exact query
-    against the live database. Rounding first makes the comparison exact at the precision that
-    actually matters (four decimal places is already far finer than this threshold needs to be
-    tuned to), so a true 0.6 compares as 0.6, never as marginally more."""
+    Rounds `similarity()` to 4 decimals before comparing. Comparing the raw `real` to a Python
+    `float` widens it first, which can push an exact 0.6 just over the threshold — confirmed:
+    this silently merged two unrelated "frontend" components."""
     exact = (
         await session.execute(
             select(GoldAlias.entity_id).where(
@@ -318,30 +252,13 @@ async def _lookup_entity_id(
 async def resolve_entity_id(
     session: AsyncSession, entity_type: GoldEntityType, name: str, *, tenant: str = "default"
 ) -> str:
-    """This is the write-path identity resolution `resolve_and_alias` uses while persisting a
-    fresh extraction. It tries `_lookup_entity_id` first. If neither an exact nor a fuzzy match
-    exists, it mints a new `entity_id` as a ULID string (`python-ulid`), since a genuinely new
-    entity must get an id regardless. `gold_evolution` and `gold_aliases` never treat this id as
-    anything but an opaque string. This follows the same "owns nothing, purely a lookup"
-    principle that `gold_process.md` §3 states for `gold_aliases`.
+    """Write-path identity resolution for `resolve_and_alias`. Tries `_lookup_entity_id` first.
+    Mints a new `entity_id` as a ULID string if nothing matches — opaque, but short and
+    readable, unlike a `uuid4`.
 
-    A ULID, not a `uuid4`, is what this mints: 26 characters, Crockford-base32 (alphanumeric,
-    case-insensitive, no ambiguous characters), lexicographically sortable by creation time. It
-    is still just an opaque identity here, the same as a `uuid4` string would be — nothing reads
-    a ULID's embedded timestamp or relies on its sort order. The reason to use one anyway is
-    that this id is meant to appear in a component's own metadata and in a data contract's
-    `producer_id`/`consumer_id` (see `DataContractPayload`), where a short, readable,
-    unambiguous token is worth more than a `uuid4`'s hyphens and mixed-looking hex.
-
-    This function does not insert the alias row itself. See `ensure_alias` for that. A name that
-    resolves to an EXISTING entity_id through fuzzy match still needs its own alias row inserted,
-    since it is a new variant of a known entity. That insert is a different operation from
-    minting a new entity_id.
-
-    Never reuse this function for a read-only lookup (a chat question, a report). Minting a
-    fresh, alias-less id for "no match found" is only correct for a caller about to persist a
-    version under it. A read-only caller wants `resolve_entity_id_for_lookup` instead, which
-    reports "nothing matched" honestly instead of returning an empty new identity."""
+    Does not insert the alias row itself; see `ensure_alias`. Never use this for a read-only
+    lookup — it mints a fresh id even for "no match." Use `resolve_entity_id_for_lookup`
+    there."""
     existing = await _lookup_entity_id(session, entity_type, name, tenant=tenant)
     return existing if existing is not None else str(ULID())
 
@@ -349,13 +266,9 @@ async def resolve_entity_id(
 async def resolve_entity_id_for_lookup(
     session: AsyncSession, entity_type: GoldEntityType, name: str, *, tenant: str = "default"
 ) -> str | None:
-    """The read-only counterpart to `resolve_entity_id`, for a caller that is asking "does this
-    entity already exist," not "give me an id to write under." Returns `None` when neither an
-    exact nor a fuzzy alias match exists, instead of minting a fresh ULID the way the write
-    path does — a fresh id would have zero `gold_evolution` rows on record, which would read as
-    "found it, but it has no history" instead of the true "no such entity was ever seen."
-    `find_entity_by_name_in_text` uses this to resolve the component or contract name it found
-    in a question, before fetching that entity's full evolution history."""
+    """Read-only counterpart to `resolve_entity_id`: asks "does this entity exist," never mints
+    a fresh id. Used by `find_entity_by_name_in_text` to resolve a name before fetching its
+    history."""
     return await _lookup_entity_id(session, entity_type, name, tenant=tenant)
 
 
@@ -369,14 +282,9 @@ async def ensure_alias(
     *,
     tenant: str = "default",
 ) -> None:
-    """Inserts this `(tenant, entity_type, entity_id, alias)` row if it does not already exist.
-    This uses `ON CONFLICT DO NOTHING`. This is the same idempotent-insert convention the rest of
-    this pipeline uses for anything that can legitimately re-run over the same source, for
-    example `agents.graph._persist_document_version`'s overwrite branch.
-
-    This function is called both for a brand-new entity_id's first alias, and for an existing
-    entity_id seen under a new name variant. Both cases just need an insert-if-absent. Neither
-    case needs different logic."""
+    """Inserts this `(tenant, entity_type, entity_id, alias)` row if it does not exist, with
+    `ON CONFLICT DO NOTHING` — the same idempotent-insert convention used elsewhere in this
+    pipeline."""
     stmt = (
         insert(GoldAlias)
         .values(
@@ -393,23 +301,13 @@ async def ensure_alias(
 
 
 def memo_key(entity_type: GoldEntityType, name: str) -> str:
-    """The one place a `name_to_id` memo key gets built — `resolve_and_alias` and every one of
-    its callers that reads the same dict back (`classify_contract_directions`,
-    `contracts_with_real_changes`, `extract_and_persist_gold_facts`,
-    `agents.graph.resolve_gold_identity`/`_persist_components`/`_persist_contracts`) must all
-    build it this same way, never index `name_to_id` by bare `name` directly.
+    """Builds a `name_to_id` memo key. Every caller that reads this dict must use this, never
+    a bare `name`.
 
-    This is a regression fix, confirmed on real IBM tenant data: `name_to_id` used to be keyed
-    by bare `name` alone, shared across BOTH a component's own resolution and a data contract's,
-    within one extraction batch. A component and a data contract can legitimately share the
-    exact same name — a "Catalog Listing" component alongside a "Catalog Listing" event/contract
-    is completely ordinary — and whichever type resolved first used to win the shared slot, so
-    the second type silently reused the FIRST one's `entity_id` instead of getting its own. A
-    component that consumed or produced that contract then carried the WRONG id in its own
-    `contract_ids`/`producer_id`/`consumer_id`, and the contract's own evolution history split
-    across two different identities. Keying by `(entity_type, name)` instead means two same-
-    named entities of different types can never collide, no matter which one this ADR happens
-    to mention first."""
+    Fixes a real bug: a component and a data contract can share the same name ("Catalog
+    Listing"). Keying by bare name let the second type reuse the first type's `entity_id`,
+    splitting that contract's history across two identities. Keying by `(entity_type, name)`
+    stops that."""
     return f"{entity_type}:{name}"
 
 
@@ -423,16 +321,10 @@ async def resolve_and_alias(
     *,
     tenant: str = "default",
 ) -> str:
-    """This composes `resolve_entity_id` and `ensure_alias`. It is memoized against the caller's
-    own source-scoped `name_to_id` map, keyed by `memo_key(entity_type, name)` — see that
-    function's own docstring for why entity_type must be part of the key. So a name already
-    resolved earlier in the same batch is just a dict lookup, not a second round trip to the
-    database.
+    """Composes `resolve_entity_id` and `ensure_alias`, memoized against `name_to_id`, keyed by
+    `memo_key(entity_type, name)`. A name already resolved this batch is just a dict lookup.
 
-    Both `agents.graph.resolve_gold_identity` and `scripts.backfill_gold._backfill_one` need this
-    same identity-resolution step. Before this function existed, it was a nested closure in the
-    first one and a near-identical module-level function in the second one. Now both just call
-    this single definition."""
+    Shared by `agents.graph.resolve_gold_identity` and `scripts.backfill_gold._backfill_one`."""
     key = memo_key(entity_type, name)
     if key in name_to_id:
         return name_to_id[key]

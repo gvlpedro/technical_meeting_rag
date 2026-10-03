@@ -1,5 +1,4 @@
-"""Prompt construction for the data-contract-questions stage. It has one `.jinja` file, one
-path constant, one loader, and one builder function."""
+"""Prompt construction for the data-contract-questions stage."""
 
 import jinja2
 
@@ -12,17 +11,14 @@ _TEMPLATE_PATH = _STAGE_DIR / "template.md"
 
 
 def load_data_contract_template() -> str:
-    """`prompts/data_contract_questions/template.md`'s raw text. This is the per-contract ODCS
-    completeness spec that this stage drafts its clarification questions against. It is
-    applied once per contract in `IDENTIFIED_DATA_CONTRACTS`."""
+    """`template.md`'s raw text: the per-contract ODCS completeness spec, applied once per
+    contract in `IDENTIFIED_DATA_CONTRACTS`."""
     return _TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
 def load_data_contract_question_generation_role() -> str:
-    """`prompts/data_contract_questions/questions.jinja`'s raw text. Its
-    `{{data_contract_requirements}}`, `{{transcript}}`, and `{{identified_data_contracts}}`
-    placeholders are still unfilled. `agents.graph`'s `generate_data_contract_questions` node
-    fills them in via `build_data_contract_question_generation_prompt`."""
+    """`questions.jinja`'s raw text, placeholders unfilled.
+    `build_data_contract_question_generation_prompt` fills them in."""
     return _ROLE_PATH.read_text(encoding="utf-8")
 
 
@@ -35,11 +31,8 @@ def _mentioned_data_contracts_block(contracts: list[MentionedDataContractItem]) 
 def build_data_contract_question_generation_prompt(
     template_text: str, transcript_text: str, mentioned_data_contracts: list[MentionedDataContractItem]
 ) -> list[dict]:
-    """Renders `prompts/data_contract_questions/questions.jinja`. This is question-generation
-    stage 2 of 2: full ODCS-completeness questions for every contract that stage 1
-    (`agents.stages.architecture_questions.prompts.build_architecture_question_generation_
-    prompt`) already identified. This stage never discovers a contract on its own. It only
-    drafts questions for the fixed list it is given."""
+    """Renders `questions.jinja`: ODCS-completeness questions for contracts stage 1 already
+    identified. This stage never discovers a contract on its own."""
     role_template = jinja2.Template(load_data_contract_question_generation_role())
     prompt = role_template.render(
         data_contract_requirements=template_text,

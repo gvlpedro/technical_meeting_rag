@@ -1,33 +1,5 @@
 # Cost Analysis — Clarification Question Generation
 
-> **Historical**: measured against the single-pass question-generation prompt
-> (`agents.service.generate_questions_for_batch`, `testing_questions_acb/`) before it was split
-> into `generate_architecture_questions_for_batch` + `generate_data_contract_questions_for_batch`
-> (`agents/stages/architecture_questions/testing/` + `agents/stages/data_contract_questions/testing/`). The model comparison
-> and recommendation below are still the current production config — only the question-generation
-> prompt/test-project structure they were measured against has since changed.
-
-Comparative analysis of LLM model choice for question generation, based on real runs of
-`testing_questions_acb/`'s golden set (10 transcripts, real OpenAI/Anthropic API calls, nothing
-mocked). `score` is the Critic's 0-100 judgment (completeness minus padding); `price` is the
-metered cost of the full 10-case suite (Actor + Critic calls).
-
-## Comparative (test suite: `testing_questions_acb`)
-
-| Model | Score (avg.) | Price (10 cases) | Cases passed |
-|---|---:|---:|---:|
-| `gpt-5.6-sol` | 78.8 | 1.252 € | 10/10 |
-| `gpt-5.6-terra` | **81.0** | **0.605 €** | 10/10 |
-| `claude-haiku-4-5` | 36.9 | ≈0.26 € (9 cases) | 9/10 |
-
-**Recomiendo `gpt-5.6-terra` como modelo principal**: mismo 10/10 estructural, mejor score que
-`sol` (menos padding) y a mitad de coste — no hay razón para pagar `sol`.
-
-**Para el fallback usaría `claude-haiku-4-5`**, no por calidad (36.9 de score, claramente peor)
-sino porque es el único modelo de Anthropic que de verdad funciona con `temperature=0` en estas
-llamadas: `claude-opus-5` (el fallback configurado hoy) lo rechaza sin escape hatch, así que el
-fallback actual está roto de facto — mejor un resultado mediocre que ninguno.
-
 ## Per-case detail
 
 ### `gpt-5.6-sol`

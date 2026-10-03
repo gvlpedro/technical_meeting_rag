@@ -1,7 +1,6 @@
-"""This file builds the prompt for the ADR-generation stage. This stage is the pipeline's Actor.
-It makes one LLM call per source. That call writes the final ADR directly from a transcript plus
-its resolved clarifications. There is no intermediate structured JSON step (`doc/silver_process.md`
-§3 node 5)."""
+"""Builds the prompt for the ADR-generation stage (the pipeline's Actor). One LLM call per
+source writes the final ADR from a transcript plus its clarifications — no intermediate JSON
+step (`doc/silver_process.md` §3 node 5)."""
 
 from typing import TypedDict
 
@@ -14,20 +13,14 @@ _ROLE_PATH = PROMPTS_DIR / "adr_generation" / "generator.jinja"
 
 
 def load_adr_generation_role() -> str:
-    """Returns the raw text of `prompts/adr_generation/generator.jinja`. The `{{transcript}}`
-    and `{{clarifications}}` placeholders are still empty here. `build_adr_generation_prompt`
-    fills them in. The production graph's `synthesize_document` node uses this
-    (`agents/graph.py`). The `agents/stages/adr_generation/testing/` golden set also tests this on its own."""
+    """`generator.jinja`'s raw text, placeholders unfilled. `build_adr_generation_prompt` fills
+    them in."""
     return _ROLE_PATH.read_text(encoding="utf-8")
 
 
 class QaPair(TypedDict):
-    """One resolved clarification for `build_adr_generation_prompt`. This is only a
-    question/answer pair. It is not the full `ClarificationItem` shape. `adr_generator.jinja`
-    does not need `id`, `scope`, `target`, or `requirement`. It only needs the text a human would
-    read. `answer` is `None` when the question was asked but never got an answer. See
-    `_qa_pairs_block`: it shows this case as `(not answered)`. It does not drop the question
-    silently."""
+    """A question/answer pair, not the full `ClarificationItem` shape. `answer` is `None` when
+    unanswered — `_qa_pairs_block` shows that as `(not answered)`, never dropped silently."""
 
     question: str
     answer: str | None
@@ -62,37 +55,21 @@ def build_adr_generation_prompt(
     mentioned_components: list[MentionedComponentItem] | None = None,
     mentioned_data_contracts: list[MentionedDataContractItem] | None = None,
 ) -> list[dict]:
-    """Renders `prompts/adr_generation/generator.jinja` as a real Jinja template. See that file
-    for the actual generation rules: component-inclusion discipline, no placeholders, and
-    `doc/adr_example.md`-shaped output. This function takes a flat question/answer list. It does
-    not take the graph's own `ClarificationItem` state shape. See `QaPair` for that list's shape.
+    """Renders `generator.jinja`. See that file for the generation rules. Takes a flat
+    question/answer list (`QaPair`), not the graph's `ClarificationItem` shape.
 
-    `previous_architecture_diagram` is Gold's own current, tenant-wide architecture state. See
-    `agents.graph.synthesize_document`: every source in a batch gets this same diagram, because
-    Gold is reconciled across all sources, not scoped to any single one. It is empty only when
-    Gold has no live component for this tenant yet. This diagram grounds §2 "Previous
-    Architecture" in what was actually last published. Without it, the model would have to
-    reconstruct that section (or skip it) purely from this run's own transcript and
-    clarifications.
-
-    The "regenerate with feedback" endpoint in `app/routers/frontend.py` passes a different value
-    here instead: `agents.stages.adr_generation.service.own_previous_architecture_diagram`. That
-    value is this very draft's own §2, unchanged by the new feedback. It is not Gold's state
-    again.
+    `previous_architecture_diagram` is Gold's current, tenant-wide architecture state — every
+    source in a batch gets the same one. Empty only when Gold has no live component yet. It
+    grounds §2 "Previous Architecture" in what was last published. The "regenerate with
+    feedback" endpoint instead passes `own_previous_architecture_diagram`: this draft's own
+    §2, unchanged by the new feedback, not Gold's state again.
 
     `mentioned_components`/`mentioned_data_contracts` are the architecture-questions
-    identification stage's own transcript-grounded classification of every component/contract
-    it found (`agents.graph.generate_architecture_questions`'s `state["mentioned_components"]`/
-    `state["mentioned_data_contracts"]`). Without these, this call had to independently
-    re-derive each component's status from `transcript_text`/`clarifications` alone — and could
-    (and did, in a real case) reach a stricter, inconsistent conclusion than identification
-    already had, e.g. excluding a component identification had already confirmed `new` just
-    because no clarification answer happened to restate it in words. Passing them closes that
-    gap: `prompts/adr_generation/generator.jinja` now treats a confirmed (non-`unknown`) entry
-    here as part of `DOCUMENTED_CONTENT`, the same as an answered clarification. Both default to
-    `None` (rendered as "(none identified)") because the "regenerate with feedback" endpoint has
-    no access to this stage's output — it re-drafts from persisted `SilverClarification` rows
-    only, long after the identification stage's own in-memory graph state is gone."""
+    identification stage's own classification. Without them, this call could re-derive a
+    stricter, inconsistent status — confirmed in a real case: excluding a component
+    identification had already confirmed `new`. Passing them closes that gap: a confirmed
+    entry here counts as `DOCUMENTED_CONTENT`, like an answered clarification. Both default to
+    `None` for "regenerate with feedback", which has no access to this stage's output."""
     role_template = jinja2.Template(load_adr_generation_role())
     prompt = role_template.render(
         transcript=transcript_text,

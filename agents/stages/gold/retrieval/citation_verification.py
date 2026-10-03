@@ -1,22 +1,16 @@
-"""TÉCNICA: Verificación de citación / grounding.
+"""TECHNIQUE: Citation verification (grounding).
 
-Qué problema resuelve: cuando un LLM redacta una respuesta a partir de varios hechos
-recuperados, nada le impide "citar" un hecho que en realidad nunca se le mostró, o citar mal la
-versión/entidad exacta — el modelo puede sonar seguro sin que la cita sea cierta. Confiar en la
-cita del modelo sin comprobarla es justo el fallo de fiabilidad ("faithfulness") que hace que una
-respuesta de RAG parezca bien fundamentada sin estarlo de verdad.
+Problem: an LLM can cite a fact it was never shown, or cite the wrong version. A false
+citation still sounds confident. Trusting it without a check breaks RAG faithfulness.
 
-Cómo funciona aquí: `answer_question`/`answer_evolution_question` (en
-`agents/stages/gold/service.py`) piden al LLM una salida estructurada con la respuesta MÁS una
-lista de citas (`entity_type`, `entity_id`, `version` — ver `ChatCitation` en
-`agents/stages/gold/schemas.py`). `_verify_citations` comprueba, de forma determinista — sin
-otra llamada a un LLM — que cada cita corresponda a una fila que de verdad estaba entre las
-recuperadas (`rows`). Cualquier cita que no encaje se descarta antes de llegar al usuario. Es el
-mismo espíritu que `agents.shared.mentions_grounded_in_source` (que comprueba menciones de
-componentes contra la transcripción), aplicado aquí a las citas del chat.
+How: `answer_question`/`answer_evolution_question` ask the LLM for an answer plus a list of
+citations (`ChatCitation`: `entity_type`, `entity_id`, `version`). `_verify_citations` checks
+each citation against `rows`, the facts actually retrieved — no extra LLM call. A citation that
+does not match a retrieved row is dropped before the user sees it. Same idea as
+`agents.shared.mentions_grounded_in_source`, applied to chat citations instead of component
+mentions.
 
-Quién la usa: `answer_question` y `answer_evolution_question`. Ver `.tmp/tasks2.md` tarea 1 y
-`.tmp/advanced_techniques.md` §7."""
+Used by: `answer_question`, `answer_evolution_question`."""
 
 from collections.abc import Sequence
 
@@ -25,11 +19,8 @@ from db.models import GoldEvolution
 
 
 def _verify_citations(citations: list[ChatCitation], rows: Sequence[GoldEvolution]) -> list[ChatCitation]:
-    """Keeps only the citations that match a row actually in `rows` — an LLM-reported
-    `(entity_type, entity_id, version)` that was never retrieved is dropped, not trusted. Same
-    "check it mechanically, do not just trust the model" spirit as
-    `agents.shared.mentions_grounded_in_source`, applied here to citations instead of mentioned
-    names. This is what makes a citation evidence instead of an unverified claim: the model can
-    still phrase the answer badly, but it cannot cite a fact it was never shown."""
+    """Keeps only citations that match a row in `rows`. Drops any `(entity_type, entity_id,
+    version)` the LLM claims but never retrieved. This turns a citation into evidence, not an
+    unverified claim."""
     known = {(row.entity_type, row.entity_id, row.version) for row in rows}
     return [c for c in citations if (c.entity_type, c.entity_id, c.version) in known]

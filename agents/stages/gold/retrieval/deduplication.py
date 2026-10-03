@@ -1,22 +1,15 @@
-"""TÉCNICA: Deduplicación por entidad en el top-k.
+"""TECHNIQUE: Per-entity deduplication in the top-k.
 
-Qué problema resuelve: `gold_evolution` es un histórico "append-only" — cada nueva versión de un
-componente o contrato es una fila NUEVA, nunca se sobrescribe la anterior (ver el docstring de
-`GoldEvolution` en `db/models.py`). Eso significa que varias VERSIONES de la MISMA entidad suelen
-tener narrativas casi idénticas entre sí, y en un top-k sin deduplicar pueden llegar a ocupar
-varios de los huecos disponibles — desplazando a otra entidad genuinamente distinta y relevante
-que nunca llega a aparecer en la respuesta.
+Problem: `gold_evolution` keeps every version as its own row. Versions of the same entity
+often have near-identical narratives. Without dedup, they can fill several top-k slots and
+crowd out a different, relevant entity.
 
-Cómo funciona aquí: en vez de cortar directamente a los `k` mejores resultados, primero se pide
-un conjunto de recall más amplio (`RECALL_POOL_SIZE` candidatos, definido en
-`agents/stages/gold/service.py`), y `_dedupe_ids_by_entity` se queda con una sola fila por cada
-`(entity_type, entity_id)` distinto — la VERSIÓN MÁS RECIENTE de esa entidad, no necesariamente
-la fila que mejor puntuó en el ranking (una versión antigua puede, por azar, rankear más cerca de
-la pregunta que la versión actual — resolverlo así respondería con un dato desactualizado a una
-pregunta sobre el estado actual).
+How: `top_k_gold_evolution` first fetches a wider pool (`RECALL_POOL_SIZE` candidates).
+`_dedupe_ids_by_entity` then keeps one row per `(entity_type, entity_id)` — its latest
+version, not necessarily the best-ranked row. An old version can rank closer to the question
+by chance; answering from it would give stale state for a question about the current one.
 
-Quién la orquesta: `top_k_gold_evolution` la activa con `dedupe=True` (valor por defecto). Ver
-`.tmp/advanced_techniques.md` §2 para la justificación completa."""
+Used by: `top_k_gold_evolution`, with `dedupe=True` (the default)."""
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,28 +18,12 @@ from db.models import GoldEvolution
 
 
 async def _dedupe_ids_by_entity(session: AsyncSession, ids: list[int], k: int) -> list[int]:
-    """Collapses `ids` — already ranked, best first — down to at most `k` ids, one per distinct
-    `(entity_type, entity_id)`. This runs in two passes, not one, because "keep whichever
-    version ranked best" is the WRONG rule — a real regression this exact rule caused, caught
-    by `agents.stages.gold.testing`'s real-LLM suite: an older version's narrative can rank
-    closer to a question than the entity's own current state does (`top_k_gold_evolution`'s own
-    docstring on `max_distance` already covers this for `latest_versions`' `[superseded]`
-    tag — the same risk applies here). Deduping straight to that better-ranked OLDER version
-    then answers "what changed" from stale state, missing exactly the update the question asked
-    about.
-
-    Pass 1 finds the RANK ORDER of the first `k` distinct entities in `ids` — this decides WHICH
-    entities make the cut, and in what order, exactly as before. Pass 2 then resolves each of
-    those entities to the id of its actual latest version — queried fresh from every version
-    that entity has on record, not limited to whichever versions happened to be in `ids`. A
-    version can be the entity's current state even if it ranked outside `ids` entirely (for
-    example, past `RECALL_POOL_SIZE`), and this must still find it.
-
-    Without deduping at all, several VERSIONS of the SAME entity — whose narratives are often
-    near-identical between consecutive versions — can occupy multiple of the `k` slots a plain
-    top-k would return, crowding out a genuinely different, relevant entity that never gets a
-    chance to surface. See `RECALL_POOL_SIZE`'s own comment and `.tmp/advanced_techniques.md`
-    §2."""
+    """Collapses `ids` — already ranked, best first — to at most `k` ids, one per distinct
+    `(entity_type, entity_id)`. Two passes: pass 1 picks the rank order of the first `k`
+    distinct entities. Pass 2 resolves each entity to its actual latest version, queried fresh,
+    not limited to the versions already in `ids`. Keeping "whichever version ranked best"
+    instead is wrong: an older version can rank closer to the question than the current one,
+    which answers from stale state."""
     if not ids:
         return []
     candidate_rows = (

@@ -1,13 +1,10 @@
-"""Every endpoint the Streamlit app in `frontend/` calls. This is one router, not five.
-All of it exists to serve that one app's four tabs (see the README's "User interface"
-section). Splitting it further would only scatter one cohesive story across more files.
+"""Every endpoint the Streamlit app calls. One router for all four tabs — see the
+README's "User interface" section.
 
-Auth (`/login`) checks against `settings.frontend_users`. This is a fixed, hardcoded
-list of logins, with no user table (see `FrontendUser`'s own docstring in
-`app/config.py`). `tenant` is what actually keeps data separate between logins.
-Nothing here issues a session token. Instead, the frontend just holds
-`{username, tenant}` in its own `st.session_state` after a successful login, and sends
-`tenant` back on every later call.
+Auth (`/login`) checks `settings.frontend_users`, a fixed list with no user table (see
+`FrontendUser` in `app/config.py`). `tenant` keeps data separate between logins. There
+is no session token: the frontend holds `{username, tenant}` in `st.session_state` and
+sends `tenant` back on every call.
 """
 
 import asyncio
@@ -95,21 +92,17 @@ def _tenant_for_username(username: str) -> str:
     raise HTTPException(status_code=401, detail="Unknown user")
 
 
-# Per-tenant sliding window of `time.monotonic()` call timestamps, for `_enforce_llm_rate_limit`
-# below. In-process only — resets on restart and is not shared across workers. That is fine for
-# today's single `uvicorn` process (`Dockerfile` has no `--workers`); a multi-worker or
-# multi-instance deployment would need this moved to Postgres or Redis instead.
+# Per-tenant sliding window of call timestamps, for `_enforce_llm_rate_limit`. In-process
+# only: it resets on restart and does not share across workers. A multi-worker deployment
+# needs this moved to Postgres or Redis.
 _llm_call_log: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _enforce_llm_rate_limit(tenant: str) -> None:
-    """Cost/abuse guardrail for the three endpoints that trigger real, paid LLM calls per
-    request (`regenerate_document`, `ask_more_questions`, `finalize_document`): rejects a
-    request once `tenant` has made `settings.max_llm_calls_per_window` of THESE calls within
-    the last `settings.llm_rate_limit_window_seconds`, so a buggy frontend loop or a malicious
-    client can't run up an unbounded LLM bill. Called right after `_tenant_for_username`, before
-    anything else in the request runs — same "reject before reading anything else" shape as the
-    tenant check itself."""
+    """Cost guardrail for the three endpoints with a real paid LLM call per request
+    (`regenerate_document`, `ask_more_questions`, `finalize_document`). Rejects a request once
+    `tenant` exceeds `settings.max_llm_calls_per_window` calls within
+    `settings.llm_rate_limit_window_seconds`. Call this right after `_tenant_for_username`."""
     now = time.monotonic()
     window = _llm_call_log[tenant]
     cutoff = now - settings.llm_rate_limit_window_seconds
@@ -146,7 +139,7 @@ class TranscriptionResponse(BaseModel):
     thread_id: str
     pending_questions: list[str] = []
     documents: dict[str, str] = {}
-    # This maps source_component to the Critic's completeness_score (0-100)
+    # Maps source_component to the Critic's completeness_score (0-100).
     scores: dict[str, int] = {}
     unresolved_points: dict[str, list[str]] = {}
 
@@ -165,10 +158,9 @@ async def _run_graph(thread_id: str, payload: dict) -> dict:
 
 
 async def _resume_graph(thread_id: str, answers: dict[str, str], *, expected_tenant: str) -> dict:
-    """Checks, via `graph.aget_state`, that this `thread_id`'s saved tenant matches
-    `expected_tenant` before resuming it — since `thread_id` is just a guessable string, not a
-    secret, this stops a request from resuming and reading back another tenant's paused
-    draft."""
+    """Checks that this `thread_id`'s saved tenant matches `expected_tenant` before resuming
+    it. `thread_id` is a guessable string, not a secret. This check stops a request from
+    reading another tenant's paused draft."""
     async with AsyncPostgresSaver.from_conn_string(checkpointer_dsn()) as saver:
         await saver.setup()
         graph = build_graph(saver)
@@ -210,11 +202,10 @@ async def upload_transcription(
     files: list[UploadFile] = File(...),
     db: AsyncSession = Depends(get_session),
 ) -> TranscriptionResponse:
-    """Ingests every uploaded file into Bronze (capped at `settings.max_upload_file_bytes`,
-    tenant derived from `username`) and runs the Silver clarification loop on it with
-    `persist=False` — so the result is only a draft until "Publish" — pausing with
-    `status: "pending_review"` (answered via `/resume`) if a human needs to resolve up to
-    `max_questions_per_stage` questions per stage."""
+    """Ingests every uploaded file into Bronze, capped at `settings.max_upload_file_bytes`.
+    Runs the Silver clarification loop with `persist=False`, so the result stays a draft
+    until "Publish". Pauses with `status: "pending_review"` (resume via `/resume`) if a human
+    must answer up to `max_questions_per_stage` questions per stage."""
     tenant = _tenant_for_username(username)
     payloads: list[tuple[str, bytes]] = []
     for f in files:
@@ -241,9 +232,8 @@ async def upload_transcription(
             username=username,
             max_architecture_pending_questions=max_questions_per_stage,
             max_data_contract_pending_questions=max_questions_per_stage,
-            # This scopes the run to exactly the files just uploaded. A second,
-            # unrelated upload that happens to reuse today's date must never get
-            # pooled with this one.
+            # Scopes the run to only the files just uploaded. A second, unrelated
+            # upload on the same date must not pool with this one.
             source_components=result.files_ingested,
             persist=False,
         ),
@@ -253,13 +243,12 @@ async def upload_transcription(
 
 @router.post("/transcriptions/resume", response_model=TranscriptionResponse)
 async def resume_transcription(request: ResumeRequest) -> TranscriptionResponse:
-    """Answers a paused graph run's pending questions and continues it. This is the
-    same mechanism `ask_human` always uses, whether the pause came from the classify
-    stage or a Boss escalation (see `agents/graph.py::ask_human`'s own docstring).
+    """Answers a paused graph run's pending questions and continues it. Same mechanism as
+    `ask_human` (see `agents/graph.py::ask_human`), for a pause from the classify stage or a
+    Boss escalation.
 
-    `expected_tenant` comes from `request.username`, never from `request.thread_id` itself —
-    see `_resume_graph`'s own docstring for why a thread_id alone must never be trusted as
-    proof of tenant ownership."""
+    `expected_tenant` comes from `request.username`, never from `request.thread_id` — see
+    `_resume_graph` for why a thread_id alone is not proof of tenant ownership."""
     tenant = _tenant_for_username(request.username)
     state = await _resume_graph(request.thread_id, request.answers, expected_tenant=tenant)
     return _to_response(request.thread_id, state.get("ingestion_date", ""), [], state)
@@ -334,12 +323,11 @@ class AskMoreResponse(BaseModel):
 
 @router.post("/transcriptions/ask-more", response_model=AskMoreResponse)
 async def ask_more_questions(request: AskMoreRequest, db: AsyncSession = Depends(get_session)) -> AskMoreResponse:
-    """Drafts one more round of clarification questions for an already-drafted ADR by
-    re-running the same question-generation + classification standalone (no Boss, no
-    persistence), grounded on the reviewer's current draft plus any typed feedback rather
-    than a DB re-fetch, and deduped/capped with the same `_top_questions` helper — the
-    frontend answers them by folding the Q&A into a feedback string for
-    `/transcriptions/regenerate`."""
+    """Drafts one more round of clarification questions for an already-drafted ADR. Re-runs
+    question-generation and classification standalone, with no Boss step and no persistence.
+    Grounds the questions on the reviewer's current draft and typed feedback, not a DB
+    re-fetch. Dedupes and caps the result with `_top_questions`. The frontend folds the
+    answers into a feedback string for `/transcriptions/regenerate`."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
     _enforce_llm_rate_limit(tenant)
@@ -359,14 +347,11 @@ async def ask_more_questions(request: AskMoreRequest, db: AsyncSession = Depends
     architecture_result = await generate_architecture_questions_for_batch(
         ingestion_date_str, bronze_rows, architecture_diagram=known_architecture
     )
-    # `generate_data_contract_questions_for_batch` takes `MentionedDataContractItem`,
-    # a plain dict/TypedDict. `architecture_result.mentioned_data_contracts` is a list
-    # of Pydantic `MentionedDataContract` objects instead. So this must call
-    # `.model_dump()` on each one first. This is the same conversion
-    # `agents.graph.generate_architecture_questions` already does before writing them
-    # into graph state. Skipping it crashes downstream with
-    # `'MentionedDataContract' object is not subscriptable`, the moment a real
-    # contract was identified.
+    # `generate_data_contract_questions_for_batch` takes plain dicts
+    # (`MentionedDataContractItem`), but `mentioned_data_contracts` holds Pydantic
+    # `MentionedDataContract` objects. Call `.model_dump()` on each first — the same
+    # conversion `agents.graph.generate_architecture_questions` does. Skipping this
+    # crashes with `'MentionedDataContract' object is not subscriptable`.
     contract_result = await generate_data_contract_questions_for_batch(
         ingestion_date_str,
         bronze_rows,
@@ -413,19 +398,16 @@ class FinalizeResponse(BaseModel):
 
 @router.post("/transcriptions/finalize", response_model=FinalizeResponse)
 async def finalize_document(request: FinalizeRequest, db: AsyncSession = Depends(get_session)) -> FinalizeResponse:
-    """"Publish": persists `content` as this source's next SilverDocument version (a no-op
-    if byte-identical to the last one) and immediately runs Gold extraction on it, falling
-    back to `BronzeDocument`'s own `ingestion_date` on this source's first-ever publish, or a
-    404 if there's no Bronze content either.
+    """"Publish": persists `content` as this source's next SilverDocument version (a no-op if
+    byte-identical to the last one), then runs Gold extraction on it. Falls back to
+    `BronzeDocument`'s own `ingestion_date` on this source's first publish, or 404 if there is
+    no Bronze content either.
 
-    `strip_downgrade_markers` runs on `request.content` first, before it touches anything —
-    the review card the reviewer approved still shows `_DOWNGRADE_MARKER` annotations
-    (`agents.graph.boss_decide`'s "the Critic could not verify this against the transcript"
-    flag), but once a human has reviewed and published, that internal review annotation has
-    done its job and should not become a permanent part of the ADR's own record. Stripping it
-    here, before `_persist_document_version`/the embedding/Gold extraction, means every
-    downstream reader — SilverDocument, SilverChunk, Gold's own extraction LLM call — sees the
-    same clean text a human accepted, never the raw review markup."""
+    `strip_downgrade_markers` runs on `request.content` first. The reviewed draft still
+    shows `_DOWNGRADE_MARKER` annotations (`agents.graph.boss_decide`'s "unverified claim"
+    flag). Once published, that annotation has done its job and must not stay in the ADR's
+    record. Stripping it here means every later reader sees the same clean text the human
+    accepted."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
     _enforce_llm_rate_limit(tenant)
@@ -506,12 +488,11 @@ class ArchitectureHistoryAdr(BaseModel):
 
 
 class ArchitectureHistoryResponse(BaseModel):
-    # `gold.current_architecture_diagram_interactive`'s Mermaid code, rendered by the
-    # `streamlit_mermaid_interactive` frontend component (not `st.mermaid_chart` — see that
-    # function's docstring for why a real click-capable renderer needed a different package).
+    # Mermaid code from `gold.current_architecture_diagram_interactive`. Rendered by
+    # `streamlit_mermaid_interactive`, not `st.mermaid_chart` — see that function's docstring.
     diagram: str
-    # Maps a node's exact visible label to a "{source_component}::{source_adr_version}" string,
-    # since the component identifies a clicked node by its rendered text, not a Mermaid node id.
+    # Maps a node's visible label to a "{source_component}::{source_adr_version}" string. The
+    # frontend component IDs a clicked node by its rendered text, not a Mermaid node id.
     diagram_entity_mapping: dict[str, str]
     adrs: list[ArchitectureHistoryAdr]
 
@@ -581,12 +562,11 @@ class ChatResponse(BaseModel):
 
 
 def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
-    """Prefixes `question` with the last `gold.MAX_HISTORY_MESSAGES` turns of `history`, so a
-    follow-up that only makes sense in context ("And who approved it?") still retrieves the
-    right rows. Used ONLY for retrieval targeting (entity matching, embedding, lexical search)
-    — the answer itself is still generated strictly from retrieved Gold facts, via `history`
-    passed separately to `gold.answer_question`/`gold.answer_evolution_question`. See
-    `.tmp/advanced_techniques.md` §8."""
+    """Prefixes `question` with the last `gold.MAX_HISTORY_MESSAGES` turns of `history`. This
+    lets a context-only follow-up ("And who approved it?") still retrieve the right rows.
+    Used only for retrieval: entity matching, embedding, lexical search. The answer itself
+    still comes only from retrieved Gold facts; `history` reaches
+    `gold.answer_question`/`gold.answer_evolution_question` separately."""
     if not history:
         return question
     trimmed = history[-gold.MAX_HISTORY_MESSAGES :]
@@ -595,12 +575,11 @@ def _contextualize_question(question: str, history: list[ChatMessage]) -> str:
 
 
 async def _diagram_response_fields(db: AsyncSession, tenant: str, rows: list, citations: list) -> dict:
-    """Scopes `build_relationship_diagram` to exactly the component(s) an answer CITED — never a
-    row that was merely retrieved but never actually used — so every one of `chat`'s three
-    response branches can attach the same optional diagram with one call, right before building
-    its own `ChatResponse`. Returns `{}` (no `diagram` key at all) when there is nothing to show,
-    so each call site can just do `ChatResponse(..., **await _diagram_response_fields(...))`
-    without a None-check of its own."""
+    """Scopes `build_relationship_diagram` to the component(s) an answer actually CITED, never
+    a row that was only retrieved. Each of `chat`'s three response branches calls this once,
+    right before building its `ChatResponse`. Returns `{}` when there is nothing to show, so a
+    call site can write `ChatResponse(..., **await _diagram_response_fields(...))` with no
+    None-check."""
     cited_keys = {(c.entity_type, c.entity_id, c.version) for c in citations}
     cited_rows = [row for row in rows if (row.entity_type, row.entity_id, row.version) in cited_keys]
     built = await gold.build_relationship_diagram(db, cited_rows, tenant=tenant)
@@ -620,26 +599,22 @@ async def _diagram_response_fields(db: AsyncSession, tenant: str, rows: list, ci
     }
 
 
-# Matches a reference to one SPECIFIC numbered version ("version 1", "v4", "v.2") — deliberately
-# NOT just the bare word "version" (that alone would hijack an ordinary "what version is X on"
-# question, which the normal top-k path with its `[latest version]` tag already answers fine).
+# Matches one specific numbered version ("version 1", "v4", "v.2"). Not the bare word
+# "version": that would hijack an ordinary "what version is X on" question, which the
+# normal top-k path already answers.
 _SPECIFIC_VERSION_PATTERN = re.compile(r"\bv(?:ersion)?\.?\s*(\d+)\b", re.IGNORECASE)
 
 
 async def _answer_specific_version_question(
     db: AsyncSession, tenant: str, request: ChatRequest, history: list[tuple[str, str]]
 ) -> ChatResponse | None:
-    """Handles "what were X's facts in version N" — a real, reported gap: `top_k_gold_evolution`
-    only ever returns the LATEST version per entity (by design, for "current state" questions),
-    so a question pinned to an explicit past version got answered from the wrong version's data
-    with no way to reach the right one, even though `entity_history` already had it. This is
-    also not what `is_evolution_question`'s full-narrative path is for — that narrates the whole
-    timeline; this answers one specific, named snapshot the same way `answer_question` answers
-    any other row, `_payload_detail` (input/output contracts, dependencies) included.
+    """Handles "what were X's facts in version N". `top_k_gold_evolution` only returns the
+    latest version per entity, by design, so a question pinned to a past version needs this
+    path instead. Not the same as `is_evolution_question`'s full-timeline path: this answers
+    one named snapshot, the same way `answer_question` answers any other row.
 
-    Returns `None` (never a `ChatResponse`) whenever this isn't actually a pinned-version
-    question — no version number named, or no known entity named — so `chat` falls through to
-    its normal branches exactly as before."""
+    Returns `None` when the question names no version number or no known entity, so `chat`
+    falls through to its normal branches."""
     version_match = _SPECIFIC_VERSION_PATTERN.search(request.question)
     if version_match is None:
         return None
@@ -680,46 +655,37 @@ async def _answer_specific_version_question(
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) -> ChatResponse:
     """Answers a chat question from Gold:
 
-    - Anything `Publish` has ever persisted for this tenant is queryable right away — no
-      separate approval step.
-    - If the question pins one explicit version number ("...in version 1", "v4") to a known
-      entity, it answers from exactly that version's own row — never the latest — see
-      `_answer_specific_version_question`.
-    - If the question names a known component/contract and asks about its history, it
-      returns that entity's full version history in chronological order, instead of a
-      similarity search.
-    - Every other question uses hybrid retrieval: vector similarity combined with a lexical
-      search, so an exact name or acronym is never missed.
-    - Whenever the answer actually cites a component, the response also carries a small Mermaid
-      `diagram` of that component and its direct neighbors (`diagram_sources` names which ADR(s)
-      to link back to) — see `_diagram_response_fields`/`gold.build_relationship_diagram`. `None`
-      when the answer cited no component, or a cited component has no relationships to show.
-    - Recent chat history is used only to resolve what a follow-up question refers to — never
-      as a source of facts.
-    - `tenant` always comes from the logged-in username, never from the request, so one
-      tenant can never read another tenant's Gold facts."""
+    - Anything `Publish` has persisted for this tenant is queryable right away. No separate
+      approval step.
+    - A question pinned to one version number ("in version 1", "v4") answers from that row,
+      never the latest — see `_answer_specific_version_question`.
+    - A question about a known entity's history returns its full version history in order,
+      not a similarity search.
+    - Every other question uses hybrid retrieval: vector similarity plus lexical search, so
+      an exact name or acronym is never missed.
+    - A cited component adds a small Mermaid `diagram` of it and its direct neighbors
+      (`diagram_sources` names the ADR(s) to link to) — see `_diagram_response_fields`.
+      `None` when nothing was cited, or a cited component has no relationships.
+    - Chat history only resolves what a follow-up refers to. It is never a source of facts.
+    - `tenant` comes from the logged-in username, never the request, so a tenant can never
+      read another tenant's Gold facts."""
     tenant = _tenant_for_username(request.username)
     bind_tenant(tenant)
 
     history = [(m.role, m.content) for m in request.history]
     contextualized_question = _contextualize_question(request.question, request.history)
 
-    # Checked first, and only against `request.question` (never `contextualized_question`, same
-    # reasoning as the evolution check right below): a question pinned to one explicit version
-    # number is unambiguous on its own and must never depend on what an earlier turn said.
+    # Checks `request.question`, never `contextualized_question`: a pinned version number is
+    # unambiguous on its own and must not depend on an earlier turn.
     specific_version_response = await _answer_specific_version_question(db, tenant, request, history)
     if specific_version_response is not None:
         return specific_version_response
 
-    # Deliberately `request.question` here, never `contextualized_question`: both checks below
-    # must react only to what THIS turn actually asks. `contextualized_question` prefixes prior
-    # turns (including the assistant's own past answers) onto the text, so a marker word like
-    # "historically" or "timeline" appearing in an EARLIER reply would otherwise flip
-    # `is_evolution_question` to True for an unrelated follow-up, and `find_entity_by_name_in_text`
-    # (longest-alias-wins) could then match some OTHER entity named in that stale history instead
-    # of the one this question actually names — a real, reproduced bug, not a hypothetical one.
-    # `contextualized_question` still feeds the embedding/lexical retrieval below, where
-    # resolving a pronoun-style follow-up ("and who approved it?") is exactly the point.
+    # Checks `request.question`, never `contextualized_question`, for the same reason: a
+    # marker word in an EARLIER reply (e.g. "historically") could otherwise flip
+    # `is_evolution_question` for an unrelated follow-up, and match the wrong entity — a real,
+    # reproduced bug. `contextualized_question` still feeds retrieval below, where resolving a
+    # follow-up ("and who approved it?") is the point.
     if gold.is_evolution_question(request.question):
         match = await gold.find_entity_by_name_in_text(db, request.question, tenant=tenant)
         if match is not None:
@@ -747,9 +713,8 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
     vector = await gold.embed_question(contextualized_question)
 
     async def _retrieve(max_distance: float | None) -> list[GoldEvolution]:
-        # `rerank`/`expand` both cost one extra model call per question, so both stay off here
-        # by default, the same way `rerank` already did before `expand` existed — `--rerank`/
-        # `--expand` on `scripts/chat_gold.py` are where either gets exercised experimentally.
+        # `rerank`/`expand` each cost one extra model call per question, so both stay off
+        # here by default. `scripts/chat_gold.py --rerank`/`--expand` exercise them instead.
         return await gold.top_k_gold_evolution(
             db,
             vector,
@@ -760,10 +725,8 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_session)) ->
             max_distance=max_distance,
         )
 
-    # Corrective RAG: a strict first pass (`DEFAULT_MAX_DISTANCE`) avoids answering from the
-    # least-bad candidate when nothing is actually relevant; if that pass finds nothing, one
-    # relaxed retry (no distance filter) catches a real answer that only just missed the
-    # strict cutoff, before this gives up honestly. See
+    # Corrective RAG: a strict first pass avoids answering from a weak candidate. One
+    # relaxed retry, with no distance filter, runs only if that pass finds nothing. See
     # `agents/stages/gold/retrieval/corrective_rag.py`.
     rows = await gold.retrieve_with_correction(_retrieve, gold.DEFAULT_MAX_DISTANCE)
 
@@ -807,23 +770,18 @@ class TestMonitorResponse(BaseModel):
     llm_costs: list[LlmCostRow]
 
 
-# `test_monitor` below only ever returns this many of the caller's tenant's most recent
-# `llm_costs` rows. Every real LLM call writes one row (`llm.router._log_usage`), so an
-# unbounded query here would grow without limit as the app keeps running — this caps what one
-# Monitor-tab load actually pulls and renders, newest calls first.
+# Caps how many of the caller's `llm_costs` rows `test_monitor` returns. Every LLM call
+# writes one row, so an unbounded query would grow without limit. Newest calls first.
 _LLM_COSTS_DISPLAY_LIMIT = 200
 
 
 @router.get("/test-monitor", response_model=TestMonitorResponse)
 async def test_monitor(username: str, db: AsyncSession = Depends(get_session)) -> TestMonitorResponse:
-    """Backs the "Monitor" tab. Test suite results (`testing_*/output/result.json`) stay a
-    global, app-wide view — the ACB golden sets are not tenant data. `llm_costs`, below, is the
-    opposite: every real LLM call is tagged with the tenant `bind_tenant` set at that call's
-    own request boundary (see `llm.router.complete`'s own docstring), so this endpoint filters
-    to the CALLER's own tenant only, the same isolation `architecture_history`/`chat` already
-    enforce — one tenant must never see how much another tenant's usage cost. Gated only by
-    `start_test_mode`; the endpoint itself stays reachable, `start_test_mode` only hides the
-    tab that calls it."""
+    """Backs the "Monitor" tab. Test suite results are a global, app-wide view: the golden
+    sets are not tenant data. `llm_costs` is the opposite — each row is tagged with the
+    tenant `bind_tenant` set at that call (see `llm.router.complete`). This endpoint filters
+    to the caller's own tenant, like `architecture_history`/`chat` already do. The route
+    stays registered either way; `start_test_mode=False` makes it 404 on every call."""
     if not settings.start_test_mode:
         raise HTTPException(status_code=404, detail="Test monitor is disabled (start_test_mode=False)")
     tenant = _tenant_for_username(username)
