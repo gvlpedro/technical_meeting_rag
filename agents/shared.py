@@ -1,5 +1,4 @@
-"""Shared types and helper functions used by more than one pipeline stage, so no single stage
-has to own and duplicate them."""
+"""Shared types and helper functions used by more than one pipeline stage."""
 
 import re
 from datetime import date
@@ -15,21 +14,17 @@ from app.config import settings
 from db.models import BronzeDocument, SilverClarification, SilverDocument
 from ingestion.bronze_documents_chunker import parse_ingestion_date
 
-# Used by every stage that retries a bad LLM output: temperature 0 reliably repeats the same
-# bad result, so a retry samples at this higher temperature instead, to actually get something
-# different.
+# Retry temperature for a bad LLM output. Temperature 0 repeats the same bad result.
 SHALLOW_RETRY_ATTEMPTS = 5
 SHALLOW_RETRY_TEMPERATURE = 0.7
 
 # --- Shared types --------------------------------------------------------------------------
 
 ComponentStatus = Literal["new", "modified", "removed", "unchanged", "unknown"]
-# `forward-update` = backward-compatible (only adds or loosens fields); `break-change` = not
-# backward-compatible (removes/renames a field, or makes an optional one required).
+# `forward-update` = backward-compatible. `break-change` = not backward-compatible.
 #
-# KNOWN LIMITATION: unlike `mentioned_components`, nothing checks this classification against
-# the transcript — it's just the LLM's own judgment, so a real breaking change can get
-# mislabeled `forward-update` and nothing downstream catches it.
+# LIMITATION: nothing checks this classification against the transcript, unlike
+# `mentioned_components`. A real breaking change can get mislabeled `forward-update`.
 ContractAction = Literal[
     "new", "forward-update", "break-change", "unchanged", "deprecated", "removed", "unknown"
 ]
@@ -39,8 +34,7 @@ QuestionScope = Literal[
 
 
 class QuestionItem(BaseModel):
-    """One drafted clarification question, with a stable `id` so a later step (like
-    `classify_questions`) can match it back without relying on the exact question text."""
+    """One drafted clarification question, with a stable `id` for later matching."""
 
     id: str
     scope: QuestionScope
@@ -53,8 +47,7 @@ class QuestionItem(BaseModel):
 
 
 class NoBronzeDocumentsError(Exception):
-    """Raised when there's nothing to clarify for this `ingestion_date`, so the graph fails
-    loudly instead of quietly finishing with nothing written."""
+    """Raised when there's nothing to clarify for this `ingestion_date`."""
 
 
 def distinct_sources(bronze_documents: list[BronzeRow]) -> list[str]:
@@ -70,10 +63,9 @@ def source_content(bronze_documents: list[BronzeRow], source_component: str) -> 
 
 
 def insert_authors_line(document: str, username: str) -> str:
-    """Adds a `**Authors:** <username>` line after the ADR's heading, in plain Python (never
-    the LLM, since we already know the username) — must run after the Critic, which would
-    otherwise flag this line as an unsupported claim, and does nothing when `username` is
-    empty."""
+    """Adds a `**Authors:** <username>` line after the ADR's heading, in plain Python, not the
+    LLM. Must run after the Critic, which would otherwise flag this line as unsupported. Does
+    nothing when `username` is empty."""
     if not username:
         return document
     heading, _, rest = document.partition("\n")
@@ -84,18 +76,16 @@ _AUTHORS_LINE_RE = re.compile(r"^\*\*Authors:\*\*\s*(.+)$", re.MULTILINE)
 
 
 def extract_authors_line(document: str) -> str:
-    """Reads the username back out of a document's `**Authors:**` line — the reverse of
-    `insert_authors_line`, returning `""` if there is no such line."""
+    """Reverse of `insert_authors_line`. Returns `""` if there is no such line."""
     match = _AUTHORS_LINE_RE.search(document)
     return match.group(1).strip() if match else ""
 
 
 def insert_source_line(document: str, source_component: str) -> str:
-    """Adds a `**Source:** <source_component>` line after the ADR's heading, in plain Python
-    (never the LLM, and never the version number, which isn't known yet), so a reader with
-    only the downloaded `.md` file can still tell which transcript this ADR came from — must
-    run after the Critic, same reason as `insert_authors_line`, and does nothing when
-    `source_component` is empty."""
+    """Adds a `**Source:** <source_component>` line after the ADR's heading, in plain Python.
+    Lets a reader of the downloaded `.md` file tell which transcript this ADR came from. Same
+    Critic-ordering reason as `insert_authors_line`. Does nothing when `source_component` is
+    empty."""
     if not source_component:
         return document
     heading, _, rest = document.partition("\n")
@@ -106,23 +96,22 @@ _SOURCE_LINE_RE = re.compile(r"^\*\*Source:\*\*\s*(.+)$", re.MULTILINE)
 
 
 def extract_source_line(document: str) -> str:
-    """The inverse of `insert_source_line`. Returns `""` if the document has no such line —
-    see `insert_source_line`."""
+    """Reverse of `insert_source_line`. Returns `""` if the document has no such line."""
     match = _SOURCE_LINE_RE.search(document)
     return match.group(1).strip() if match else ""
 
 
 def transcription_base_name(source_component: str) -> str:
-    """Strips both the file extension and a trailing language code, so `"talk.en.vtt"`
-    becomes `"talk"` — used wherever a stage names a file on disk after its source."""
+    """Strips the file extension and a trailing language code: `"talk.en.vtt"` becomes
+    `"talk"`."""
     return Path(Path(source_component).stem).stem
 
 
 def _write_json_audit_file(
     ingestion_date: str, bronze_documents: list[BronzeRow], subdir: str, payload: str
 ) -> None:
-    """Writes one human-readable JSON audit file per source transcript in this batch, for a
-    person to check — nothing downstream reads it back."""
+    """Writes one JSON audit file per source transcript, for a person to check. Nothing
+    downstream reads it back."""
     out_dir = Path(settings.output_dir) / f"ingestion_date={ingestion_date}" / subdir
     out_dir.mkdir(parents=True, exist_ok=True)
     for source in distinct_sources(bronze_documents):
@@ -134,10 +123,9 @@ _MIN_GROUNDABLE_NAME_LENGTH = 2
 
 
 def name_appears_in_text(name: str, text_lower: str) -> bool:
-    """Checks whether `name` appears in `text_lower` as a whole word, ignoring case, and
-    rejects any name shorter than `_MIN_GROUNDABLE_NAME_LENGTH` — a plain substring check
-    would wrongly match inside an unrelated word (e.g. "Order" inside "Reordering") or match
-    almost anywhere for a 1-character name."""
+    """Checks whether `name` appears in `text_lower` as a whole word, ignoring case. Rejects
+    any name shorter than `_MIN_GROUNDABLE_NAME_LENGTH`. A plain substring check would wrongly
+    match inside an unrelated word (e.g. "Order" inside "Reordering")."""
     normalized = name.strip().lower()
     if len(normalized) < _MIN_GROUNDABLE_NAME_LENGTH:
         return False
@@ -145,13 +133,11 @@ def name_appears_in_text(name: str, text_lower: str) -> bool:
 
 
 def mentions_grounded_in_source(source_text: str, items: list[dict]) -> list[dict]:
-    """Keeps only the items whose `name` actually appears in this one source's own transcript
-    text, splitting the batch's pooled mentions back out per source-component (a name can
-    rightly match more than one source; that's not a bug). KNOWN LIMITATION: since the
-    mentions were drafted once from every source pooled together, a name the LLM reworded away
-    from the transcript's own wording (e.g. "CO svc" reported as "Checkout Service") can end
-    up attached to the wrong source, or to none — fixing that means tagging each mention with
-    its source at generation time, out of scope here."""
+    """Keeps only the items whose `name` appears in this source's own transcript text. Splits
+    the batch's pooled mentions back out per source-component; a name can rightly match more
+    than one source. LIMITATION: a name the LLM reworded away from the transcript's wording
+    (e.g. "CO svc" reported as "Checkout Service") can end up attached to the wrong source, or
+    to none."""
     source_lower = source_text.lower()
     return [item for item in items if name_appears_in_text(item["name"], source_lower)]
 
@@ -166,10 +152,9 @@ async def load_bronze_rows(
     tenant: str = "default",
     source_components: list[str] | None = None,
 ) -> list[BronzeRow]:
-    """Returns every `bronze_documents` row for this `(tenant, ingestion_date)` pair (raising
-    `NoBronzeDocumentsError` if there are none), always filtered by tenant so two tenants'
-    same-day meetings never mix, and narrowed to `source_components` when given so two
-    unrelated uploads on the same date don't pool together either."""
+    """Returns every `bronze_documents` row for this `(tenant, ingestion_date)` pair. Raises
+    `NoBronzeDocumentsError` if there are none. Always filtered by tenant. Narrowed to
+    `source_components` when given."""
     ingestion_date = parse_ingestion_date(ingestion_date_str)
     query = select(BronzeDocument.source_component, BronzeDocument.content).where(
         BronzeDocument.ingestion_date == ingestion_date, BronzeDocument.tenant == tenant
@@ -186,14 +171,14 @@ async def load_bronze_rows(
 
 
 def _no_bronze_documents_message(ingestion_date_str: str) -> str:
-    """The one error message shown when nothing was uploaded yet for this date."""
+    """Error message for when nothing was uploaded yet for this date."""
     return (
         f"No bronze_documents found for ingestion_date={ingestion_date_str!r} — check the date"
     )
 
 
 async def bronze_content_for_source(session: AsyncSession, tenant: str, source_component: str) -> str:
-    """Returns this source's raw transcript text, joined into one string — used by the
+    """Returns this source's raw transcript text, joined into one string. Used by the
     frontend's "regenerate with feedback" endpoint, which runs outside any graph run."""
     result = await session.execute(
         select(BronzeDocument.content)
@@ -206,9 +191,8 @@ async def bronze_content_for_source(session: AsyncSession, tenant: str, source_c
 async def bronze_ingestion_date_for_source(
     session: AsyncSession, tenant: str, source_component: str
 ) -> date | None:
-    """Returns this source's own `ingestion_date`, for the two callers that have no
-    `SilverDocument` yet to read it from instead — returns `None` if this source has no
-    Bronze rows at all."""
+    """Returns this source's own `ingestion_date`, for callers with no `SilverDocument` yet.
+    Returns `None` if this source has no Bronze rows at all."""
     result = await session.execute(
         select(BronzeDocument.ingestion_date)
         .where(BronzeDocument.tenant == tenant, BronzeDocument.source_component == source_component)
@@ -219,9 +203,8 @@ async def bronze_ingestion_date_for_source(
 
 
 async def qa_pairs_for_source(session: AsyncSession, tenant: str, source_component: str) -> list[dict]:
-    """Returns every clarification question and answer already recorded for this source, so
-    "regenerate with feedback" can reuse the same resolved answers plus the reviewer's new
-    feedback."""
+    """Returns every clarification question and answer recorded for this source. Lets
+    "regenerate with feedback" reuse the resolved answers plus the reviewer's new feedback."""
     result = await session.execute(
         select(SilverClarification.question, SilverClarification.answer)
         .where(SilverClarification.tenant == tenant, SilverClarification.source_component == source_component)
@@ -233,9 +216,8 @@ async def qa_pairs_for_source(session: AsyncSession, tenant: str, source_compone
 async def latest_document_content(
     session: AsyncSession, tenant: str, source_component: str
 ) -> str | None:
-    """Returns the most recent `SilverDocument` for this source (or `None` on a first-time
-    run) — reads Silver, never Gold, since each layer here only ever reads from the layer
-    right before it."""
+    """Returns the most recent `SilverDocument` for this source, or `None` on a first-time
+    run. Reads Silver, never Gold — each layer here reads only from the layer before it."""
     result = await session.execute(
         select(SilverDocument.content)
         .where(SilverDocument.tenant == tenant, SilverDocument.source_component == source_component)
@@ -246,26 +228,21 @@ async def latest_document_content(
 
 
 def markdown_heading_pattern(heading: str) -> re.Pattern[str]:
-    """A `##` Markdown heading matcher tolerant of a model that drops the OUTPUT STRUCTURE's own
-    numeric prefix — confirmed as a real, reported case: a whole generated ADR that wrote plain
-    `"## Target Architecture"` / `"## Affected Components"` throughout, never `"## 3. Target
-    Architecture"` / `"## 4. Affected Components"`, silently breaking every caller below that
-    expected the numbered form verbatim (this document's own NEXT redraft would have lost its
-    "previous architecture" grounding entirely, not just failed to color a diagram).
+    """A `##` Markdown heading matcher tolerant of a model that drops the numeric prefix.
+    Confirmed real case: a generated ADR wrote plain `"## Target Architecture"`, never `"## 3.
+    Target Architecture"`, silently breaking every caller that expected the numbered form.
 
-    `heading` is given in its fully-numbered form (`"## 3. Target Architecture"`); the numeric
-    prefix, if present in `heading` itself, is treated as OPTIONAL in what it matches, never
-    required — so this matches a real document's heading whether or not that document numbered
-    it. Anchored to the whole line (`re.MULTILINE`, `^...$`) so e.g. "## Target Architecture
-    Notes" is correctly NOT a match for "## Target Architecture"."""
+    `heading` is given fully numbered (`"## 3. Target Architecture"`). The numeric prefix is
+    optional in what it matches, never required, so this matches a document whether or not it
+    numbered the heading. Anchored to the whole line, so "## Target Architecture Notes" is not
+    a match for "## Target Architecture"."""
     bare_text = re.sub(r"^##\s*\d+\.\s*", "", heading).strip()
     return re.compile(rf"^##\s*(?:\d+\.\s*)?{re.escape(bare_text)}\s*$", re.MULTILINE)
 
 
 def _markdown_section(content: str, start_heading: str, end_heading: str) -> str:
-    """Slices `content` from `start_heading` up to `end_heading` (or to the end if not found).
-    Tolerant of a missing numeric heading prefix — see `markdown_heading_pattern`, which this
-    uses for both ends instead of a plain string search."""
+    """Slices `content` from `start_heading` up to `end_heading`, or to the end if not found.
+    Tolerant of a missing numeric heading prefix — see `markdown_heading_pattern`."""
     start_match = markdown_heading_pattern(start_heading).search(content)
     if start_match is None:
         return ""

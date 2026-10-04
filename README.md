@@ -136,8 +136,11 @@ Una única aplicación FastAPI respaldada por Postgres (`pgvector` para embeddin
 de LangGraph que lleva un batch de transcripciones a través de todo el pipeline Bronze → Silver
 → Gold en una sola ejecución; Streamlit es la capa de interfaz (ver `## Interfaz de usuario`
 arriba y `frontend/`), que llama al backend a través de `app/routers/frontend.py`. No hay un
-sistema de usuarios real detrás del login — ver la sección "Frontend usage" de
-[GETTING_STARTED.md](GETTING_STARTED.md) para las dos cuentas de ejemplo y sus tenants.
+sistema de usuarios real detrás del login.
+
+# SETUP DEL PROYECTO
+
+Revisar el documento [GETTING_STARTED.md](GETTING_STARTED.md) 
 
 ### Diagrama del sistema
 
@@ -237,20 +240,14 @@ Ver `doc/coding_standards.md` para la regla completa y ejemplos.
 * **Router de LiteLLM con fallback de OpenAI → Anthropic** (`llm/router.py`), para que la
   caída de un único proveedor no detenga la ingesta ni la clarificación.
 
-# Métricas clave
+# Evaluación
 
-Quality gates definidos para el pipeline RAG (Fase 6 de `.tmp/tasks.md` — todavía no
-implementados; se registran aquí para que el objetivo quede explícito antes de escribir los
-tests):
-
-| Métrica | Qué detecta | Umbral |
-| --- | --- | --- |
-| Corrección de top-k / métrica de distancia / filtro | Un top-k desalineado en uno, un orden de similitud incorrecto, un filtro de perfil/sesión dejando pasar los chunks equivocados | Coincidencia exacta contra expectativas calculadas a mano |
-| Recall@k del índice ANN frente a fuerza bruta | Un índice pgvector mal ajustado (HNSW/IVFFlat) descartando en silencio el único chunk que importaba | ≥ 0.95 |
-| RAGAS faithfulness | La respuesta contiene una afirmación que los chunks recuperados no respaldan (alucinación) | Mínimo documentado por métrica, bloquea merges (`eval/thresholds.yaml`) |
-| RAGAS context precision | Los chunks recuperados son en su mayoría relleno irrelevante | ″ |
-| RAGAS context recall | A los chunks recuperados les falta algo que la respuesta de referencia necesitaba | ″ |
-| Fuga de guardrail | Un chunk restringido por perfil llega a una respuesta generada para otro perfil, incluso parafraseado | Tolerancia cero — cualquier fuga es un fallo, no un umbral |
+Dos capas: una suite rápida sin LLM (`tests/`, 230 tests — corre en cada push/PR vía
+`.github/workflows/ci.yml`) y seis golden-sets con LLM real, juzgados por un segundo LLM
+como crítico, para lo que no se puede comprobar con una igualdad exacta de texto.
+Resultados medidos en el tiempo en [TESTING_REPORT.md](TESTING_REPORT.md). Detalle
+completo — qué cubre cada golden-set, qué no cubre todavía — en
+[doc/evals.md](doc/evals.md).
 
 
 # Próximos pasos
@@ -260,8 +257,20 @@ tests):
 * Solo hay 4 usuarios incluidos; Habría que implementar un sistema de registro.
 * Monitorización del sistema más exhaustiva
 
-# Presentación
+# Limitaciones
+
+* Latencia
+* Coste de LLM
+* Reforzar variantes de contratos de datos
+
+# Presentación y video de demo
 
 ```
 presentation.html
 ```
+
+[https://ug.link/martinfamily/filemgr/share-download/?id=78f2c418e5254e71b30c27fe8ad906b0](https://ug.link/martinfamily/filemgr/share-download/?id=78f2c418e5254e71b30c27fe8ad906b0)
+
+# Autor
+
+Pedro GL
