@@ -1,10 +1,7 @@
-"""The Silver clarification loop, from start to end. This turns `doc/silver_process.md` §3
-into code.
+"""The Silver clarification loop, start to end. Turns `doc/silver_process.md` §3 into code.
 
-This is one large module on purpose, instead of one file per node. The ten nodes below only
-make sense when wired together. See `.tmp/tasks.md` Task 6 for why splitting this into
-separate commits would mean landing broken states in between.
-"""
+One large module on purpose, instead of one file per node — the nodes only make sense wired
+together."""
 
 import os
 
@@ -74,7 +71,7 @@ _DECLINE_PHRASES = {"", "unknown", "n/a", "idk", "i don't know", "[irrelevant]",
 _DOWNGRADE_MARKER = " **[unknown — flagged by review]**"
 
 # The frontend's per-question "Infer an answer" and "Suggest info" buttons.
-# "Irrelevant" is different: it really does mean "no answer"
+# "Irrelevant" means "no answer".
 INFER_FROM_CONTEXT_MARKER = "[INFER FROM CONTEXT]"
 SUGGEST_INFO_MARKER = "[SUGGEST INFO]"
 
@@ -122,7 +119,7 @@ def _downgrade_claim(content: str, claim: str) -> str:
         return content
     marked = claim + _DOWNGRADE_MARKER
     if marked in content:
-        return content  # Already downgraded. Running this again does nothing new.
+        return content  # Already downgraded.
 
     search_from = 0
     while True:
@@ -135,13 +132,10 @@ def _downgrade_claim(content: str, claim: str) -> str:
 
 
 def strip_downgrade_markers(content: str) -> str:
-    """Removes every `_DOWNGRADE_MARKER` from `content`, restoring each claim to its own
-    original wording. `_DOWNGRADE_MARKER` is an internal review annotation — `boss_decide`
-    flagging a claim the Critic could not verify against the transcript — not something a
-    published ADR should carry permanently once a human has reviewed and accepted it via
-    "Publish" (`app.routers.frontend.finalize_document`). The marker's own leading space
-    (`" **[unknown — flagged by review]**"`) means a plain substring removal leaves no dangling
-    space or double space behind."""
+    """Removes every `_DOWNGRADE_MARKER` from `content`, restoring each claim's original
+    wording. The marker is an internal review annotation, not something a published ADR
+    should carry once a human accepts it via "Publish". Its leading space means a plain
+    substring removal leaves no dangling space behind."""
     return content.replace(_DOWNGRADE_MARKER, "")
 
 
@@ -180,8 +174,7 @@ async def generate_architecture_questions(state: SilverState) -> dict:
     result = await generate_architecture_questions_for_batch(
         state["ingestion_date"], state["bronze_documents"], architecture_diagram=known_architecture
     )
-    # A name the LLM put in both lists is really a data contract wearing a component's
-    # and a data contract is often named after the topic or queue it travels over.
+    # A name in both lists is really a data contract, often named after its topic/queue.
     contract_names = {c.name.lower() for c in result.mentioned_data_contracts}
     components = [c for c in result.mentioned_components if c.name.lower() not in contract_names]
     return {
@@ -197,8 +190,7 @@ def _slugify(name: str) -> str:
 
 
 def _ensure_schema_questions(questions: list[dict], mentioned_data_contracts: list[dict]) -> list[dict]:
-    """This is a mechanical backstop for `prompts/data_contract_questions/questions.jinja`'s
-    own FINAL SELF-CHECK"""
+    """Mechanical backstop for `questions.jinja`'s FINAL SELF-CHECK."""
     targets_with_schema_question = {
         q["target"] for q in questions if q.get("scope") == "data_contract" and "schema" in q.get("id", "")
     }
@@ -223,8 +215,8 @@ def _ensure_schema_questions(questions: list[dict], mentioned_data_contracts: li
 
 
 def _drop_new_contract_version_questions(questions: list[dict], mentioned_data_contracts: list[dict]) -> list[dict]:
-    """This is a mechanical backstop for `prompts/data_contract_questions/questions.jinja`'s
-    own PHASE 3 rule: a brand-new contract's version is always `1.0.0`"""
+    """Mechanical backstop for `questions.jinja`'s PHASE 3 rule: a new contract's version is
+    always `1.0.0`."""
     new_contract_names = {c["name"] for c in mentioned_data_contracts if c.get("action") == "new"}
     return [
         q for q in questions if not (q.get("target") in new_contract_names and "version" in q.get("id", ""))
@@ -259,7 +251,7 @@ def _canonical_classification(
 
 
 async def classify_questions(state: SilverState) -> dict:
-    """This is the single decision that gates every question """
+    """The single decision that gates every question."""
     questions = state["generated_questions"]
     messages = build_classification_prompt(questions, state["transcript_text"])
     response = await router.complete(
@@ -308,7 +300,7 @@ def route_after_classify(state: SilverState) -> Literal["ask_human", "synthesize
 
 
 def ask_human(state: SilverState) -> dict:
-    """This sends one `interrupt()` carrying every pending question together"""
+    """Sends one `interrupt()` with every pending question."""
     payload = {
         "ingestion_date": state["ingestion_date"],
         "pending_questions": state["pending_questions"],
@@ -391,7 +383,7 @@ async def synthesize_document(state: SilverState) -> dict:
 
 
 async def critic_document(state: SilverState) -> dict:
-    """Step to evaluate `completeness_score` and `unresolved_points`"""
+    """Evaluates `completeness_score` and `unresolved_points`."""
     critiques = dict(state["critiques"])
     adr_scores = dict(state["adr_scores"])
     adr_unresolved_points = dict(state["adr_unresolved_points"])
@@ -415,9 +407,9 @@ async def critic_document(state: SilverState) -> dict:
 
 
 def boss_decide(state: SilverState) -> dict:
-    """No LLM call. Downgrades every low-severity claim from the Critic directly in the
-    document; for a material claim, escalates to the human once — if it's still unresolved on
-    retry, downgrades it too instead of asking again, so no source loops forever."""
+    """No LLM call. Downgrades every low-severity claim directly in the document. For a
+    material claim, escalates to the human once; if still unresolved on retry, downgrades it
+    too, so no source loops forever."""
     documents = dict(state["documents"])
     boss_verdicts = dict(state["boss_verdicts"])
     revision_attempted = dict(state["revision_attempted"])
@@ -483,11 +475,7 @@ async def _persist_document_version(
     mentioned_data_contract_names: list[dict],
     tenant: str,
 ) -> int:
-    """Writes one `SilverDocument` row, deciding the version from the content
-
-    `mentioned_component_names` and `mentioned_data_contract_names` get refreshed
-
-    `authored_by` """
+    """Writes one `SilverDocument` row, deciding the version from the content hash."""
     new_hash = gold.content_hash(content)
     authored_by = extract_authors_line(content)
     latest = (
@@ -533,21 +521,18 @@ def _write_adr_audit_file(ingestion_date_str: str, source_component: str, conten
 
 
 async def write_document(state: SilverState) -> dict:
-    """Persists each synthesized ADR using its `(source_component, version)` pair and also
-    writes an audit copy to disk. This only happens when `state["persist"]` is true.
-    Drafts are not persisted until the user publishes them.
+    """Stamps each document with its author/source line, then persists it (by
+    `(source_component, version)`) and writes an audit copy to disk — only when
+    `state["persist"]` is true; drafts are not persisted until published.
 
-    Clarifications are always stored in `silver_clarifications` as a new row per
-    (source, question), preserving the full Q&A history. This history is used when
-    regenerating documents or asking additional questions.
+    Clarifications are always stored as a new `silver_clarifications` row per
+    (source, question), preserving the full Q&A history for later regeneration.
 
-    Mentioned components and data contracts are generated once for the whole batch.
-    Before saving them, this function keeps only the mentions grounded in the current
-    source, so Gold can use the resulting per-ADR lists directly.
+    Mentioned components/data contracts were generated once for the whole batch; this keeps
+    only the mentions grounded in the current source, for Gold's per-ADR lists.
 
-    Finally, the function adds the author and source information to each document after
-    the Critic and decision steps have finished. The stamped documents are returned even
-    for drafts, so the frontend preview matches the eventually published ADR."""
+    Stamped documents are returned even for drafts, so the frontend preview matches the
+    eventually published ADR."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     documents = {
         source: insert_source_line(insert_authors_line(content, state["username"]), source)
@@ -590,8 +575,8 @@ def route_after_write_document(state: SilverState) -> Literal["chunk_and_embed",
 
 
 async def chunk_and_embed(state: SilverState) -> dict:
-    """This makes one embedding per ADR, with no token-splitting: an ADR is retrieved as a
-    whole, never as a fragment"""
+    """Makes one embedding per ADR, with no token-splitting — an ADR is retrieved whole,
+    never as a fragment."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     async with async_session_factory() as session:
         for source, content in state["documents"].items():
@@ -621,8 +606,8 @@ async def chunk_and_embed(state: SilverState) -> dict:
 
 
 async def extract_gold_facts(state: SilverState) -> dict:
-    """This makes one structured-extraction LLM call per source that meets two conditions:
-    it has a document written this run (`state["documents"]` and its `boss_verdicts` value is `"ok"`"""
+    """One structured-extraction LLM call per source with a document written this run and a
+    `boss_verdicts` value of `"ok"`."""
     gold_extractions = dict(state["gold_extractions"])
     async with async_session_factory() as session:
         for source in state["documents"]:
@@ -639,9 +624,9 @@ async def extract_gold_facts(state: SilverState) -> dict:
 
 
 async def resolve_gold_identity(state: SilverState) -> dict:
-    """No LLM call happens here. This tries an exact match on `gold_aliases.alias` first,
-    then a `pg_trgm` fuzzy match, and finally mints a new `entity_id` (`gold.resolve_entity_id`)
-    if neither match works. It does this for every name this pass's extractions touch"""
+    """No LLM call. Tries an exact match on `gold_aliases.alias` first, then a `pg_trgm`
+    fuzzy match, then mints a new `entity_id` (`gold.resolve_entity_id`) if neither works.
+    Runs for every name this pass's extractions touch."""
     entity_id_maps = dict(state["gold_entity_ids"])
 
     async with async_session_factory() as session:
@@ -652,10 +637,9 @@ async def resolve_gold_identity(state: SilverState) -> dict:
             unknown_component_names = {c["name"] for c in extraction["components"] if c["status"] == "unknown"}
             unknown_contract_names = {c["name"] for c in extraction["contracts"] if c["action"] == "unknown"}
 
-            # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components
-            # or contracts at all. Skipping both here too is the defensive backstop for a model
-            # that disobeys that instruction anyway — see the identical comment in
-            # `agents.stages.gold.service.extract_and_persist_gold_facts`, which this mirrors.
+            # `extraction.jinja` no longer asks for "unchanged"/"unknown" entries. Skipping
+            # them here is the backstop for a model that disobeys anyway (mirrors
+            # `gold.service.extract_and_persist_gold_facts`).
             for component in extraction["components"]:
                 if component["status"] in ("unknown", "unchanged"):
                     continue
@@ -698,9 +682,8 @@ async def _persist_components(
     session, extraction: dict, name_to_id: dict, source: str, version: int, ingestion_date, tenant: str,
     authored_by: str,
 ) -> tuple[set[str], dict[str, dict[str, set[str]]]]:
-    """Returns `(mentioned_component_ids, contract_directions_by_component_id)` —
-    `persist_gold_evolution` passes both straight into `gold.apply_contract_ripple_effect`,
-    the same way `agents.stages.gold.service.extract_and_persist_gold_facts` does."""
+    """Returns `(mentioned_component_ids, contract_directions_by_component_id)`.
+    `persist_gold_evolution` passes both into `gold.apply_contract_ripple_effect`."""
     contract_directions = gold.classify_contract_directions(extraction["contracts"], name_to_id)
     contract_directions_by_component_id = {
         name_to_id[key]: directions
@@ -709,10 +692,8 @@ async def _persist_components(
     }
     mentioned_component_ids: set[str] = set()
     for component in extraction["components"]:
-        # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components at
-        # all — this skip is the defensive backstop for a model that disobeys that anyway. See
-        # `gold.apply_contract_ripple_effect` for what now covers a genuinely-affected component
-        # this skip lets through un-mentioned.
+        # Backstop for a model that still returns "unchanged"/"unknown" components.
+        # `gold.apply_contract_ripple_effect` covers an affected component this skip misses.
         if component["status"] in ("unknown", "unchanged"):
             continue
 
@@ -793,15 +774,11 @@ async def _persist_architecture(
     session, extraction: dict, mentioned_component_ids: set[str], source: str, version: int, ingestion_date,
     tenant: str, authored_by: str,
 ) -> None:
-    """This is scoped per source_component.
-
-    `ArchitecturePayload` is documented as a snapshot of the WHOLE architecture as of this ADR
-    (`agents/stages/gold/schemas.py`), not just what this ADR itself mentions — but `extraction`
-    now only ever holds this ADR's own new/modified/removed entries. Union them with every OTHER
-    live component's own last-known name/dependencies, read straight from `gold_evolution`, so
-    the snapshot stays whole without needing the LLM to re-list everything that already existed
-    untouched. See the identical comment in
-    `agents.stages.gold.service.extract_and_persist_gold_facts`, which this mirrors."""
+    """Scoped per source_component. `ArchitecturePayload` is a snapshot of the WHOLE
+    architecture, not just what this ADR mentions — but `extraction` only holds this ADR's
+    new/modified/removed entries. Unions them with every other live component's last-known
+    name/dependencies from `gold_evolution`, so the snapshot stays whole without the LLM
+    re-listing everything untouched."""
     live_components = [
         row for row in await gold.current_gold_state(session, "component", tenant=tenant) if row.operation != "removed"
     ]
@@ -839,7 +816,7 @@ async def _persist_architecture(
 
 
 async def persist_gold_evolution(state: SilverState) -> dict:
-    """No LLM call happens here. This compares hashes and bumps a version, per entity"""
+    """No LLM call. Compares hashes and bumps a version, per entity."""
     ingestion_date = parse_ingestion_date(state["ingestion_date"])
     async with async_session_factory() as session:
         for source, extraction in state["gold_extractions"].items():

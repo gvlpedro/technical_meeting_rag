@@ -350,84 +350,38 @@ async def persist_entity_version(
     authored_by: str = "",
     force_new_version: bool = False,
 ) -> int | None:
-    """This does a hash-compare-then-bump against the latest `gold_evolution` row for this
-    `(entity_type, entity_id)`. It runs a query (`ORDER BY version DESC LIMIT 1`), not a
-    materialized cache lookup, because `gold_current_state` is cut for this pass
-    (`.tmp/optmizaciones.md` §1).
+    """Hash-compare-then-bump against the latest `gold_evolution` row for this
+    `(entity_type, entity_id)`. Same mechanism as `agents.graph._persist_document_version`,
+    scoped to one entity. Identical `entity_hash` to the latest row is a no-op (`None`).
+    Otherwise inserts `version + 1` (or 1 for the first row), embedding `narrative`.
 
-    This uses the same mechanism as `agents.graph._persist_document_version`, scoped to one
-    entity. If the `entity_hash` is identical to the latest row, this is a no-op and returns
-    `None`. If it is different, or there is no prior row at all, this inserts `version + 1` (or
-    `version = 1` for the first row). It embeds `narrative` using the same `ingestion/embedder.py`
-    singleton that Bronze and Silver already use. There is no second embedding stack.
+    `authored_by` is not part of `_entity_hash`: it describes who wrote this version, not
+    what changed.
 
-    `authored_by` is not part of `_entity_hash`, the same way `source_component`,
-    `source_adr_version`, and `ingestion_date` already are not: it describes where this version
-    came from, not what changed. Two extractions with the same operation, narrative, and payload
-    still hash identically and no-op, even if `authored_by` somehow differed between them.
+    Caller must never call this with `operation == "unknown"` — see
+    `agents.graph.persist_gold_evolution`'s skip step.
 
-    It is the caller's responsibility, not this function's, to never call this for an entity
-    where `operation == "unknown"`. See `agents.graph.persist_gold_evolution`'s skip step, which
-    runs before reaching this function. `GoldOperation` types `operation` as the union of all
-    three per-`entity_type` literals. This union still includes `"unknown"` at the type level,
-    because Python cannot easily express "minus one value." This function does not itself check
-    that `operation` is the right *subset* for the given `entity_type`. That pairing is the
-    caller's responsibility.
+    See `doc/cicle_evolution.md` for the full rules. Four live here:
 
-    See `doc/cicle_evolution.md` for the full evolution rules this enforces. Three of them live
-    here specifically:
-
-    1. **The payload corrects a false "unchanged" for a component.** The LLM's `operation`
-       judgment is about the entity's own NARRATED behavior, not its structured facts. A
-       component's own responsibility text can stay put while its payload
-       (`dependency_ids`/`input_contract_ids`/`output_contract_ids`) genuinely differs from the
-       previous version — for example, it starts producing a brand new data contract. When that
-       happens for `entity_type == "component"`, `operation` is corrected to `"modified"` before
-       persisting, so the stored row never claims "unchanged" while the facts say otherwise. This
-       correction does NOT apply to `data_contract`: `ContractAction` has no generic "modified" —
-       it distinguishes `forward-update` from `break-change`, a semantic judgment about the
-       schema change itself that cannot be inferred from a payload diff alone (see
-       `agents.shared.ContractAction`'s own docstring on this being an unverified LLM call today).
-    2. **A carried-forward narrative neutralizes pure re-wording noise.** Every ADR is a fresh
-       LLM call, so "this is still unchanged" gets re-narrated in different words each time even
-       when nothing real changed — confirmed as a real bug: several contracts in production data
-       picked up 2-3 spurious versions in a row with byte-identical payloads, purely from wording
-       drift. When `operation == "unchanged"` (after rule 1's correction, if any, has already
-       run) AND a prior version exists, `narrative` itself — not just a value used for hashing —
-       is REPLACED with the previous version's own narrative, and it is that replaced value that
-       gets both hashed and (if a version still ends up being inserted, e.g. because the payload
-       changed) stored. This must replace the actual stored value, not only what gets hashed: an
-       earlier version of this fix hashed against the previous narrative but stored the fresh
-       one, which is unsound — it silently made two different rows compare as identical to a
-       THIRD row by two different, inconsistent narrative texts, breaking the very next
-       comparison down the chain. Concretely, this means a component's displayed narrative, once
-       "unchanged" starts repeating, stays pinned to the last version where something genuinely
-       changed — never diluted by a string of "still nothing changed" rewrites — until a real
-       change (payload, or a genuine `"modified"`/`"new"`) writes a fresh one again.
-    3. **The no-op comparison hashes against `latest.operation`, never the literal "unchanged".**
-       `latest.entity_hash` was computed with whatever operation actually produced that row (e.g.
-       "modified" or "new") — it was never computed with "unchanged" baked in, because a row
-       whose own operation is "unchanged" never gets inserted unless something genuinely changed
-       (this rule is what makes that true in the first place). Comparing the fresh "unchanged"
-       extraction's hash using the literal string "unchanged" instead of `latest.operation` was a
-       real, reported bug: the very first "unchanged" ADR after any real change always missed the
-       no-op check — pure string mismatch, since narrative (rule 2) and payload already matched —
-       so it silently inserted a bogus extra version stamped with THAT "unchanged" ADR's own
-       `(source_component, source_adr_version)`. A clicked architecture-diagram node then linked
-       to the ADR that said "nothing changed" instead of the one that actually created or last
-       modified the component, and the node's displayed version kept climbing on every
-       "unchanged" mention. `operation` is still stored as the literal "unchanged" on the rare row
-       that does get inserted (e.g. a non-component entity whose payload contradicts its own
-       "unchanged" claim) — only the hash comparison substitutes `latest.operation`, so a genuine
-       no-change collapses into `latest.entity_hash` exactly, regardless of which verb produced
-       that prior row.
+    1. **Payload corrects a false "unchanged" for a component.** If a component's payload
+       differs from the previous version even though its narrated status says "unchanged",
+       `operation` is corrected to `"modified"` before persisting. Does not apply to
+       `data_contract`: `ContractAction` has no generic "modified".
+    2. **A carried-forward narrative neutralizes re-wording noise.** When `operation ==
+       "unchanged"` and a prior version exists, `narrative` is replaced with the prior
+       version's own narrative, both for hashing and for storage — otherwise a fresh re-wording
+       of "still unchanged" creates spurious versions. Fixed a real bug: several contracts
+       picked up 2-3 spurious versions from wording drift alone.
+    3. **The no-op comparison hashes against `latest.operation`, never the literal
+       "unchanged".** `latest.entity_hash` was computed with whatever operation actually
+       produced it. Comparing against the literal string "unchanged" instead was a real bug:
+       the first "unchanged" ADR after a real change always missed the no-op check and
+       inserted a bogus version stamped with that ADR's own source — a clicked diagram node
+       then linked to the wrong ADR. `operation` itself is still stored as "unchanged"; only
+       the hash comparison substitutes `latest.operation`.
     4. **`force_new_version` inserts a new version even on a hash match.** Used by
-       `apply_contract_ripple_effect`: a component whose OWN narrative/payload never changed can
-       still need a new version stamped with THIS ADR's `(source_component, source_adr_version)`,
-       because something it depends on changed instead (`doc/cicle_evolution.md`'s "Regla
-       especial") — an intentional lineage marker, not a real content change, so the normal
-       identical-content no-op would otherwise swallow it silently and leave the component
-       pointing at whichever earlier ADR last touched it directly."""
+       `apply_contract_ripple_effect`: a component whose own content never changed still needs
+       a version stamped with THIS ADR, because something it depends on changed instead."""
     latest = (
         await session.execute(
             select(GoldEvolution)
@@ -448,22 +402,9 @@ async def persist_entity_version(
 
     hash_operation = operation
     if operation == "unchanged" and latest is not None:
-        # Replaces the actual value that gets hashed AND stored — not just a local variable used
-        # for hashing — so the chain stays self-consistent for the NEXT comparison. See the
-        # docstring above for why hashing against one narrative while storing another is unsound.
+        # Replace both the hashed AND stored narrative, so the chain stays consistent. See rule 2.
         narrative = latest.narrative
-        # The hash must compare against `latest.operation`, not the literal string "unchanged":
-        # `latest.entity_hash` was computed with THAT operation baked in (e.g. "modified" or
-        # "new"), never "unchanged" itself. Comparing with the literal "unchanged" made the very
-        # first "unchanged" ADR after a real change always miss the no-op check — a real,
-        # reported bug. It silently inserted a bogus extra version stamped with THAT "unchanged"
-        # ADR's own `(source_component, source_adr_version)`, so a clicked architecture-diagram
-        # node linked to the ADR that said "nothing changed" instead of the one that actually
-        # created or last modified the component, and the node's displayed version kept
-        # climbing on every "unchanged" mention. `operation` itself is still stored as
-        # "unchanged" below (untouched) — only the hash comparison uses `latest.operation`, so a
-        # genuine no-change collapses into `latest.entity_hash` exactly, regardless of which verb
-        # produced that prior row.
+        # Hash against latest.operation, not the literal "unchanged" — see rule 3.
         hash_operation = latest.operation
 
     entity_hash = _entity_hash(hash_operation, narrative, payload)
@@ -472,8 +413,7 @@ async def persist_entity_version(
         return None
 
     if latest is not None:
-        # Closes the outgoing version's validity window the instant it is superseded — never
-        # touched again afterward. See `GoldEvolution.valid_to`'s own comment in `db/models.py`.
+        # Closes the outgoing version's validity window now that it is superseded.
         latest.valid_to = ingestion_date
 
     version = 1 if latest is None else latest.version + 1
@@ -510,41 +450,23 @@ async def apply_contract_ripple_effect(
     ingestion_date: date,
     tenant: str = "default",
 ) -> None:
-    """`doc/cicle_evolution.md`'s "Regla especial" (both its conditions), computed
-    deterministically against `gold_evolution` instead of requiring the LLM to mention an
-    "unchanged" component just so its payload can be compared against the previous one.
-    `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components at all —
-    `extract_and_persist_gold_facts`/`agents.graph._persist_components` skip them outright — so
-    neither condition has an "unchanged" entry left to correct. This replaces that correction.
+    """Applies `doc/cicle_evolution.md`'s "Regla especial", computed deterministically against
+    `gold_evolution` instead of requiring the LLM to re-mention an unchanged component.
 
-    Checks every LIVE component this ADR's own new/modified/removed extraction did NOT already
-    persist a version for (`mentioned_component_ids`), against two independent conditions —
-    which need two different payload treatments, not one:
+    Checks every LIVE component this ADR's extraction did NOT already persist a version for
+    (`mentioned_component_ids`), against two conditions:
 
-    1. **Condition 1 — starts producing/consuming a contract it never had before.**
-       `contract_directions_by_component_id.get(row.entity_id)` is non-empty: every contract this
-       ADR genuinely changed (`changed_contract_ids`) names its producer/consumer directly in
-       THIS extraction (`classify_contract_directions`, re-keyed from name to `entity_id`), so a
-       component newly linked that way shows up here even with zero prior history with that
-       contract. This IS a real change to the component's OWN `input_contract_ids`/
-       `output_contract_ids` — its list of what it's linked to just grew — so the new direction
-       ids are MERGED into its last payload and persisted normally: the hash will genuinely
-       differ, no `force_new_version` needed.
-    2. **Condition 2 — a contract it ALREADY had is the one that changed.** Its own last-
-       persisted `input_contract_ids`/`output_contract_ids` intersects `changed_contract_ids`,
-       with nothing from condition 1 also firing. This is the one condition 1 cannot see, because
-       a real contract can accumulate more producers/consumers across separate ADRs than any
-       single ADR's own producer/consumer fields restate — a component consuming it from an
-       earlier ADR is invisible to THIS ADR's own extraction. Confirmed as a real, previously-
-       shipped case: `Catalog Listing` (`ibm` tenant) gained a third consumer this way, and
-       `Frontend`/`Search Service` (its earlier, still-valid consumers) were never renamed in
-       that later ADR's own text at all. Here the component's OWN payload genuinely does NOT
-       change — only something it depends on did — so it is persisted as-is, with
-       `force_new_version=True`: the hash would otherwise match the latest row exactly (same
-       narrative, same payload) and silently no-op, leaving the component's
-       `(source_component, source_adr_version)` pointing at whichever earlier ADR last touched it
-       directly instead of this one. That mismatch is exactly the bug this function exists to
-       avoid — a clicked architecture-diagram node must land on an ADR its own story is tied to."""
+    1. **Starts producing/consuming a contract it never had before.**
+       `contract_directions_by_component_id.get(row.entity_id)` is non-empty. This is a real
+       change to the component's own payload, so the new ids are merged in and persisted
+       normally — the hash will differ, no `force_new_version` needed.
+    2. **A contract it already had is the one that changed.** Its last-persisted
+       `input_contract_ids`/`output_contract_ids` intersects `changed_contract_ids`. A contract
+       can gain consumers across separate ADRs that a later ADR's text never re-mentions —
+       confirmed in production: `Catalog Listing` (`ibm` tenant) gained a consumer this way with
+       no rename in that ADR's own text. The component's own payload does not change here, so
+       it is persisted as-is with `force_new_version=True` — otherwise the hash matches the
+       latest row and no-ops, leaving its source ADR pointing at the wrong one."""
     if not changed_contract_ids and not contract_directions_by_component_id:
         return
     live_components = await current_gold_state(session, "component", tenant=tenant)
@@ -606,47 +528,25 @@ async def extract_and_persist_gold_facts(
     tenant: str = "default",
     force: bool = False,
 ) -> bool:
-    """Extracts Gold facts from one finished ADR, and saves every resolved component, contract,
-    and architecture entity. This is the shared body two callers outside the LangGraph flow need:
-    `scripts/backfill_gold.py`, a standalone rebuild script, and the frontend's "Publish" finalize
-    endpoint (`app/routers/frontend.py`). That endpoint saves a reviewer-approved, possibly
-    regenerated ADR that never went through the graph's own `write_document` or Gold nodes at all.
+    """Extracts Gold facts from one finished ADR and saves every resolved component, contract,
+    and architecture entity. Shared body for two callers outside the LangGraph flow:
+    `scripts/backfill_gold.py` and the frontend's "Publish" finalize endpoint
+    (`app/routers/frontend.py`), which never run through the graph's own Gold nodes.
 
-    This function does NOT replace the three graph nodes (`extract_gold_facts`,
-    `resolve_gold_identity`, `persist_gold_evolution` in `agents/graph.py`). Those three stay as
-    separately traced Logfire spans on purpose, matching every other node in that graph. This
-    function exists for the two callers that were never part of that traced graph run to begin
-    with. Before this function existed, those two callers duplicated this same
-    persist-orchestration logic between themselves. See `scripts/backfill_gold.py`'s own former
-    "KNOWN DUPLICATION" note.
+    Does not replace the three graph nodes (`extract_gold_facts`, `resolve_gold_identity`,
+    `persist_gold_evolution` in `agents/graph.py`) — those stay as separately traced spans.
 
-    This function skips entirely, returning `False` with no LLM call, if this exact `(tenant,
-    source_component, source_adr_version)` was already extracted. This gives the same idempotency
-    that `agents.graph.extract_gold_facts` already gives a re-run of the same content.
+    Skips with no LLM call, returning `False`, if this exact `(tenant, source_component,
+    source_adr_version)` was already extracted. `force=True` re-runs the LLM call anyway;
+    `persist_entity_version` still no-ops any entity whose result is identical. Returns `True`
+    only when it actually extracted.
 
-    `force=True` re-runs the LLM call regardless. Use this, for example, after changing the
-    extraction prompt or model and wanting to reprocess history. Even with `force=True`,
-    `persist_entity_version`'s own hash-compare-then-bump still no-ops any entity whose result
-    comes back identical. This function returns `True` when it actually extracted.
-
-    `pg_advisory_xact_lock` below closes a real race in the `already_extracted` check above it:
-    without a lock, two overlapping calls for the exact same `(tenant, source_component,
-    source_adr_version)` — for example the frontend's "Publish" button double-clicked, sending
-    two overlapping `POST /transcriptions/finalize` requests — can both read `already_extracted
-    == False` before either has committed, so both go on to call the (non-deterministic) LLM
-    extraction and both call `persist_entity_version` for every entity. `persist_entity_version`
-    itself only no-ops on an EXACT hash match; two independent LLM calls rarely phrase a
-    narrative byte-for-byte identically, so the second call's entities each look like a genuine,
-    if spurious, new version — this was observed in practice as every entity from one ADR
-    getting both a v1 and a v2. The lock serializes the whole check-extract-persist sequence per
-    `(tenant, source_component, source_adr_version)`: a second overlapping call blocks here until
-    the first commits, then re-reads `already_extracted` as `True` and returns immediately,
-    instead of racing it. It is transaction-scoped (`_xact_`), so it releases itself at whatever
-    commit or rollback ends this call's transaction — never held past this request. The frontend
-    also disables the Publish button the instant it is clicked (see `frontend/app.py`'s
-    `publish_key`), which prevents the common case from firing two requests at all; this lock is
-    the guarantee for every other path into this function (a second browser tab, a retried
-    request, a concurrent `scripts/backfill_gold.py` run), not a fallback for the frontend fix."""
+    `pg_advisory_xact_lock` closes a real race: two overlapping calls for the same key (e.g. a
+    double-clicked Publish button) can both read `already_extracted == False` before either
+    commits, both call the LLM, and both persist — since two LLM calls rarely phrase a
+    narrative identically, this produced a spurious v2 for every entity in practice. The lock
+    serializes the check-extract-persist sequence per key; a second call blocks, then re-reads
+    `already_extracted` as `True`. It is transaction-scoped and releases at commit/rollback."""
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:lock_key), :version)"),
         {"lock_key": f"{tenant}:{source_component}", "version": source_adr_version},
@@ -655,23 +555,15 @@ async def extract_and_persist_gold_facts(
         return False
 
     result = await extract_gold_facts_for_source(adr_content)
-    # `adr_content` already carries its own `**Authors:** <username>` line by the time any of
-    # this function's three real callers reach here — `insert_authors_line` always runs first,
-    # in `agents.graph.write_document`, `app.routers.frontend.finalize_document`, and whatever
-    # wrote the `silver_documents.content` row `scripts/backfill_gold.py` replays. So reading it
-    # back here, the same way `agents.graph._persist_document_version` already does for
-    # `silver_documents.authored_by`, needs no extra parameter and no second source of truth.
+    # `adr_content` already has its `**Authors:** <username>` line by the time any caller
+    # reaches here, so reading it back needs no extra parameter.
     authored_by = extract_authors_line(adr_content)
     name_to_id: dict[str, str] = {}
 
-    # `prompts/gold/extraction.jinja` no longer asks for "unchanged"/"unknown" components or
-    # contracts at all — it only returns ones with a real `new`/`modified`/`removed` (component)
-    # or `new`/`forward-update`/`break-change`/`removed` (contract) status. These `in (...)`
-    # skips are the defensive backstop for a model that disobeys that instruction anyway: the
-    # type itself (`GoldOperation`, `agents/stages/gold/schemas.py`) still allows every value,
-    # same as it always has for `"unknown"` — enforcing the subset is the caller's job, not the
-    # type's. See `apply_contract_ripple_effect` for what now covers a genuinely-affected
-    # component this skip lets through un-mentioned.
+    # The prompt no longer asks for "unchanged"/"unknown" components or contracts, but
+    # `GoldOperation` still allows those values — these skips are the backstop if a model
+    # returns one anyway. `apply_contract_ripple_effect` covers a genuinely-affected component
+    # this skip lets through un-mentioned.
     for component in result.components:
         if component.status in ("unknown", "unchanged"):
             continue
@@ -706,9 +598,7 @@ async def extract_and_persist_gold_facts(
     contract_dicts = [c.model_dump() for c in result.contracts]
     contract_directions = classify_contract_directions(contract_dicts, name_to_id)
     changed_contract_ids = contracts_with_real_changes(contract_dicts, name_to_id)
-    # Re-keyed from component NAME to `entity_id`, for `apply_contract_ripple_effect` below —
-    # every name here was already resolved by the `resolve_and_alias` producer/consumer loop
-    # just above, so it is always present in `name_to_id`.
+    # Re-keyed from component name to `entity_id` for `apply_contract_ripple_effect` below.
     contract_directions_by_component_id = {
         name_to_id[key]: directions
         for name, directions in contract_directions.items()
@@ -786,12 +676,9 @@ async def extract_and_persist_gold_facts(
         tenant=tenant,
     )
 
-    # `ArchitecturePayload` is documented as a snapshot of the WHOLE architecture as of this
-    # ADR (schemas.py), not just what this ADR itself mentions — but `result.components` now
-    # only ever holds this ADR's own new/modified/removed entries (see the skips above). Union
-    # them with every OTHER live component's own last-known name/dependencies, read straight
-    # from `gold_evolution`, so the snapshot stays whole without needing the LLM to re-list
-    # everything that already existed untouched.
+    # `ArchitecturePayload` is a snapshot of the WHOLE architecture, not just this ADR's own
+    # entries. Union them with every other live component's last-known data from
+    # `gold_evolution`, so the LLM does not need to re-list what already existed untouched.
     live_components = [
         row for row in await current_gold_state(session, "component", tenant=tenant) if row.operation != "removed"
     ]
@@ -800,7 +687,7 @@ async def extract_and_persist_gold_facts(
     all_dependency_names = {dep for c in result.components if c.status != "removed" for dep in c.dependency_names}
     for row in live_components:
         if row.entity_id in mentioned_component_ids:
-            continue  # already folded in above, straight from this ADR's own extraction
+            continue  # already folded in above
         all_component_names.add(row.canonical_name)
         payload = ComponentPayload.model_validate(row.payload)
         all_dependency_names.update(id_to_name.get(i, i) for i in payload.dependency_ids)
@@ -830,17 +717,11 @@ async def extract_and_persist_gold_facts(
 async def current_gold_state(
     session: AsyncSession, entity_type: GoldEntityType | None = None, *, tenant: str = "default"
 ) -> Sequence[GoldEvolution]:
-    """This is the "current state" read path that `v4`'s now-cut `gold_current_state` table would
-    have served. It returns one row per `(entity_type, entity_id)`, always the latest version,
-    as a query over `gold_evolution` instead of a maintained cache (`.tmp/optmizaciones.md` §1).
+    """Current-state read: one row per `(entity_type, entity_id)`, always the latest version,
+    queried live over `gold_evolution` instead of a cache.
 
-    Postgres `DISTINCT ON` needs its own `ORDER BY` prefix that matches the `DISTINCT ON` columns,
-    before the tie-breaking `version DESC`. So this uses raw column ordering. The ORM's
-    `.distinct()` does not express this directly.
-
-    This always scopes to one `tenant`. This is the read path for the Chat tab and for
-    `current_architecture_diagram`. Neither of those should ever see another tenant's
-    architecture."""
+    Always scopes to one `tenant`. Used by the Chat tab and `current_architecture_diagram` —
+    neither should ever see another tenant's architecture."""
     query = select(GoldEvolution).distinct(GoldEvolution.entity_type, GoldEvolution.entity_id).where(
         GoldEvolution.tenant == tenant
     )
@@ -853,12 +734,9 @@ async def current_gold_state(
 async def current_gold_state_as_of(
     session: AsyncSession, as_of: date, entity_type: GoldEntityType | None = None, *, tenant: str = "default"
 ) -> Sequence[GoldEvolution]:
-    """Same read path as `current_gold_state`, pinned to whatever was valid on `as_of` instead of
-    always the latest version. `valid_to` (closed by `persist_entity_version` the instant a newer
-    version supersedes a row) makes each entity's version windows non-overlapping, so at most one
-    row per `(entity_type, entity_id)` can match this filter — the trailing `version DESC` is a
-    tie-breaker in principle only, never expected to matter in practice. See
-    `.tmp/improve_timeline_questions_and_linage.md` §2.1."""
+    """Same read path as `current_gold_state`, pinned to whatever was valid on `as_of` instead
+    of the latest version. `valid_to` makes each entity's version windows non-overlapping, so
+    at most one row per `(entity_type, entity_id)` matches."""
     query = (
         select(GoldEvolution)
         .distinct(GoldEvolution.entity_type, GoldEvolution.entity_id)
@@ -876,18 +754,13 @@ async def current_gold_state_as_of(
 
 async def _batch_cursor(session: AsyncSession, tenant: str, row: GoldEvolution) -> tuple[datetime, int]:
     """The `(changed_at, id)` of the LAST row inserted in the same extraction batch as `row` —
-    same `(tenant, source_component, source_adr_version)` — not `row`'s own values directly.
+    same `(tenant, source_component, source_adr_version)` — not `row`'s own values.
 
-    One ADR run persists several entities (components, contracts, the architecture snapshot) as
-    separate, sequential inserts (`agents.graph.persist_gold_evolution`), so a component's own
-    row can have a lower `id` than a contract from that EXACT SAME ADR that conceptually became
-    true at the same moment. Cursoring on the component's own id would wrongly exclude that
-    contract (and any other sibling from the same batch inserted after it) as "not yet known" —
-    confirmed by a real test failure this fixed: a component with zero of its own dependencies,
-    whose only relationship is a sibling from the same ADR that depends on it, showed no
-    relationship at all when cursored on its own id. The batch's own last id is what correctly
-    includes every fact from that same ADR, regardless of which one happened to be written
-    first."""
+    One ADR persists several entities as separate, sequential inserts, so a component's own
+    row can have a lower id than a contract from the same ADR. Cursoring on the component's own
+    id wrongly excluded that sibling as "not yet known" — a real bug: a component with no
+    dependencies of its own, related only through a same-ADR sibling, showed no relationship at
+    all. The batch's last id includes every fact from that ADR regardless of write order."""
     last = (
         await session.execute(
             select(GoldEvolution.changed_at, GoldEvolution.id)
@@ -911,19 +784,13 @@ async def _rows_before(
     entity_ids: Sequence[str] | None = None,
 ) -> list[GoldEvolution]:
     """The latest row per entity among rows inserted at or before `before` — a `(changed_at,
-    id)` cursor, ALWAYS compared as that one pair, never `ingestion_date` alone: several
-    versions of the very same entity can legitimately share one `ingestion_date` (several ADRs
-    uploaded the same day), which made `ingestion_date`-only comparisons unable to tell which of
-    two same-day versions came first — a real, reported bug (a v1-pinned diagram still showed a
-    dependency only added in v3, because both shared today's date). `id` alone would already be
-    a perfect, gap-free insertion order; `changed_at` is included anyway because that is the
-    pair this was explicitly asked to use, and comparing both together is exactly as correct as
-    comparing `id` alone — `changed_at` only ever adds a tie-break that `id` had already settled.
+    id)` cursor, never `ingestion_date` alone: several versions of the same entity can share
+    one `ingestion_date`, so date-only comparison could not tell which same-day version came
+    first — a real bug (a v1-pinned diagram still showed a v3-only dependency).
 
-    Used only when resolving a SPECIFIC row's own neighbors/successors consistently with that
-    row's own position in the insertion sequence (`build_relationship_diagram`,
-    `build_context_lines`) — never for a caller resolving an arbitrary business date (that stays
-    `current_gold_state_as_of`/`_entities_as_of`'s `as_of`, unrelated and unchanged)."""
+    Used only to resolve a SPECIFIC row's own neighbors/successors (`build_relationship_diagram`,
+    `build_context_lines`) — not for an arbitrary business date, which stays
+    `current_gold_state_as_of`/`_entities_as_of`'s `as_of`."""
     changed_at, entity_pk = before
     query = select(GoldEvolution).distinct(GoldEvolution.entity_id).where(
         GoldEvolution.tenant == tenant,
@@ -947,13 +814,11 @@ async def _entities_as_of(
     *,
     before: tuple[datetime, int] | None = None,
 ) -> list[GoldEvolution]:
-    """Batched `entity_id -> its row valid at `as_of`` lookup, one query for the whole list —
-    the same `DISTINCT ON` shape as `current_gold_state`/`current_gold_state_as_of`, scoped down
-    to a specific set of ids instead of every entity of that type. `as_of=None` means "the latest
-    version", matching `current_gold_state`'s own default.
+    """Batched `entity_id -> its row valid at as_of` lookup, one query for the whole list,
+    scoped to a specific set of ids. `as_of=None` means the latest version.
 
-    `before`, when given, takes over entirely (see `_rows_before`) — a `(changed_at, id)`
-    cursor, for a caller resolving one specific row's own neighbors, not a business date."""
+    `before`, when given, takes over entirely (see `_rows_before`) — for resolving one specific
+    row's own neighbors, not a business date."""
     if not entity_ids:
         return []
     if before is not None:
@@ -976,10 +841,8 @@ async def get_component_contracts(
     session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
 ) -> dict[str, list[DataContractPayload]]:
     """The full ODCS spec (`DataContractPayload`, not just names) of a component's data
-    contracts, split by direction. Reads each spec fresh from the contract's own row, valid at
-    `as_of` — never a copy stored on the component itself. See
-    `.tmp/improve_timeline_questions_and_linage.md` §3; requires `latest_odcs_spec`'s
-    carry-forward (§5) to actually have a non-empty spec to return for most real contracts."""
+    contracts, split by direction. Reads each spec fresh from the contract's own row valid at
+    `as_of`, never a copy stored on the component itself."""
     components = await _entities_as_of(session, "component", [component_id], tenant, as_of)
     if not components:
         return {"input": [], "output": []}
@@ -996,8 +859,7 @@ async def get_predecessors(
     session: AsyncSession, component_id: str, tenant: str = "default", as_of: date | None = None
 ) -> list[GoldEvolution]:
     """Components this one directly depends on (`ComponentPayload.dependency_ids`), resolved to
-    each one's own row valid at `as_of`. A local, direct read — see `get_successors` for the
-    inverse, which is not."""
+    each one's own row valid at `as_of`. A direct read — see `get_successors` for the inverse."""
     components = await _entities_as_of(session, "component", [component_id], tenant, as_of)
     if not components:
         return []
@@ -1014,11 +876,9 @@ async def get_successors(
     before: tuple[datetime, int] | None = None,
 ) -> list[GoldEvolution]:
     """The inverse of `get_predecessors` — every component whose own `dependency_ids` names
-    `component_id`, as of `as_of` (a business date) or `before` (a `(changed_at, id)` cursor —
-    see `_rows_before`). There is no `successor_ids` field anywhere: this is derived purely from
-    `dependency_ids` read across every component, so it can never drift out of sync with it the
-    way a separately maintained inverse column would. See
-    `.tmp/improve_timeline_questions_and_linage.md` §2.4."""
+    `component_id`, as of `as_of` (a business date) or `before` (a `(changed_at, id)` cursor).
+    There is no `successor_ids` field: this is derived from `dependency_ids` so it can never
+    drift out of sync with it."""
     if before is not None:
         candidates = await _rows_before(session, "component", tenant, before)
     else:
@@ -1033,72 +893,31 @@ async def get_successors(
 
 
 async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "default") -> str:
-    """Builds a Mermaid `flowchart LR` from Gold's own current component state. This is
-    deliberately NOT the LLM-drawn diagram that any single ADR's `entity_type="architecture"` row
-    carries (`ArchitecturePayload.mermaid_diagram`). That diagram only ever reflects what ONE ADR
-    asserted. This function reads `current_gold_state`'s live view instead. So it reflects every
-    component Gold currently has on record across every ADR, with any `removed` component
+    """Builds a Mermaid `flowchart LR` from Gold's own current component state. NOT the
+    LLM-drawn diagram on one ADR's `entity_type="architecture"` row
+    (`ArchitecturePayload.mermaid_diagram`), which only reflects that one ADR. Reads
+    `current_gold_state`'s live view instead, across every ADR, with `removed` components
     dropped.
 
-    Each node's label names the component's own current Gold `version` (e.g. "Backend v4" — how
-    many real changes this entity has recorded, `doc/cicle_evolution.md`'s version, never the
-    ADR's own). This returns `""` if Gold has no live component yet.
+    Each node's label names the component's current Gold `version` (e.g. "Backend v4"). Returns
+    `""` if Gold has no live component yet.
 
-    The label used to also carry a small italic subtitle naming the `(source_component,
-    source_adr_version)` that last touched each node — dropped as a real, reported bug: this
-    function's only two remaining callers (`agents.graph.generate_architecture_questions`,
-    `agents.graph.synthesize_document`) feed its output to an LLM as grounding context, never
-    render it to a person directly (`current_architecture_diagram_interactive` replaced this
-    function for the UI — see that function's own docstring). `synthesize_document` in particular
-    passes this diagram in as "PREVIOUS_ARCHITECTURE_DIAGRAM", which
-    `prompts/adr_generation/generator.jinja` instructs the model to reproduce "verbatim" into the
-    ADR's own §2/§3 — so that subtitle leaked straight into every newly generated ADR's own
-    embedded diagrams, permanently, since a later redraft reads its own previous §2 back
-    (`agents.stages.adr_generation.service.own_previous_architecture_diagram`), not this function
-    again. A generated ADR's diagram has no use for which OTHER ADR touched a node last; that
-    belongs to Gold's own "Architecture history" tab, which already links it through the table
-    beneath the diagram, not the node label.
+    The label used to also carry a subtitle naming the last ADR that touched each node. Dropped:
+    this diagram feeds an LLM as grounding context (`generate_architecture_questions`,
+    `synthesize_document`), and `synthesize_document` passes it as "PREVIOUS_ARCHITECTURE_DIAGRAM"
+    for the model to reproduce verbatim — so the subtitle leaked into every newly generated ADR
+    permanently. "View ADR" links in the table below the diagram handle that navigation instead.
 
-    Navigating to a node's ADR is handled by plain "View ADR" links in the table that
-    `frontend/app.py`'s `_architecture_history_tab` renders below the diagram. This is
-    deliberately NOT a `click <id> href ...` directive on the node itself. See below for why.
+    No `click <id> href ...` directive on nodes. ROOT CAUSE (confirmed against a running
+    `st.mermaid_chart`): that directive makes `st.mermaid_chart` render zero node elements,
+    only edges — `mermaid-cli` does not reproduce this. Do not add `click` back without
+    re-verifying against real `st.mermaid_chart`, not just `mermaid-cli`.
 
-    Two node-label choices are a defensive response to a real, reported bug. `st.mermaid_chart`
-    used to render every node as an invisible, zero-size box, with only the connecting edges
-    visible:
+    Node labels use Mermaid's backtick markdown-string syntax (not raw HTML) and an explicit
+    `classDef`/`class` for color, never the default theme fill.
 
-    1. The subtitle uses Mermaid's own backtick "markdown string" label syntax: a literal newline
-       plus `*italic*`. This is the officially supported way to get a multi-line styled label,
-       instead of raw `<br/>` or `<sub>` HTML, which depends on how a given renderer treats
-       arbitrary embedded HTML.
-    2. Every node gets an explicit `classDef` and `class` for fill, stroke, and text color,
-       instead of relying on Mermaid's own default theme fill. This is the same reasoning that
-       `prompts/adr_generation/generator.jinja`'s DIAGRAM COLOR CODING section already applies to
-       ADR diagrams: never trust ambient or default coloring to stay visible across renderers.
-
-    Neither of those two choices was the actual cause of the bug. Here is the ROOT CAUSE,
-    confirmed by driving a real headless Chrome against the live Streamlit app through
-    `st.mermaid_chart`, then fetching and inspecting the `blob:` SVG it renders to: a
-    `click <id> href "..." "_blank"` directive was present in every earlier version of this
-    diagram, to make a node open its ADR. That directive makes `st.mermaid_chart` render
-    `<g class="nodes"/>` completely empty, with zero node elements, while it still renders the
-    edge paths. This exactly matches the "only edges visible" symptom.
-
-    This was reproduced in isolation: a single-word plain-text node with a `click ... href` line,
-    no classDef, and no markdown label fails the same way. The same diagram with the `click` line
-    removed renders every node correctly. Standalone `mermaid-cli`, run under an equivalent
-    `securityLevel: "strict"` config, does NOT reproduce this bug. So `st.mermaid_chart`'s own
-    render pipeline is where interactivity directives specifically break. The most likely reason:
-    Mermaid's click-binding step needs the SVG attached to the live document to resolve node ids,
-    but Streamlit's component renders off-screen before converting the result to a blob image.
-
-    Do not add `click` directives back into this diagram without re-verifying against a real
-    running `st.mermaid_chart`, not just `mermaid-cli`. That gap is exactly what let this bug
-    ship broken multiple times before.
-
-    Edges are drawn as `component --> dependency`, from `ComponentPayload.dependency_ids`. A
-    dependency that is not itself a live component, because it was removed or never resolved, is
-    silently skipped. It is not drawn as a dangling node."""
+    Edges are `component --> dependency`, from `ComponentPayload.dependency_ids`. A dependency
+    that is not itself a live component is silently skipped, not drawn as a dangling node."""
     components = await current_gold_state(session, "component", tenant=tenant)
     live = [c for c in components if c.operation != "removed"]
     if not live:
@@ -1123,32 +942,20 @@ async def current_architecture_diagram(session: AsyncSession, *, tenant: str = "
 async def current_architecture_diagram_interactive(
     session: AsyncSession, *, tenant: str = "default"
 ) -> tuple[str, dict[str, str]]:
-    """Builds a Mermaid `flowchart LR` of Gold's own current component state for
-    `streamlit_mermaid_interactive` (a third-party Streamlit component, not `st.mermaid_chart`)
-    to render with real click events.
+    """Builds a Mermaid `flowchart LR` of Gold's current component state for
+    `streamlit_mermaid_interactive` (a third-party component, not `st.mermaid_chart`), to render
+    with real click events.
 
-    This is NOT the same rendering path as `current_architecture_diagram`'s own hand-built SVG
-    predecessor, nor is it the `click <id> href ...` directive confirmed to break
-    `st.mermaid_chart` (see that function's docstring for the reproduced root cause: Mermaid's
-    click-binding step needs the SVG attached to the live document, but `st.mermaid_chart`
-    renders off-screen before converting to a `blob:` image). `streamlit_mermaid_interactive`
-    renders straight into the page's live DOM and attaches its own JS click listeners directly to
-    each node — it never uses Mermaid's `click` directive at all — so it does not hit that bug.
-    The plain SVG diagram this replaced was a defensive workaround for the same bug, not a design
-    preference; once a click-capable Mermaid renderer exists, Mermaid's own automatic layout is
-    simpler and better-looking than a hand-rolled one, so `_svg_layered_positions` and its rect/
-    line drawing are gone entirely — Mermaid lays the graph out itself.
+    `streamlit_mermaid_interactive` renders into the page's live DOM with its own JS click
+    listeners, never Mermaid's `click` directive, so it avoids the rendering bug described in
+    `current_architecture_diagram`'s docstring.
 
-    Returns `(mermaid_code, entity_name_mapping)`. `entity_name_mapping` maps a node's exact
-    visible label text to a compact `"{source_component}::{source_adr_version}"` string, because
-    `streamlit_mermaid_interactive` identifies the clicked node by its rendered text content, not
-    by Mermaid's own internal node id — the caller reads this back from the component's
-    `entity_clicked` result and splits it to build the same `?view_adr=...&view_adr_version=...`
-    navigation the rest of this app already uses. Each label is deliberately a single line (no
-    `current_architecture_diagram`-style italic ADR-ref subtitle): a multi-line Mermaid markdown-
-    string label's exact rendered `textContent` is not something this project can verify without
-    a real browser, so the label kept here is exactly the string used as the mapping key, with
-    nothing left to guess. Returns `("", {})` if Gold has no live component yet."""
+    Returns `(mermaid_code, entity_name_mapping)`. `entity_name_mapping` maps a node's visible
+    label text to `"{source_component}::{source_adr_version}"`, because this component
+    identifies the clicked node by its rendered text, not an internal node id — the caller reads
+    this back to build the `?view_adr=...&view_adr_version=...` navigation. Each label is a
+    single line (no italic subtitle), since a multi-line label's rendered text cannot be
+    verified without a real browser. Returns `("", {})` if Gold has no live component yet."""
     components = await current_gold_state(session, "component", tenant=tenant)
     live = [c for c in components if c.operation != "removed"]
     if not live:
@@ -1176,43 +983,29 @@ async def current_architecture_diagram_interactive(
 async def build_relationship_diagram(
     session: AsyncSession, rows: list[GoldEvolution], *, tenant: str = "default"
 ) -> tuple[str, list[GoldEvolution]] | None:
-    """A small Mermaid `flowchart LR` scoped to just the component(s) a chat answer actually
-    cited (`rows` here — see `chat`'s own filtering by `ChatCitation`), plus each one's direct
-    neighbors: predecessors (`ComponentPayload.dependency_ids`, a local read) and successors
-    (`get_successors`, the derived inverse). This is deliberately NOT
-    `current_architecture_diagram` scoped down — that reads the whole tenant's live state; this
-    is built from the exact rows an answer already resolved, so it can never show a component
-    the answer never actually grounded.
+    """A small Mermaid `flowchart LR` scoped to just the component(s) a chat answer cited
+    (`rows`), plus each one's direct neighbors: predecessors (`dependency_ids`) and successors
+    (`get_successors`). Built from the exact rows an answer resolved, so it never shows a
+    component the answer did not actually ground.
 
-    Returns `None` when there is nothing to show: no component among `rows` (e.g. the answer was
-    only about a data contract), or a component with zero dependencies and zero successors.
-    Otherwise returns `(mermaid_source, focal_rows)` — `focal_rows` is exactly the cited
-    component rows passed in, never a neighbor, so the caller can build "View ADR" links from
-    the entity the answer was actually about.
+    Returns `None` when there is nothing to show. Otherwise returns `(mermaid_source,
+    focal_rows)` — `focal_rows` is exactly the cited component rows, so the caller can build
+    "View ADR" links from the entity the answer was about.
 
-    A historical focal row (`valid_to is not None` — i.e. superseded, see
-    `_answer_specific_version_question`) has its neighbors resolved with a `(changed_at, id)`
-    cursor (`_rows_before`) pinned to THAT row's own insertion moment, never "whatever is
-    current now". A real, reported bug: pinning an answer to an old version still showed today's
-    full neighbor set (a dependency added long after that version), because `get_successors`
-    used to be called unscoped. `ingestion_date` alone cannot fix this — several versions of the
-    same entity can share one calendar day (several ADRs uploaded together) — only the
-    insertion-order cursor can. A still-current focal row (`valid_to is None`) keeps reading
-    today's true state, exactly as before: it would be its own regression to show a stale
-    neighbor for a component that just happens not to have changed as recently as its neighbors.
+    A historical focal row (`valid_to is not None`) resolves its neighbors with a cursor pinned
+    to that row's own insertion moment, never today's state. Fixed a real bug: an answer pinned
+    to an old version still showed a dependency added long after it, because `get_successors`
+    was called unscoped. `ingestion_date` alone cannot fix this since several versions can share
+    one calendar day. A still-current focal row keeps reading today's true state.
 
-    Reuses `current_architecture_diagram`'s exact style conventions (`classDef`, backtick
-    multi-line labels, no `click` directive) — see that function's own docstring for the real
-    `st.mermaid_chart` rendering bug those choices avoid. A second `classDef` (`focalNode`)
-    highlights the cited component(s) so a reader can tell "what this answer is about" from
-    "context neighbor" at a glance."""
+    Reuses `current_architecture_diagram`'s style conventions. A second `classDef`
+    (`focalNode`) highlights the cited component(s)."""
     focal_rows = [row for row in rows if row.entity_type == "component"]
     if not focal_rows:
         return None
 
     focal_ids = {row.entity_id for row in focal_rows}
-    # (from_id, to_id) meaning from_id depends on to_id — the same direction
-    # `current_architecture_diagram`'s `component --> dependency` edges use.
+    # (from_id, to_id): from_id depends on to_id, same direction as component --> dependency.
     edges: list[tuple[str, str]] = []
     neighbor_rows_by_id: dict[str, GoldEvolution] = {}
     for row in focal_rows:
@@ -1260,54 +1053,34 @@ async def build_relationship_diagram(
     return "\n".join(lines), focal_rows
 
 
-# --- Top-k retrieval. This is the RAG-consumer read path that `current_gold_state` above does
-# not cover. `current_gold_state` answers "what is the latest version per entity." This answers
-# "which versions, across the whole history, are semantically closest to a question." Both
-# `scripts/chat_gold.py` (interactive use) and `agents/stages/gold/testing/retrieval.py` (the
-# suite that asserts against this) share this same retrieval mechanism, so it has exactly one
-# definition. -----------------------------------------------------------------------------------
+# --- Top-k retrieval: the RAG read path. `current_gold_state` answers "latest version per
+# entity"; this answers "which versions are semantically closest to a question." Shared by
+# `scripts/chat_gold.py` and `agents/stages/gold/testing/retrieval.py`.
 
-# This is the cosine distance (1 - cosine_similarity) above which a row gets dropped from
-# top-k results, instead of being forced into the answer. Plain top-k always returns exactly
-# `k` rows, even when none of them are actually relevant to the question. That is how a RAG
-# answer ends up confidently invented from the least-bad match, instead of saying "I don't
-# know." This has the same caveat as `FUZZY_MATCH_THRESHOLD` above: it is not tuned against a
-# real corpus yet. It is a starting point to revisit once real chat usage gives us distances to
-# calibrate against.
+# Cosine distance above which a row is dropped from top-k, instead of forcing exactly `k` rows
+# regardless of relevance. Not yet tuned against a real corpus — a starting point.
 #
-# `max_distance` is opt-in on `top_k_gold_evolution`, defaulting to `None` (unfiltered). This is
-# on purpose, so this default value can change later without silently changing what
-# `agents.stages.gold.testing`'s already real-LLM-verified assertions see.
+# Opt-in on `top_k_gold_evolution`, default `None` (unfiltered), so tests are not silently
+# affected by changing this default.
 DEFAULT_MAX_DISTANCE = 0.6
 
-# This many candidates get fetched from a ranking before it is cut down to `k`. Three unrelated
-# things all need this same extra depth, so they share one constant:
+# Candidates fetched before cutting down to `k`. Three things need this same extra depth:
 #
-# 1. `mode="hybrid"` fuses TWO rankings (vector, lexical) with RRF. A row that ranks, say, 7th by
-#    embedding similarity and 2nd by lexical match should still be able to win a fused top-5 over
-#    two rows that only rank in the top 5 of one signal and nowhere in the other. Fusing two
-#    lists already cut to `k` would never give a moderate-vector/strong-lexical row that chance.
-# 2. `dedupe=True` (the default, either mode) collapses several VERSIONS of the SAME entity down
-#    to one — its actual latest version, see `_dedupe_ids_by_entity` — before cutting to `k`.
-#    Several near-identical consecutive-version narratives can otherwise occupy most of a plain
-#    top-k, crowding out a genuinely different, relevant entity (`.tmp/advanced_techniques.md`
-#    §2, and the same problem the estimator project's own `dedupe` flag measured and fixed).
-# 3. `rerank=True` (opt-in, off by default) repunctuates the deduped-but-not-yet-cut candidates
-#    with a real cross-encoder before cutting to `k` — see `_rerank_ids` and
-#    `.tmp/advanced_techniques.md` §3. It needs the same wide pool to have anything worth
-#    repunctuating; reranking a list already cut to `k` could never promote a candidate ranked
-#    just outside it.
+# 1. `mode="hybrid"` fuses vector and lexical rankings with RRF — fusing lists already cut to
+#    `k` would never let a moderate-vector/strong-lexical row win.
+# 2. `dedupe=True` collapses several versions of the same entity to one before cutting to `k`,
+#    so near-identical versions don't crowd out a different relevant entity.
+# 3. `rerank=True` repunctuates the pool with a cross-encoder before cutting to `k` — reranking
+#    a list already cut to `k` could never promote a candidate ranked just outside it.
 RECALL_POOL_SIZE = 30
 
-# `RRF_K_CONSTANT`, `_reciprocal_rank_fusion`, `_top_k_ids_by_vector`, and
-# `_top_k_ids_by_lexical_rank` (hybrid search); `_dedupe_ids_by_entity` (deduplication); and
-# `_rerank_ids` (reranking) now live in `agents/stages/gold/retrieval/`, one file per
-# technique — imported above. This function is their orchestrator, not their implementation.
+# `RRF_K_CONSTANT`, `_reciprocal_rank_fusion`, `_top_k_ids_by_vector`, `_top_k_ids_by_lexical_rank`
+# (hybrid search), `_dedupe_ids_by_entity` (deduplication), and `_rerank_ids` (reranking) live in
+# `agents/stages/gold/retrieval/`. This function orchestrates them.
 
 
 async def embed_question(text: str) -> list[float]:
-    """`ingestion.embedder.embed` is a blocking, batched call. This wraps it in
-    `asyncio.to_thread`, the same way `persist_entity_version` already does, applied here to one
+    """Wraps the blocking, batched `ingestion.embedder.embed` in `asyncio.to_thread`, for one
     question at a time."""
     [vector] = await asyncio.to_thread(embed, [text])
     return vector
@@ -1327,64 +1100,42 @@ async def top_k_gold_evolution(
     rerank: bool = False,
     expand: bool = False,
 ) -> list[GoldEvolution]:
-    """This runs top-k search over ALL versions of `gold_evolution`, not just the latest version
-    per entity. Getting the latest version per entity is `current_gold_state`'s job instead.
+    """Top-k search over ALL versions of `gold_evolution`, not just the latest per entity
+    (that is `current_gold_state`'s job).
 
-    This always scopes to one `tenant` first. The Chat tab must never retrieve, let alone answer
-    from, another tenant's architecture facts. `source_component`, when given, narrows the search
-    to one source within that tenant. When omitted, it searches the whole tenant's rows.
+    Always scopes to one `tenant` first. `source_component`, when given, narrows to one source
+    within that tenant.
 
-    `max_distance`, when given (see `DEFAULT_MAX_DISTANCE`), drops rows past that distance instead
-    of always returning `k` rows regardless of relevance. This filter runs in SQL, not after the
-    fact, so a tight bound also means less data fetched over the wire. It only ever applies to
-    the vector-distance ranking — `ts_rank`'s scale is not comparable to cosine distance, so there
-    is no equivalent bound on the lexical side; a question with no lexical match simply
-    contributes zero lexical candidates, handled by `_reciprocal_rank_fusion` itself.
+    `max_distance` (see `DEFAULT_MAX_DISTANCE`) drops rows past that distance in SQL, instead of
+    always forcing `k` rows. Applies only to the vector ranking — `ts_rank`'s scale is not
+    comparable to cosine distance.
 
-    `mode="vector"` (the default, unchanged from before hybrid search existed) orders purely by
-    `.cosine_distance(vector)`, matching `GoldEvolution.embedding`'s HNSW index
-    (`vector_cosine_ops`) so it can actually use it. `mode="hybrid"` additionally runs a lexical
-    `ts_rank` search over `search_vector` and fuses both rankings with Reciprocal Rank Fusion
-    (`_reciprocal_rank_fusion`) — see `.tmp/advanced_techniques.md` §1 for why: an embedding can
-    blur an exact component name, acronym, or ODCS field name that a plain keyword match finds
-    immediately, at close to zero extra cost (the GIN index, versus the embedding API/model call
-    already being paid for `vector`). `mode="hybrid"` requires `question_text` — the original
-    question, not `vector`'s embedding of it, since the lexical branch does its own tokenization,
-    never the embedding.
+    `mode="vector"` (default) orders by `.cosine_distance(vector)`, matching the HNSW index.
+    `mode="hybrid"` also runs a lexical `ts_rank` search and fuses both rankings with
+    `_reciprocal_rank_fusion`: an embedding can blur an exact name or acronym that a keyword
+    match finds immediately. Requires `question_text` — the lexical branch tokenizes the raw
+    question itself, not `vector`.
 
-    `dedupe=True` (the default) collapses several versions of the SAME entity down to one — its
-    actual latest version, see `RECALL_POOL_SIZE`'s own comment, `_dedupe_ids_by_entity`, and
-    `.tmp/advanced_techniques.md` §2. `dedupe=False` reproduces the exact pre-deduplication
-    behavior (a plain top-`k` cut, no wider recall fetched first) — kept for tests and callers
-    that need to see the raw, undeduplicated ranking.
+    `dedupe=True` (default) collapses several versions of the same entity to one, its latest —
+    see `_dedupe_ids_by_entity`. `dedupe=False` reproduces the plain pre-deduplication top-`k`
+    cut, kept for tests needing the raw ranking.
 
-    `rerank=True` (opt-in, off by default) repunctuates the deduped-but-not-yet-cut candidates
-    with a real local cross-encoder (`ingestion.reranker.score_candidates`) before cutting to
-    `k` — see `_rerank_ids` and `.tmp/advanced_techniques.md` §3. A cross-encoder reads
-    `(question, narrative)` jointly, one forward pass per candidate, instead of comparing two
-    separately-computed vectors — this can promote a candidate a plain vector/hybrid ranking
-    left just outside `k`, at the cost of one extra model call per candidate. `rerank=True`
-    requires `question_text`, in every mode, including `mode="vector"` — the cross-encoder
-    always needs the original question text, never `vector`'s embedding of it.
+    `rerank=True` (opt-in) repunctuates the pool with a cross-encoder
+    (`ingestion.reranker.score_candidates`) before cutting to `k` — see `_rerank_ids`. Requires
+    `question_text` in every mode, since the cross-encoder needs the raw question text.
 
-    `expand=True` (opt-in, off by default) asks `expand_question` for a few reformulations of
-    `question_text`, searches with each of them too (embedding and, in `mode="hybrid"`, the
-    lexical search as well), and fuses every one of those extra rankings into the same
-    `_reciprocal_rank_fusion` pool this function already uses for hybrid search — see
-    `retrieval/query_expansion.py` and `.tmp/advanced_techniques.md` §4. This is the one gap
-    hybrid search alone cannot close: a synonym that shares no word at all with the canonical
-    name ("el módulo de pagos" vs. "Payments Gateway") never matches lexically, and may not
-    embed close enough either — a reformulation that happens to land closer to the canonical
-    wording rescues it. `expand=True` requires `question_text`, in every mode, for the same
-    reason `rerank=True` does."""
+    `expand=True` (opt-in) asks `expand_question` for reformulations of `question_text`,
+    searches with each, and fuses those rankings into the same pool — see
+    `retrieval/query_expansion.py`. Closes the gap hybrid search alone cannot: a synonym sharing
+    no words with the canonical name may not match lexically or embed close enough either.
+    Requires `question_text`, same reason as `rerank=True`."""
     if rerank and not question_text:
         raise ValueError("rerank=True requires question_text (the cross-encoder needs the raw question)")
     if expand and not question_text:
         raise ValueError("expand=True requires question_text (needed to generate reformulations)")
 
-    # Hybrid search and query expansion both fuse more than one ranking together, so both need
-    # the same wide recall depth as dedup/rerank — a shallow `k`-sized fetch from any one of
-    # them would starve the fusion of candidates the OTHER rankings might have promoted.
+    # Hybrid search and query expansion both fuse several rankings, so both need the same wide
+    # recall depth as dedup/rerank — a shallow fetch would starve the fusion of candidates.
     fuse_deep = mode == "hybrid" or expand
     recall = RECALL_POOL_SIZE if (dedupe or rerank or fuse_deep) else k
 
@@ -1394,12 +1145,8 @@ async def top_k_gold_evolution(
     elif mode == "hybrid":
         if not question_text:
             raise ValueError("mode='hybrid' requires question_text (the lexical ranking needs the raw question)")
-        # Sequential, not `asyncio.gather` — a single `AsyncSession` cannot run two queries
-        # concurrently over one DBAPI connection. Doing so raised a real
-        # `sqlalchemy.exc.IllegalStateChangeError` here, confirmed against the actual running
-        # app, not just a theoretical concern: two coroutines sharing `session` inside
-        # `gather` both took the connection into an "in progress" state at once, and closing
-        # the session afterward hit that half-finished state.
+        # Sequential, not `asyncio.gather` — one `AsyncSession` cannot run two queries
+        # concurrently. `gather` here raised a real `sqlalchemy.exc.IllegalStateChangeError`.
         rankings.append(await _top_k_ids_by_vector(session, vector, recall, source_component, max_distance, tenant))
         rankings.append(await _top_k_ids_by_lexical_rank(session, question_text, recall, source_component, tenant))
     else:
@@ -1416,9 +1163,8 @@ async def top_k_gold_evolution(
 
     ids = rankings[0] if len(rankings) == 1 else _reciprocal_rank_fusion(rankings)
 
-    # `rerank=True` needs the deduped pool BEFORE it is cut to `k` — reranking a list already
-    # cut to `k` could never promote a candidate ranked just outside it. So dedup is asked for
-    # up to `RECALL_POOL_SIZE` entities here, not `k`, whenever a rerank pass still follows.
+    # `rerank=True` needs the deduped pool BEFORE it is cut to `k`, so dedup keeps up to
+    # `RECALL_POOL_SIZE` entities here whenever a rerank pass still follows.
     dedupe_limit = RECALL_POOL_SIZE if rerank else k
     ids = await _dedupe_ids_by_entity(session, ids, dedupe_limit) if dedupe else ids[:dedupe_limit]
 
@@ -1432,14 +1178,12 @@ async def top_k_gold_evolution(
 
 
 async def latest_versions(session: AsyncSession, rows: Sequence[GoldEvolution]) -> dict[tuple[str, str], int]:
-    """Returns the current, latest version number for each distinct `(entity_type, entity_id)`
-    appearing in `rows`. This runs one batched query, not one lookup per row.
+    """The current latest version number for each distinct `(entity_type, entity_id)` in
+    `rows`, in one batched query.
 
-    This lets `answer_question` tell the LLM which retrieved rows are still current, and which
-    are superseded by a later version that may not have made the same top-k list. Top-k search
-    runs across ALL versions, so an older version's narrative can rank closer to the question
-    than its own entity's current version does. See `top_k_gold_evolution`'s own docstring for
-    more on that."""
+    Lets `answer_question` tell the LLM which retrieved rows are current and which are
+    superseded, since top-k search runs across all versions and an older one can rank closer
+    to the question than the current version."""
     pairs = {(row.entity_type, row.entity_id) for row in rows}
     if not pairs:
         return {}
@@ -1465,11 +1209,8 @@ async def _resolve_entity_names(
     session: AsyncSession, tenant: str, ids_by_type: dict[str, set[str]]
 ) -> dict[tuple[str, str], str]:
     """Batched `entity_id -> canonical_name` lookup for `answer_question`'s payload
-    enrichment below. A component's `dependency_ids`/`contract_ids` and a data contract's
-    `producer_id`/`consumer_id` (`ComponentPayload`/`DataContractPayload`) only ever store
-    resolved ids, never names — showing a raw ULID to the answering LLM would be useless. This
-    picks each id's latest version's `canonical_name`, one query per entity_type, not one
-    query per id."""
+    enrichment. Payload fields only store resolved ids, never names, and a raw ULID is useless
+    to the answering LLM. One query per entity_type, not one per id."""
     result: dict[tuple[str, str], str] = {}
     for entity_type, ids in ids_by_type.items():
         if not ids:
@@ -1498,17 +1239,13 @@ def _payload_detail(
     row: GoldEvolution, names: dict[tuple[str, str], str], successors: dict[str, list[str]] | None = None
 ) -> str:
     """Renders `row.payload`'s structured facts as a short trailing clause for
-    `answer_question`'s context line — the detail a "what does X depend on" / "what does this
-    contract cover" / "what depends on X" question needs, and that `row.narrative` alone does
-    not reliably restate. Returns `""` when the payload has nothing to add (e.g. an
-    architecture-entity row, or a component with no known dependencies/contracts/successors).
+    `answer_question`'s context line — the detail a dependency/contract question needs that
+    `row.narrative` alone does not reliably restate. Returns `""` when the payload has nothing
+    to add.
 
-    `successors`, when given, maps a component's own `entity_id` to the canonical names of
-    every OTHER component that currently depends on it (`get_successors`'s own return, reduced
-    to names by the caller). There is no `successor_ids` field on the payload itself to read
-    here — unlike `dependency_ids` (this component's own local, direct field), successors are
-    computed by the caller by scanning every other component, never stored — see
-    `.tmp/improve_timeline_questions_and_linage.md` §2.4."""
+    `successors`, when given, maps a component's `entity_id` to the names of every other
+    component that currently depends on it (`get_successors`'s result, reduced to names by the
+    caller) — there is no stored `successor_ids` field; it is always computed."""
     if row.entity_type == "component":
         payload = ComponentPayload.model_validate(row.payload or {})
         deps = [names[("component", i)] for i in payload.dependency_ids if ("component", i) in names]
@@ -1525,8 +1262,8 @@ def _payload_detail(
         if outputs:
             parts.append(f"output contracts: {', '.join(outputs)}")
         if not inputs and not outputs:
-            # Rows persisted before the input/output split (§2.2, §6) only ever have the old,
-            # undifferentiated `contract_ids` — fall back to it so they do not go silent.
+            # Rows persisted before the input/output split only have the old, undifferentiated
+            # `contract_ids` — fall back to it so they do not go silent.
             contracts = [names[("data_contract", i)] for i in payload.contract_ids if ("data_contract", i) in names]
             if contracts:
                 parts.append(f"data contracts: {', '.join(contracts)}")
@@ -1546,11 +1283,9 @@ def _payload_detail(
 # `MAX_HISTORY_MESSAGES`/`_format_history_block` (conversational memory) and `_verify_citations`
 # (citation verification) now live in `agents/stages/gold/retrieval/`, imported above.
 
-# Real bug this closes: `_payload_detail`'s data_contract branch only ever showed schema FIELD
-# NAMES, never the contract's actual specification — so "show me the spec of X" got an honest
-# "the retrieved facts don't provide it" even when `odcs_spec` was fully populated. This gates a
-# much bigger block (the entire spec) behind an explicit ask, so an ordinary question about a
-# contract never pays for it in context tokens it did not request.
+# Fixes a real bug: `_payload_detail`'s data_contract branch only showed schema field names,
+# never the actual spec, so "show me the spec of X" wrongly said it was unavailable. Gates the
+# full spec block behind an explicit ask, so an ordinary question does not pay for it.
 _FULL_SPEC_MARKERS = (
     "spec",
     "specification",
@@ -1567,19 +1302,16 @@ _FULL_SPEC_MARKERS = (
 
 
 def wants_full_spec(question: str) -> bool:
-    """Returns `True` if `question` reads as asking for a data contract's complete
-    specification, in either English or Spanish — see `_FULL_SPEC_MARKERS`. Gates
-    `build_context_lines`'s per-row full-spec block, the same way `is_evolution_question` gates
-    the full-history path."""
+    """Returns `True` if `question` asks for a data contract's complete specification, in
+    English or Spanish — see `_FULL_SPEC_MARKERS`. Gates `build_context_lines`'s full-spec
+    block."""
     lowered = question.lower()
     return any(marker in lowered for marker in _FULL_SPEC_MARKERS)
 
 
 def _full_odcs_spec_block(row: GoldEvolution) -> str:
     """The entire `odcs_spec` for one data_contract row, pretty-printed. `""` for any other
-    entity_type, or a contract with no spec captured yet (`parse_odcs_spec`'s own `{}`
-    fallback — see `.tmp/improve_timeline_questions_and_linage.md` §5's carry-forward fix for
-    why that should now be rare for a contract with any real history)."""
+    entity_type, or a contract with no spec captured yet."""
     if row.entity_type != "data_contract":
         return ""
     payload = DataContractPayload.model_validate(row.payload or {})
@@ -1594,18 +1326,13 @@ async def build_context_lines(
     latest: dict[tuple[str, str], int] | None = None,
     question: str | None = None,
 ) -> list[str]:
-    """One line per retrieved row, exactly as `answer_question` renders it into its prompt —
-    narrative plus the resolved `_payload_detail` clause (dependencies/successors/contracts),
-    plus a data contract's full `odcs_spec` when `question` asks for it (`wants_full_spec`).
-    Pulled out as its own function so a caller other than `answer_question` (namely
-    `agents/stages/gold/testing/chat_eval/test_chat_eval.py`'s RAGAS scoring) can score
-    faithfulness/context_recall against what the model actually saw, not just `row.narrative` —
-    passing bare narratives as RAGAS `contexts` understates faithfulness for any answer that
-    correctly used payload-derived facts (dependencies, contract direction, successors) the
-    judge was never shown. See `.tmp/improve_timeline_questions_and_linage.md` §7.
+    """One line per retrieved row, exactly as `answer_question` renders it into its prompt:
+    narrative plus `_payload_detail`, plus a contract's full `odcs_spec` when `question` asks
+    for it (`wants_full_spec`). Pulled out so a caller other than `answer_question` (RAGAS
+    scoring in `test_chat_eval.py`) can score against what the model actually saw, not just
+    the bare narrative.
 
-    `question` is optional (`None` skips the full-spec block entirely) so existing callers that
-    only ever wanted the old behavior do not need to change."""
+    `question` is optional; `None` skips the full-spec block."""
     full_spec = question is not None and wants_full_spec(question)
     component_payloads = [
         ComponentPayload.model_validate(row.payload or {}) for row in rows if row.entity_type == "component"
@@ -1617,16 +1344,13 @@ async def build_context_lines(
     names = await _resolve_entity_names(
         session, rows[0].tenant, {"component": component_ids, "data_contract": contract_ids}
     )
-    # One `get_successors` query per retrieved component — cheap at this scale (`rows` is a
-    # bounded top-k, not the whole tenant). This is the only way to surface successors at all:
-    # unlike `dependency_ids`, there is no stored field to just read off the payload.
+    # One `get_successors` query per retrieved component — cheap since `rows` is a bounded
+    # top-k. There is no stored successors field, so this is the only way to surface them.
     #
-    # A historical row (`valid_to is not None` — pinned by `_answer_specific_version_question`)
-    # is cursored to its own extraction batch's end (`_batch_cursor`), never "current": leaving
-    # this unscoped was a real, reported bug — a v1-pinned answer still listed today's full
-    # successor set, including a dependency added long after v1. `ingestion_date` alone cannot
-    # fix this — several versions of the same entity can share one calendar day. A still-current
-    # row (`valid_to is None`, the ordinary top-k case) keeps reading today's true state.
+    # A historical row (`valid_to is not None`) is cursored to its own batch's end
+    # (`_batch_cursor`), never "current" — leaving this unscoped was a real bug: a v1-pinned
+    # answer listed a dependency added long after v1. A still-current row keeps reading today's
+    # true state.
     successors_by_component_id: dict[str, list[str]] = {}
     for row in rows:
         if row.entity_type != "component":
@@ -1653,36 +1377,22 @@ async def answer_question(
     history: list[tuple[str, str]] | None = None,
 ) -> GroundedAnswer:
     """Drafts a structured answer to `question` from the retrieved rows — plain-text `answer`
-    plus `citations` naming exactly which rows it drew from. This is the RAG-consumer step
-    that top-k retrieval alone does not cover.
+    plus `citations` naming exactly which rows it drew from.
 
-    Every citation is checked against `rows` by `_verify_citations` before this returns — the
-    model can cite a fact, but it cannot make that citation stick unless it names a row that
-    was genuinely retrieved. This is why the context below includes each row's raw
-    `entity_id`: without it, the model would have nothing correct to cite even when it wanted
-    to.
+    Every citation is checked against `rows` by `_verify_citations` before this returns: the
+    model cannot make a citation stick unless it names a row that was genuinely retrieved.
 
-    `latest` comes from `latest_versions` and is optional. It tags each row as `[latest version]`
-    or `[superseded — latest is version N]`, in the context the LLM sees. This stops a question
-    about current state from getting answered using a row that ranked close by embedding
-    similarity but has since been superseded. Without `latest`, every row is presented the same
-    way. That is what happens today when a caller does not pass it.
+    `latest`, from `latest_versions`, tags each row as `[latest version]` or
+    `[superseded — latest is version N]`. This stops a current-state question from being
+    answered using a row that ranked close by embedding similarity but is now superseded.
 
-    `session` is used only to resolve each row's `payload` ids (a component's dependencies and
-    contracts, a data contract's producer/consumer/schema fields — see `_payload_detail`) into
-    names the LLM can actually read; `rows` themselves are not re-fetched. Before this, only
-    `narrative` ever reached this prompt, so a question genuinely asking for a component's
-    dependencies or a contract's schema had no way to be answered even when that exact data was
-    already sitting in `payload` — this closes that gap.
+    `session` resolves each row's payload ids into names the LLM can read (`_payload_detail`);
+    `rows` themselves are not re-fetched.
 
-    `history`, when given, is the most recent turns of this same chat session (see
-    `_format_history_block` and `.tmp/advanced_techniques.md` §8). It is rendered as its own
-    labeled block, never merged into `question` itself, so the model always sees one clean,
-    unambiguous line to answer. This is what lets a follow-up like "and who approved it?"
-    resolve "it" to whatever entity the previous turn was actually about, instead of being
-    answered as a brand-new, context-free question — the prompt below is explicit that history
-    may only be used to resolve what the question REFERS to, never as a source of facts on its
-    own; every fact in the answer must still come from `rows`."""
+    `history`, when given, is the most recent turns of this chat session, rendered as its own
+    labeled block, never merged into `question`. This lets a follow-up like "and who approved
+    it?" resolve "it" to the right entity. History may only resolve what the question refers
+    to, never serve as a source of facts — every fact must still come from `rows`."""
     if not rows:
         return GroundedAnswer(answer="No relevant Gold facts were found for this question.")
 
@@ -1730,30 +1440,19 @@ async def answer_question(
     return GroundedAnswer(answer=result.answer, citations=_verify_citations(result.citations, rows))
 
 
-# --- Entity evolution timeline. This is a third read path, next to `current_gold_state`
-# ("what is true now") and `top_k_gold_evolution` ("which versions, across the whole history,
-# are semantically closest to a question"). A question like "how has X evolved over time" is
-# neither of those: it wants EVERY version of ONE already-identified entity, in order, not a
-# similarity-ranked, possibly incomplete top-k slice. Top-k can legitimately drop an early
-# version whose narrative just does not word-match the question, which silently truncates the
-# very timeline the question is asking for. This path fetches deterministically instead: find
-# the one entity the question names, then take its full history, no ranking involved.
-# -------------------------------------------------------------------------------------------
+# --- Entity evolution timeline: a third read path, next to `current_gold_state` and
+# `top_k_gold_evolution`. "How has X evolved" wants EVERY version of one identified entity, in
+# order — top-k can drop an early version whose narrative does not word-match the question.
+# This path fetches deterministically: find the named entity, take its full history.
 
-# `find_entity_by_name_in_text` ignores any alias shorter than this. A short alias (an
-# acronym, a one-word service name fragment) is too likely to appear in a question by
-# coincidence, unrelated to that entity, and would otherwise win by being "the alias that
-# happens to be in this text." Longer, more specific aliases are more trustworthy as a match.
+# `find_entity_by_name_in_text` ignores any alias shorter than this — a short alias (an
+# acronym, a word fragment) is too likely to match a question by coincidence.
 MIN_ALIAS_MATCH_LENGTH = 4
 
-# `is_evolution_question` triggers on any of these appearing in the question, case-insensitive,
-# English and Spanish. This is a deliberately narrow, deterministic check, not an LLM
-# classification call — matching this codebase's general preference for a mechanical check
-# over a probabilistic judge wherever one is reliable enough (see, for example,
-# `agents.stages.classification`'s own DUPLICATE QUESTIONS handling). A caller only takes the
-# full-history path when this ALSO holds alongside a confident `find_entity_by_name_in_text`
-# match — an ordinary factual question that happens to name a component (e.g. "who is the
-# producer of X") must still get plain top-k retrieval, not a whole narrated timeline.
+# `is_evolution_question` triggers on any of these, case-insensitive, English and Spanish — a
+# narrow deterministic check, not an LLM call. A caller only takes the full-history path when
+# this ALSO holds alongside a confident `find_entity_by_name_in_text` match — an ordinary
+# question naming a component must still get plain top-k retrieval.
 _EVOLUTION_QUESTION_MARKERS = (
     "evolution",
     "evolved",
@@ -1771,11 +1470,9 @@ _EVOLUTION_QUESTION_MARKERS = (
 
 
 def is_evolution_question(question: str) -> bool:
-    """Returns `True` if `question` reads as asking for an entity's full history, in either
-    English or Spanish — see `_EVOLUTION_QUESTION_MARKERS`. Intended to gate the full-history
-    path (`entity_history` + `answer_evolution_question`) alongside a confident
-    `find_entity_by_name_in_text` match, never on its own: naming an entity is not enough,
-    since most questions that name one are ordinary factual lookups, not history requests."""
+    """Returns `True` if `question` asks for an entity's full history, English or Spanish —
+    see `_EVOLUTION_QUESTION_MARKERS`. Gates the full-history path alongside a confident
+    `find_entity_by_name_in_text` match, never on its own: naming an entity is not enough."""
     lowered = question.lower()
     return any(marker in lowered for marker in _EVOLUTION_QUESTION_MARKERS)
 
@@ -1783,10 +1480,9 @@ def is_evolution_question(question: str) -> bool:
 async def entity_history(
     session: AsyncSession, entity_type: GoldEntityType, entity_id: str, *, tenant: str = "default"
 ) -> list[GoldEvolution]:
-    """Every `gold_evolution` row ever written for this one `(entity_type, entity_id)`, oldest
-    first. This is the deterministic counterpart to `top_k_gold_evolution`: no ranking, no
-    cutoff, no risk of an early version falling outside some `k`. `answer_evolution_question`
-    is the intended consumer — it needs the complete timeline, not a sample of it."""
+    """Every `gold_evolution` row ever written for this `(entity_type, entity_id)`, oldest
+    first. Deterministic counterpart to `top_k_gold_evolution`: no ranking, no cutoff. Feeds
+    `answer_evolution_question`, which needs the complete timeline."""
     query = (
         select(GoldEvolution)
         .where(
@@ -1806,24 +1502,14 @@ async def find_entity_by_name_in_text(
     chat question, and resolves it to a live `entity_id`. Returns `(entity_type, entity_id,
     matched_alias)`, or `None` if nothing in `gold_aliases` for this tenant appears in `text`.
 
-    This checks containment in Python, not a SQL `LIKE`/`ILIKE` pattern built from `alias`. An
-    alias is arbitrary user-sourced text — it can contain `%` or `_`, which are `LIKE`
-    wildcards. Building a pattern from it would silently change what the pattern matches
-    instead of raising an error, exactly the kind of bug that stays invisible until a real
-    component happens to be named "A/B_Test". `gold_aliases` is a small lookup table per
-    tenant (`GoldAlias`'s own docstring), so fetching every alias and checking containment in
-    Python costs nothing extra worth avoiding a wildcard-injection risk for.
+    Checks containment in Python, not a SQL `LIKE` pattern built from `alias`: an alias can
+    contain `%` or `_`, which are `LIKE` wildcards, so a built pattern would silently match
+    the wrong thing instead of raising an error.
 
-    When more than one alias appears in `text` (for example, both "Order Service" and its
-    substring "Order" are aliases, or the question genuinely names two different components),
-    this returns the SINGLE LONGEST match. A longer alias is a more specific, more deliberate
-    match than a short one that could just as easily be a coincidence — see
-    `MIN_ALIAS_MATCH_LENGTH`. A question that genuinely asks about two entities at once is not
-    what this function is for; the caller falls back to ordinary top-k retrieval in that case.
-    This resolves the match through `resolve_entity_id_for_lookup`, not the alias's own stored
-    `entity_id` column directly, so a caller never receives an entity_id for a match this
-    tenant's own alias table would not otherwise resolve to (defensive, since today those are
-    the same value either way)."""
+    When more than one alias appears in `text`, returns the SINGLE LONGEST match — a longer
+    alias is more deliberate, less likely to be a coincidence (see `MIN_ALIAS_MATCH_LENGTH`).
+    A question naming two entities at once is not what this function is for; the caller falls
+    back to ordinary top-k retrieval."""
     query = select(GoldAlias.entity_type, GoldAlias.entity_id, GoldAlias.alias).where(GoldAlias.tenant == tenant)
     if entity_type is not None:
         query = query.where(GoldAlias.entity_type == entity_type)
@@ -1848,9 +1534,8 @@ async def find_entity_by_name_in_text(
 
 def _evolution_step_line(row: GoldEvolution) -> str:
     author = row.authored_by or "an unknown author"
-    # `valid_to` (`.tmp/improve_timeline_questions_and_linage.md` §2.1) is what lets an
-    # evolution answer say how long a version actually lasted, not just when it started —
-    # "in effect Jan-Mar 2026" instead of only "asserted on 2026-01-15".
+    # `valid_to` lets an evolution answer say how long a version lasted, not just when it
+    # started.
     validity = "still in effect" if row.valid_to is None else f"in effect until {row.valid_to.isoformat()}"
     return (
         f"- [{row.entity_type}:{row.entity_id}] Version {row.version}, {row.ingestion_date.isoformat()}, "
@@ -1862,33 +1547,22 @@ def _evolution_step_line(row: GoldEvolution) -> str:
 async def answer_evolution_question(
     question: str, canonical_name: str, rows: list[GoldEvolution], history: list[tuple[str, str]] | None = None
 ) -> GroundedAnswer:
-    """Drafts a structured answer to a "how has X evolved over time" question, from EVERY
-    version `entity_history` returned for one entity, oldest first — plain-text `answer` plus
-    `citations` naming exactly which version(s) it drew from, checked against `rows` by
-    `_verify_citations` the same way `answer_question` does. This is deliberately a separate
-    function from `answer_question`, not a shared one with an extra flag: that function answers
-    from a top-k, possibly cross-entity, possibly incomplete row set, and tells the LLM to
-    prefer the [latest version] tag for current-state questions. This function's whole point is
-    the opposite — narrate the complete, ordered sequence of changes, not settle on one current
-    answer.
+    """Drafts a structured answer to a "how has X evolved" question, from EVERY version
+    `entity_history` returned for one entity, oldest first — plain-text `answer` plus
+    `citations`, checked against `rows` by `_verify_citations` the same way `answer_question`
+    does. A separate function from `answer_question` on purpose: that one answers from a
+    possibly incomplete top-k row set and prefers [latest version]; this one narrates the
+    complete ordered sequence of changes.
 
-    Each step's line names its entity, version, event-time date (`ingestion_date`, when the
-    change was asserted, not `changed_at`), author (`authored_by`, empty for a CLI/script/test
-    run with no real user — see `GoldEvolution.authored_by`'s own column comment), the exact
-    ADR it came from (`source_component`/`source_adr_version`), operation, and narrative.
-    The prompt asks for a chronological prose account: who introduced the entity, when, and
-    why, then each later step and its own reason, in the style of "X introduced this on Y for
-    Z, then evolved on V because...". `rows` empty means the entity was never found; the caller
-    is expected to have already checked that via `find_entity_by_name_in_text` before calling
-    this, but this function still degrades safely instead of sending an empty prompt.
+    Each step's line names its entity, version, `ingestion_date`, author, the ADR it came
+    from, operation, and narrative. The prompt asks for chronological prose: who introduced
+    the entity and why, then each later step. `rows` empty means the entity was never found;
+    this still degrades safely instead of sending an empty prompt.
 
-    `history`, when given, is the most recent turns of this same chat session — see
-    `_format_history_block` and `.tmp/advanced_techniques.md` §8. It is what let the CALLER
-    even resolve `canonical_name` in the first place, for a follow-up like "how has it evolved
-    over time?" that never names the entity itself (see `app.routers.frontend.chat`'s own
-    contextualized-text step). It is passed here too, purely so the narrated answer can match
-    the conversation's own phrasing (e.g. "it" instead of repeating the full entity name every
-    sentence) — never as a source of facts; every fact must still come from `rows`."""
+    `history`, when given, is the most recent turns of this chat session — it is what let the
+    caller resolve `canonical_name` for a follow-up like "how has it evolved?" that never
+    names the entity. Passed here only so the answer matches the conversation's phrasing,
+    never as a source of facts."""
     if not rows:
         return GroundedAnswer(answer=f"No recorded history was found for {canonical_name!r}.")
     timeline = "\n".join(_evolution_step_line(row) for row in rows)
